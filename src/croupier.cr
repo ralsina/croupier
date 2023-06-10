@@ -80,6 +80,9 @@ module Croupier
     @block : Proc(Nil)
 
     def initialize(name : String, output : String, inputs : Array(String), block : Proc)
+      if inputs.includes?(output) 
+        raise "Cycle detected"
+      end
       @name = name
       @block = block
       @output = output

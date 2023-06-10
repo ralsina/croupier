@@ -76,9 +76,14 @@ describe Croupier::Task do
 
   it "should detect cycles in the graph" do
     expect_raises(Exception) do
-      Croupier::Task.new("name", "input2", ["output5"], dummy_proc)
+      Croupier::Task.new("name", "output4", ["input"], dummy_proc)
       g = Croupier::Task.task_graph 
-      p! g
+    end
+  end
+
+  it "should reject self-cyclical tasks" do
+    expect_raises(Exception) do
+      Croupier::Task.new("name", "output6", ["output6"], dummy_proc)
     end
   end
 
