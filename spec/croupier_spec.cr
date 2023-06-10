@@ -56,5 +56,19 @@ describe Croupier::Task do
     Dir.cd "spec/files" do
     Croupier::Task.scan_inputs.should eq expected
     end
-  end    
+  end
+
+  it "should create a task graph" do
+    task = Croupier::Task.new("name", "output5", ["input2"], dummy_proc)
+    expected = {
+          "input"   => Set{"output3"},
+          "output3" => Set{"output4"},
+          "input2"  => Set{"output5"},
+          "output"  => Set(String).new,
+          "output2" => Set(String).new,
+          "output4" => Set(String).new,
+          "output5" => Set(String).new,
+        }
+    Croupier::Task.task_graph.@vertice_dict.should eq expected
+  end
 end

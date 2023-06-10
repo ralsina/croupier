@@ -1,5 +1,6 @@
 # Croupier describes a task graph and lets you operate on them
 require "digest/sha1"
+require "crystalline"
 
 module Croupier
   VERSION = "0.1.0"
@@ -16,6 +17,21 @@ module Croupier
 
     def self.tasks
       @@Tasks
+    end
+
+    # Tasks as a dependency graph
+    def self.task_graph
+      g = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
+      all_inputs.each do |input|
+        g.add_vertex input
+      end
+      @@Tasks.each do |output, task|
+        g.add_vertex output
+        task.@inputs.each do |input|
+          g.add_edge input, output
+        end
+      end
+      g
     end
 
     # Registry of modified files, which will make tasks stale
@@ -76,6 +92,10 @@ module Croupier
         @inputs.any? { |input| @@Modified.includes? input } ||
         @inputs.any? { |input| @@Tasks.has_key?(input) && @@Tasks[input].stale? }
       )
+    end
+
+    def to_s(io)
+      io.puts "#{@name}::#{@output}"
     end
   end
 end
