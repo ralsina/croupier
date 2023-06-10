@@ -1,9 +1,60 @@
 require "./spec_helper"
 
-describe Croupier do
-  # TODO: Write tests
+dummy_proc = ->{}
+x = 0
+counter_proc = ->{ x += 1 }
 
-  it "works" do
-    false.should eq(true)
+describe Croupier::Task do
+  it "should be able to create a task" do
+    task = Croupier::Task.new("name", "output", [] of String, dummy_proc)
+    task.@name.should eq "name"
+    task.@output.should eq "output"
+    task.@inputs.should eq [] of String
+    task.@stale.should be_false
   end
+
+  it "should be registered" do
+    Croupier::Task.tasks.has_key?("output").should eq true
+  end
+
+  it "should not allow two tasks with same output" do
+    expect_raises(Exception) do
+      Croupier::Task.new("name", "output", [] of String, dummy_proc)
+    end
+  end
+
+  it "should execute block" do
+    counter_task = Croupier::Task.new("name", "output2", [] of String, counter_proc)
+    y = x
+    counter_task.run
+    x.should eq y + 1
+    counter_task.run
+    x.should eq y + 2
+  end
+
+  it "should be stale if an input is marked modified" do
+    task = Croupier::Task.new("name", "output3", ["input"], dummy_proc)
+    task.stale?.should be_false
+    Croupier::Task.mark_modified("input")
+    task.stale?.should be_true
+  end
+
+  it "should be stale if a dependent task is stale" do
+    task = Croupier::Task.new("name", "output4", ["output3"], dummy_proc)
+    task.stale?.should be_true
+  end
+
+  it "should list all inputs" do
+    Croupier::Task.all_inputs.should eq ["input", "output3"]
+  end
+
+  it "should calculate hashes for all inputs" do
+    expected = { 
+      "input" => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15", 
+      "output3" => "e242ed3bffccdf271b7fbaf34ed72d089537b42f" 
+    }
+    Dir.cd "spec/files" do
+    Croupier::Task.scan_inputs.should eq expected
+    end
+  end    
 end
