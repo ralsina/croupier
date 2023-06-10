@@ -22,15 +22,28 @@ module Croupier
     # Tasks as a dependency graph
     def self.task_graph
       g = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
-      all_inputs.each do |input|
-        g.add_vertex input
-      end
+
+      g.add_vertex "root"
+
       @@Tasks.each do |output, task|
         g.add_vertex output
         task.@inputs.each do |input|
           g.add_edge input, output
         end
       end
+      # Connect all subgraphs
+      all_inputs.each do |input|
+        if !@@Tasks.has_key? input
+          g.add_vertex input
+          g.add_edge "root", input
+        end
+      end
+      # Ensure there are no loops
+      dfs = Crystalline::Graph::DFSIterator.new(g, "root")
+      dfs.back_edge_event = ->(u : String, v : String) { 
+        raise "Cycle detected"
+      }
+      dfs.each { |v| }
       g
     end
 

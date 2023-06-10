@@ -61,6 +61,7 @@ describe Croupier::Task do
   it "should create a task graph" do
     task = Croupier::Task.new("name", "output5", ["input2"], dummy_proc)
     expected = {
+          "root"    => Set{"input", "input2"},
           "input"   => Set{"output3"},
           "output3" => Set{"output4"},
           "input2"  => Set{"output5"},
@@ -69,6 +70,16 @@ describe Croupier::Task do
           "output4" => Set(String).new,
           "output5" => Set(String).new,
         }
-    Croupier::Task.task_graph.@vertice_dict.should eq expected
+    g = Croupier::Task.task_graph 
+    g.@vertice_dict.should eq expected
   end
+
+  it "should detect cycles in the graph" do
+    expect_raises(Exception) do
+      Croupier::Task.new("name", "input2", ["output5"], dummy_proc)
+      g = Croupier::Task.task_graph 
+      p! g
+    end
+  end
+
 end
