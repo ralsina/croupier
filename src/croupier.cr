@@ -41,7 +41,7 @@ module Croupier
       # Ensure there are no loops
       dfs = Crystalline::Graph::DFSIterator.new(g, "root")
       dfs.back_edge_event = ->(u : String, v : String) { 
-        raise "Cycle detected"
+        raise "Cycle detected between #{u} and #{v}"
       }
       dfs.each { |v| }
       g
