@@ -1,6 +1,6 @@
 # Croupier
 
-Croupier is a Task definition and execution library.
+Croupier is a smart task definition and execution library.
 
 ## What does that mean?
 
@@ -104,4 +104,4 @@ Let's try to keep test coverage good :-)
 
 ## Contributors
 
-- [Roberto Alsina](https://github.com/your-github-user) - creator and maintainer
+- [Roberto Alsina](https://github.com/ralsina) - creator and maintainer
