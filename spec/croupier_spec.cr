@@ -32,7 +32,7 @@ describe Croupier::Task do
 
   it "should reject self-cyclical tasks" do
     expect_raises(Exception) do
-      Croupier::Task.new("name", "output6", ["output6"], dummy_proc)
+      Croupier::Task.new("name", "output6", ["input.txt", "output6"], dummy_proc)
     end
   end
 
