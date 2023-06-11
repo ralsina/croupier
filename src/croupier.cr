@@ -3,6 +3,7 @@ require "digest/sha1"
 require "yaml"
 require "crystalline"
 require "log"
+require "./topo_sort"
 
 module Croupier
   VERSION = "0.1.0"
@@ -23,35 +24,33 @@ module Croupier
 
     # Tasks as a dependency graph sorted topologically
     def self.sorted_task_graph
+      # First, we create the graph
       g = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
 
-      g.add_vertex "root"
+      # Add all tasks and inputs as vertices
+      # Add all dependencies as edges
+
+      # The start node is just a convenience
+      g.add_vertex "start"
+      all_inputs.each do |input|
+        if !@@tasks.has_key? input
+          g.add_vertex input
+          g.add_edge "start", input
+        end
+      end
 
       @@tasks.each do |output, task|
         g.add_vertex output
         if task.@inputs.empty?
-          g.add_edge "root", output
-        else
-          task.@inputs.each do |input|
-            g.add_edge input, output
-          end
+          g.add_edge "start", output
+        end
+        task.@inputs.each do |input|
+          g.add_edge input, output
         end
       end
-      # Connect all subgraphs
-      all_inputs.each do |input|
-        if !@@tasks.has_key? input
-          g.add_vertex input
-          g.add_edge "root", input
-        end
-      end
-      # Ensure there are no loops
-      dfs = Crystalline::Graph::DFSIterator.new(g, "root")
-      dfs.back_edge_event = ->(u : String, v : String) {
-        raise "Cycle detected between #{u} and #{v}"
-      }
-      sorted = [] of String
-      dfs.each { |v| sorted << v }
-      return g, sorted
+
+      # Only return tasks, not inputs in the sorted graph
+      return g, topological_sort(g.@vertice_dict).select { |v| @@tasks.has_key? v }
     end
 
     # Registry of modified files, which will make tasks stale

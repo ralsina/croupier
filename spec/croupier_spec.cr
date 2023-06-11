@@ -69,35 +69,20 @@ describe Croupier::Task do
   it "should create a topologically sorted task graph" do
     Croupier::Task.new("name", "output5", ["input2"], dummy_proc)
     expected = {
-      "root"    => Set{"output", "output2", "input", "input2"},
+      "start"   => Set{"input", "input2", "output", "output2"},
+      "input"   => Set{"output3"},
+      "input2"  => Set{"output5"},
       "output"  => Set(String).new,
       "output2" => Set(String).new,
       "output3" => Set{"output4"},
-      "input"   => Set{"output3"},
       "output4" => Set(String).new,
       "output5" => Set(String).new,
-      "input2"  => Set{"output5"},
     }
+
     g, s = Croupier::Task.sorted_task_graph
     g.@vertice_dict.should eq expected
-    s.size.should eq expected.size
-    s.should eq [
-      "root",
-      "input2",
-      "output5",
-      "input",
-      "output3",
-      "output4",
-      "output2",
-      "output",
-    ]
-  end
-
-  it "should detect cycles in the graph" do
-    expect_raises(Exception, "Cycle detected between ") do
-      Croupier::Task.new("name", "output4", ["input"], dummy_proc)
-      Croupier::Task.sorted_task_graph
-    end
+    s.size.should eq Croupier::Task.tasks.size
+    s.should eq ["output3", "output4", "output5", "output", "output2"]
   end
 
   it "should run all tasks" do
@@ -190,6 +175,13 @@ describe Croupier::Task do
       Croupier::Task.mark_stale
 
       Croupier::Task.modified.should eq Set{"input"}
+    end
+  end
+
+  it "should detect cycles in the graph when calling sorted_task_graph" do
+    Croupier::Task.new("name", "input", ["output4"], dummy_proc)
+    expect_raises(Exception, "Cycle detected") do
+      Croupier::Task.sorted_task_graph
     end
   end
 end
