@@ -9,7 +9,9 @@ You use Croupier to define tasks. Tasks have:
 * A name
 * Zero or more input files
 * One output file
-* A `Proc` that consumes the inputs and produces the output
+* A `Proc` that consumes the inputs and returns a string
+* After the `Proc` returns a string it's saved to the output unless
+  the task has the `no_save` flag set to `true` 
 
 And here is the fun part:
 
@@ -53,30 +55,26 @@ This is the example described above, in actual code:
 require "croupier"
 
 b1 = ->{
-  File.open("fileA", "w") do |io|
-    puts "task1 running"
-    io.puts File.read("input.txt").downcase
-  end
+  puts "task1 running"
+  File.read("input.txt").downcase
 }
 
 Croupier::Task.new(
   name: "task1",
   output: "fileA",
   inputs: ["input.txt"],
-  block: b1
+  proc: b1
 )
 
 b2 = ->{
-  File.open("fileB", "w") do |io|
-    puts "task2 running"
-    io.puts File.read("fileA").upcase
-  end
+  puts "task2 running"
+  File.read("fileA").upcase
 }
 Croupier::Task.new(
   name: "task2",
   output: "fileB",
   inputs: ["fileA"],
-  block: b2 
+  proc: b2
 )
 
 Croupier::Task.run_tasks
@@ -84,9 +82,7 @@ Croupier::Task.run_tasks
 
 If we create a `index.txt` file with some text in it and run this program, it will print it's running `task1` and `task2` and produce `fileA` with that same text in upper case, and `fileB` with the text in lowercase.
 
-The second time we run it, it will *only* run `task2`, because `fileA` now contains different text compared to the 1st time (when it didn't exist)
-
-The third time we run it, it will *do nothing* because all tasks dependencies are unchanged.
+The second time we run it, it will *do nothing* because all tasks dependencies are unchanged.
 
 If we modify `index.txt` or `fileA` then one or both will tasks will run, as needed.
 

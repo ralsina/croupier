@@ -1,8 +1,11 @@
 require "./spec_helper"
 
-dummy_proc = ->{}
+dummy_proc = ->{ "" }
 x = 0
-counter_proc = ->{ x += 1 }
+counter_proc = ->{
+  x += 1
+  x.to_s
+}
 
 describe Croupier::Task do
   it "should be able to create a task" do
@@ -29,8 +32,13 @@ describe Croupier::Task do
     end
   end
 
-  it "should execute block" do
-    counter_task = Croupier::Task.new("name", "output2", [] of String, counter_proc)
+  it "should execute the task's proc" do
+    counter_task = Croupier::Task.new(
+      "name",
+      "output2",
+      [] of String,
+      counter_proc,
+      no_save: true)
     y = x
     counter_task.run
     x.should eq y + 1
@@ -101,7 +109,7 @@ describe Croupier::Task do
     expected = {
       "input"   => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
       "input2"  => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-      "output3" => "e242ed3bffccdf271b7fbaf34ed72d089537b42f",
+      "output3" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
     }
     Dir.cd "spec/files" do
       Croupier::Task.scan_inputs.should eq expected
@@ -111,6 +119,21 @@ describe Croupier::Task do
   it "should not hash files that don't exist" do
     # This is running where the files don't exist
     Croupier::Task.scan_inputs.size.should eq 0
+  end
+
+  it "should save files but respect the no_save flag" do
+    Dir.cd "spec/files" do
+      File.delete?(".croupier")
+      File.delete?("output")
+      File.delete?("output2")
+
+      Croupier::Task.run_tasks(run_all: true)
+
+      # The output task has no_save = false, so it should be created
+      File.exists?("output").should be_true
+      # The output2 task has no_save = true, so it should not be created
+      File.exists?("output2").should be_false
+    end
   end
 
   it "should mark all tasks with inputs as stale if there is no .croupier file" do
@@ -156,7 +179,7 @@ describe Croupier::Task do
         f.puts(%({
           "input": "thisiswrong",
           "input2": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-          "output3": "e242ed3bffccdf271b7fbaf34ed72d089537b42f",
+          "output3": "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
       }))
       end
 
