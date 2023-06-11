@@ -32,7 +32,7 @@ describe Croupier::Task do
     end
   end
 
-  it "should execute the task's proc" do
+  it "should execute the task's proc when Task.run is called" do
     counter_task = Croupier::Task.new(
       "name",
       "output2",
@@ -58,11 +58,11 @@ describe Croupier::Task do
     task.stale?.should be_true
   end
 
-  it "should list all inputs" do
+  it "should list all inputs for all tasks" do
     Croupier::Task.all_inputs.should eq ["input", "output3"]
   end
 
-  it "should create a task graph" do
+  it "should create a topologically sorted task graph" do
     Croupier::Task.new("name", "output5", ["input2"], dummy_proc)
     expected = {
       "root"    => Set{"output", "output2", "input", "input2"},
