@@ -11,4 +11,4 @@ license: MIT
 
 dependencies:
   crystalline:
-    github: jtomschroeder/crystalline
+    github: ralsina/crystalline
