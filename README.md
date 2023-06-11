@@ -2,6 +2,9 @@
 
 Croupier is a smart task definition and execution library.
 
+[![codecov](https://codecov.io/gh/ralsina/croupier/branch/main/graph/badge.svg?token=YW23EDL5T5)](https://codecov.io/gh/ralsina/croupier)
+[![.github/workflows/ci.yml](https://github.com/ralsina/croupier/actions/workflows/ci.yml/badge.svg)](https://github.com/ralsina/croupier/actions/workflows/ci.yml)
+
 ## What does that mean?
 
 You use Croupier to define tasks. Tasks have:
