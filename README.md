@@ -20,17 +20,23 @@ use them to build a dependency graph. This expresses the connections
 between your tasks and the files on disk, and between tasks, and **will 
 use that information to decide what to run**.
 
-So, suppose you have `task1` consuming `input.txt` producing `fileA` and `task2` that has `fileA` as input and outputs `fileB`
+So, suppose you have `task1` consuming `input.txt` producing `fileA` and `task2` that has `fileA` as input and outputs `fileB`. That means your tasks look something like this:
+
+```mermaid
+  graph LR;
+      id1(["📁 input.txt"])-->idt1["⚙️ task1"]-->id2(["📁 fileA"]);
+      id2-->idt2["⚙️ task2"]-->id3(["📁 fileB"]);
+```
 
 Croupier guarantees the following:
 
-* If `task1` has not run before, it *will run*
+* If `task1` has never run before, it *will run* and create `fileA`
 * If `task1` has run before and `input.txt` has not changed, it *will not run*.
 * If `task1` has run before and ìnput.txt` has changed, it *will run*
-* If `task1` runs, `task2` *will run*
-* `task1` will run *earlier* than `task2`
+* If `task1` runs, `task2` *will run* and create `fileB`
+* `task1` will run *before* `task2`
 
-That's a very long way to say: Croupier will run whatever needs running, based on the content of the dependency files and the dependencies between tasks.
+That's a very long way to say: Croupier will run whatever needs running, based on the content of the dependency files and the dependencies between tasks. In this example it may look silly because it's simple, but it should work even for thousands of tasks and dependencies.
 
 The state between runs is kept in `.croupier` so if you delete that file
 all tasks will run.
