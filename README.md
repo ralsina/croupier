@@ -52,39 +52,47 @@ This is the example described above, in actual code:
 ```crystal
 require "croupier"
 
+b1 = ->{
+  File.open("fileA", "w") do |io|
+    puts "task1 running"
+    io.puts File.read("input.txt").downcase
+  end
+}
+
 Croupier::Task.new(
   name: "task1",
   output: "fileA",
   inputs: ["input.txt"],
-  block: -> {
-    File.open("fileA", "w") do |io|
-      io.puts File.read("input.txt").downcase
-    end
-  }
+  block: b1
 )
 
+b2 = ->{
+  File.open("fileB", "w") do |io|
+    puts "task2 running"
+    io.puts File.read("fileA").upcase
+  end
+}
 Croupier::Task.new(
   name: "task2",
   output: "fileB",
   inputs: ["fileA"],
-  block: -> {
-    File.open("fileB", "w") do |io|
-      io.puts File.read("fileA").upcase
-    end
-  }
+  block: b2 
 )
 
 Croupier::Task.run_tasks
-
 ```
 
+If we create a `index.txt` file with some text in it and run this program, it will print it's running `task1` and `task2` and produce `fileA` with that same text in upper case, and `fileB` with the text in lowercase.
 
+The second time we run it, it will *only* run `task2`, because `fileA` now contains different text compared to the 1st time (when it didn't exist)
 
-TODO: Write usage instructions here
+The third time we run it, it will *do nothing* because all tasks dependencies are unchanged.
+
+If we modify `index.txt` or `fileA` then one or both will tasks will run, as needed.
 
 ## Development
 
-TODO: Write development instructions here
+Let's try to keep test coverage good :-)
 
 ## Contributing
 
