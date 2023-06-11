@@ -8,7 +8,10 @@ crystal: 1.8.2
 
 license: MIT
 
-
 dependencies:
   crystalline:
     github: ralsina/crystalline
+
+# Not the same crystalline as above :-)
+crystalline:
+  main: src/run_tests.cr
