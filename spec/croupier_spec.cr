@@ -23,6 +23,12 @@ describe Croupier::Task do
     end
   end
 
+  it "should reject self-cyclical tasks" do
+    expect_raises(Exception) do
+      Croupier::Task.new("name", "output6", ["output6"], dummy_proc)
+    end
+  end
+
   it "should execute block" do
     counter_task = Croupier::Task.new("name", "output2", [] of String, counter_proc)
     y = x
@@ -70,21 +76,15 @@ describe Croupier::Task do
           "output4" => Set(String).new,
           "output5" => Set(String).new,
         }
-    g = Croupier::Task.task_graph 
+    g, s = Croupier::Task.sorted_task_graph 
     g.@vertice_dict.should eq expected
+    s.should eq ["root", "input2", "output5", "input", "output3", "output4"]
   end
 
   it "should detect cycles in the graph" do
     expect_raises(Exception) do
       Croupier::Task.new("name", "output4", ["input"], dummy_proc)
-      g = Croupier::Task.task_graph 
+      g = Croupier::Task.sorted_task_graph 
     end
   end
-
-  it "should reject self-cyclical tasks" do
-    expect_raises(Exception) do
-      Croupier::Task.new("name", "output6", ["output6"], dummy_proc)
-    end
-  end
-
 end

@@ -19,8 +19,8 @@ module Croupier
       @@Tasks
     end
 
-    # Tasks as a dependency graph
-    def self.task_graph
+    # Tasks as a dependency graph sorted topologically
+    def self.sorted_task_graph
       g = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
 
       g.add_vertex "root"
@@ -43,8 +43,9 @@ module Croupier
       dfs.back_edge_event = ->(u : String, v : String) { 
         raise "Cycle detected between #{u} and #{v}"
       }
-      dfs.each { |v| }
-      g
+      sorted = [] of String 
+      dfs.each { |v| sorted << v}
+      return g, sorted
     end
 
     # Registry of modified files, which will make tasks stale
