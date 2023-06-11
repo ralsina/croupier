@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="generator" content="Crystal Docs 1.7.3">
+<meta name="crystal_docs.project_version" content="main">
+<meta name="crystal_docs.project_name" content="croupier">
+
+
+
+<link href="css/style.css" rel="stylesheet" type="text/css" />
+<script type="text/javascript" src="js/doc.js"></script>
+
+  <meta name="repository-name" content="croupier">
+  <title>croupier main</title>
+  <script type="text/javascript">
+  CrystalDocs.base_path = "";
+  </script>
+</head>
+<body>
+
+<svg class="hidden">
+  <symbol id="octicon-link" viewBox="0 0 16 16">
+    <path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path>
+  </symbol>
+</svg>
+<div class="sidebar">
+  <div class="sidebar-header">
+    <div class="search-box">
+      <input type="search" class="search-input" placeholder="Search..." spellcheck="false" aria-label="Search">
+    </div>
+
+    <div class="project-summary">
+      <h1 class="project-name">
+        <a href="index.html">
+          croupier
+        </a>
+      </h1>
+
+      <span class="project-version">
+        main
+      </span>
+    </div>
+  </div>
+
+  <div class="search-results hidden">
+    <ul class="search-list"></ul>
+  </div>
+
+  <div class="types-list">
+    <ul>
+  
+  <li class=" " data-id="croupier/toplevel" data-name="top level namespace">
+      <a href="toplevel.html">Top Level Namespace</a>
+      
+    </li>
+  
+  <li class="parent " data-id="croupier/Croupier" data-name="croupier">
+      <a href="Croupier.html">Croupier</a>
+      
+        <ul>
+  
+  <li class=" " data-id="croupier/Croupier/Task" data-name="croupier::task">
+      <a href="Croupier/Task.html">Task</a>
+      
+    </li>
+  
+</ul>
+
+      
+    </li>
+  
+</ul>
+
+  </div>
+</div>
+
+
+<div class="main-content">
+<h1><a id="croupier" class="anchor" href="#croupier">  <svg class="octicon-link" aria-hidden="true">
+    <use href="#octicon-link"/>
+  </svg>
+</a>Croupier</h1>
+<p>Croupier is a smart task definition and execution library.</p>
+<p><a href="https://codecov.io/gh/ralsina/croupier"><img src="https://codecov.io/gh/ralsina/croupier/branch/main/graph/badge.svg?token=YW23EDL5T5" alt="codecov" /></a>
+<a href="https://github.com/ralsina/croupier/actions/workflows/ci.yml"><img src="https://github.com/ralsina/croupier/actions/workflows/ci.yml/badge.svg" alt=".github/workflows/ci.yml" /></a></p>
+<h2><a id="what-does-that-mean" class="anchor" href="#what-does-that-mean">
+  <svg class="octicon-link" aria-hidden="true">
+    <use href="#octicon-link"/>
+  </svg>
+</a>What does that mean?</h2>
+<p>You use Croupier to define tasks. Tasks have:</p>
+<ul>
+<li>A name</li>
+<li>Zero or more input files</li>
+<li>One output file</li>
+<li>A <code>Proc</code> that consumes the inputs and returns a string</li>
+<li>After the <code>Proc</code> returns a string it's saved to the output unless
+the task has the <code>no_save</code> flag set to <code>true</code></li>
+</ul>
+<p>And here is the fun part:</p>
+<p>Croupier will examine the inputs and outputs for your tasks and
+use them to build a dependency graph. This expresses the connections
+between your tasks and the files on disk, and between tasks, and <strong>will
+use that information to decide what to run</strong>.</p>
+<p>So, suppose you have <code>task1</code> consuming <code>input.txt</code> producing <code>fileA</code> and <code>task2</code> that has <code>fileA</code> as input and outputs <code>fileB</code>. That means your tasks look something like this:</p>
+<pre><code class="language-mermaid">  graph LR;
+      id1([&quot;📁 input.txt&quot;])--&gt;idt1[&quot;⚙️ task1&quot;]--&gt;id2([&quot;📁 fileA&quot;]);
+      id2--&gt;idt2[&quot;⚙️ task2&quot;]--&gt;id3([&quot;📁 fileB&quot;]);</code></pre>
+<p>Croupier guarantees the following:</p>
+<ul>
+<li>If <code>task1</code> has never run before, it <em>will run</em> and create <code>fileA</code></li>
+<li>If <code>task1</code> has run before and <code>input.txt</code> has not changed, it <em>will not run</em>.</li>
+<li>If <code>task1</code> has run before and ìnput.txt` has changed, it <em>will run</em></li>
+<li>If <code>task1</code> runs, <code>task2</code> <em>will run</em> and create <code>fileB</code></li>
+<li><code>task1</code> will run <em>before</em> <code>task2</code></li>
+</ul>
+<p>That's a very long way to say: Croupier will run whatever needs running, based on the content of the dependency files and the dependencies between tasks. In this example it may look silly because it's simple, but it should work even for thousands of tasks and dependencies.</p>
+<p>The state between runs is kept in <code>.croupier</code> so if you delete that file
+all tasks will run.</p>
+<h2><a id="installation" class="anchor" href="#installation">
+  <svg class="octicon-link" aria-hidden="true">
+    <use href="#octicon-link"/>
+  </svg>
+</a>Installation</h2>
+<ol>
+<li>
+<p>Add the dependency to your <code>shard.yml</code>:</p>
+<pre><code class="language-yaml">dependencies:
+  croupier:
+    github: your-github-user/croupier</code></pre>
+</li>
+<li>
+<p>Run <code>shards install</code></p>
+</li>
+</ol>
+<h2><a id="usage" class="anchor" href="#usage">
+  <svg class="octicon-link" aria-hidden="true">
+    <use href="#octicon-link"/>
+  </svg>
+</a>Usage</h2>
+<p>This is the example described above, in actual code:</p>
+<pre><code class="language-crystal"><span class="k">require</span> <span class="s">&quot;croupier&quot;</span>
+
+b1 <span class="o">=</span> <span class="o">-&gt;</span>{
+  puts <span class="s">&quot;task1 running&quot;</span>
+  <span class="t">File</span>.read(<span class="s">&quot;input.txt&quot;</span>).downcase
+}
+
+<span class="t">Croupier</span><span class="t">::</span><span class="t">Task</span>.new(
+  name: <span class="s">&quot;task1&quot;</span>,
+  output: <span class="s">&quot;fileA&quot;</span>,
+  inputs: [<span class="s">&quot;input.txt&quot;</span>],
+  proc: b1
+)
+
+b2 <span class="o">=</span> <span class="o">-&gt;</span>{
+  puts <span class="s">&quot;task2 running&quot;</span>
+  <span class="t">File</span>.read(<span class="s">&quot;fileA&quot;</span>).upcase
+}
+<span class="t">Croupier</span><span class="t">::</span><span class="t">Task</span>.new(
+  name: <span class="s">&quot;task2&quot;</span>,
+  output: <span class="s">&quot;fileB&quot;</span>,
+  inputs: [<span class="s">&quot;fileA&quot;</span>],
+  proc: b2
+)
+
+<span class="t">Croupier</span><span class="t">::</span><span class="t">Task</span>.run_tasks</code></pre>
+<p>If we create a <code>index.txt</code> file with some text in it and run this program, it will print it's running <code>task1</code> and <code>task2</code> and produce <code>fileA</code> with that same text in upper case, and <code>fileB</code> with the text in lowercase.</p>
+<p>The second time we run it, it will <em>do nothing</em> because all tasks dependencies are unchanged.</p>
+<p>If we modify <code>index.txt</code> or <code>fileA</code> then one or both will tasks will run, as needed.</p>
+<h2><a id="development" class="anchor" href="#development">
+  <svg class="octicon-link" aria-hidden="true">
+    <use href="#octicon-link"/>
+  </svg>
+</a>Development</h2>
+<p>Let's try to keep test coverage good :-)</p>
+<h2><a id="contributing" class="anchor" href="#contributing">
+  <svg class="octicon-link" aria-hidden="true">
+    <use href="#octicon-link"/>
+  </svg>
+</a>Contributing</h2>
+<ol>
+<li>Fork it (<a href="https://github.com/your-github-user/croupier/fork">https://github.com/your-github-user/croupier/fork</a>)</li>
+<li>Create your feature branch (<code>git checkout -b my-new-feature</code>)</li>
+<li>Commit your changes (<code>git commit -am 'Add some feature'</code>)</li>
+<li>Push to the branch (<code>git push origin my-new-feature</code>)</li>
+<li>Create a new Pull Request</li>
+</ol>
+<h2><a id="contributors" class="anchor" href="#contributors">
+  <svg class="octicon-link" aria-hidden="true">
+    <use href="#octicon-link"/>
+  </svg>
+</a>Contributors</h2>
+<ul>
+<li><a href="https://github.com/ralsina">Roberto Alsina</a> - creator and maintainer</li>
+</ul>
+</div>
+</body>
+</html>
