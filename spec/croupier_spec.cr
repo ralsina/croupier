@@ -108,6 +108,11 @@ describe Croupier::Task do
     end
   end
 
+  it "should not hash files that don't exist" do
+    # This is running where the files don't exist
+    Croupier::Task.scan_inputs.size.should eq 0
+  end
+
   it "should mark all tasks with inputs as stale if there is no .croupier file" do
     Dir.cd "spec/files" do
       File.delete?(".croupier")

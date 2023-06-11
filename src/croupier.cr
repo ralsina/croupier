@@ -99,7 +99,9 @@ module Croupier
     # Scan all inputs and return a hash with their sha1
     def self.scan_inputs
       self.all_inputs.reduce({} of String => String) do |hash, file|
-        hash[file] = Digest::SHA1.hexdigest(File.read(file))
+        if File.exists? file
+          hash[file] = Digest::SHA1.hexdigest(File.read(file))
+        end
         hash
       end
     end
