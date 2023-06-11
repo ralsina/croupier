@@ -55,7 +55,7 @@ describe Croupier::Task do
   end
 
   it "should create a task graph" do
-    task = Croupier::Task.new("name", "output5", ["input2"], dummy_proc)
+    Croupier::Task.new("name", "output5", ["input2"], dummy_proc)
     expected = {
       "root"    => Set{"output", "output2", "input", "input2"},
       "output"  => Set(String).new,
@@ -84,15 +84,17 @@ describe Croupier::Task do
   it "should detect cycles in the graph" do
     expect_raises(Exception) do
       Croupier::Task.new("name", "output4", ["input"], dummy_proc)
-      g = Croupier::Task.sorted_task_graph
+      Croupier::Task.sorted_task_graph
     end
   end
 
   it "should run all tasks" do
     # TODO: improve this test
-    y = x
-    Croupier::Task.run_tasks
-    x.should eq y + 1
+    Dir.cd "spec/files" do
+      y = x
+      Croupier::Task.run_tasks(run_all: true)
+      x.should eq y + 1
+    end
   end
 
   it "should calculate hashes for all inputs" do
@@ -113,13 +115,12 @@ describe Croupier::Task do
       Croupier::Task.clear_modified
       tasks = Croupier::Task.tasks
       tasks.size.should eq 5
-      tasks.values.select { |t| t.stale? }.size.should eq 0
+      tasks.values.count(&.stale?).should eq 0
 
       Croupier::Task.mark_stale
 
       # Only tasks with inputs should be stale
-      tasks.values.select { |t| t.stale? }.size.should eq 3
-      tasks.keys.select { |k| tasks[k].stale? }.should eq ["output3", "output4", "output5"]
+      tasks.values.select(&.stale?).map(&.@output).should eq ["output3", "output4", "output5"]
     end
   end
 
@@ -130,17 +131,17 @@ describe Croupier::Task do
       Croupier::Task.clear_modified
       tasks = Croupier::Task.tasks
       tasks.size.should eq 5
-      tasks.values.select { |t| t.stale? }.size.should eq 0
+      tasks.values.count(&.stale?).should eq 0
 
       Croupier::Task.mark_modified("input")
 
       # Only tasks depending on "input" should be stale
-      tasks.values.select { |t| t.stale? }.size.should eq 2
+      tasks.values.count(&.stale?).should eq 2
       tasks.keys.select { |k| tasks[k].stale? }.should eq ["output3", "output4"]
     end
   end
 
-  it "should mark with wrong hash as modified" do
+  it "should mark file with wrong hash as modified" do
     Dir.cd "spec/files" do
       File.delete?(".croupier")
       # Make sure no files are modified
