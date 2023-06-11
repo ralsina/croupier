@@ -25,13 +25,13 @@ describe Croupier::Task do
   end
 
   it "should not allow two tasks with same output" do
-    expect_raises(Exception) do
+    expect_raises(Exception, "which is already generated") do
       Croupier::Task.new("name", "output", [] of String, dummy_proc)
     end
   end
 
   it "should reject self-cyclical tasks" do
-    expect_raises(Exception) do
+    expect_raises(Exception, "Cycle detected") do
       Croupier::Task.new("name", "output6", ["input.txt", "output6"], dummy_proc)
     end
   end
@@ -94,7 +94,7 @@ describe Croupier::Task do
   end
 
   it "should detect cycles in the graph" do
-    expect_raises(Exception) do
+    expect_raises(Exception, "Cycle detected between ") do
       Croupier::Task.new("name", "output4", ["input"], dummy_proc)
       Croupier::Task.sorted_task_graph
     end
