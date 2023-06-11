@@ -27,8 +27,12 @@ module Croupier
 
       @@Tasks.each do |output, task|
         g.add_vertex output
-        task.@inputs.each do |input|
-          g.add_edge input, output
+        if task.@inputs.empty?
+          g.add_edge "root", output
+        else
+          task.@inputs.each do |input|
+            g.add_edge input, output
+          end
         end
       end
       # Connect all subgraphs
@@ -40,11 +44,11 @@ module Croupier
       end
       # Ensure there are no loops
       dfs = Crystalline::Graph::DFSIterator.new(g, "root")
-      dfs.back_edge_event = ->(u : String, v : String) { 
+      dfs.back_edge_event = ->(u : String, v : String) {
         raise "Cycle detected between #{u} and #{v}"
       }
-      sorted = [] of String 
-      dfs.each { |v| sorted << v}
+      sorted = [] of String
+      dfs.each { |v| sorted << v }
       return g, sorted
     end
 
@@ -71,17 +75,20 @@ module Croupier
       end
     end
 
-    # Run all tasks (inconditionally for now)
-    def self.runTasks
-      @@Tasks.each do |name, task|
-        task.run
+    # Run all tasks in dependency order
+    def self.run_tasks
+      _, tasks = Task.sorted_task_graph
+      tasks.each do |task|
+        if @@Tasks.has_key? task
+          @@Tasks[task].run
+        end
       end
     end
 
     @block : Proc(Nil)
 
     def initialize(name : String, output : String, inputs : Array(String), block : Proc)
-      if inputs.includes?(output) 
+      if inputs.includes?(output)
         raise "Cycle detected"
       end
       @name = name

@@ -55,36 +55,52 @@ describe Croupier::Task do
   end
 
   it "should calculate hashes for all inputs" do
-    expected = { 
-      "input" => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15", 
-      "output3" => "e242ed3bffccdf271b7fbaf34ed72d089537b42f" 
+    expected = {
+      "input"   => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
+      "output3" => "e242ed3bffccdf271b7fbaf34ed72d089537b42f",
     }
     Dir.cd "spec/files" do
-    Croupier::Task.scan_inputs.should eq expected
+      Croupier::Task.scan_inputs.should eq expected
     end
   end
 
   it "should create a task graph" do
     task = Croupier::Task.new("name", "output5", ["input2"], dummy_proc)
     expected = {
-          "root"    => Set{"input", "input2"},
-          "input"   => Set{"output3"},
-          "output3" => Set{"output4"},
-          "input2"  => Set{"output5"},
-          "output"  => Set(String).new,
-          "output2" => Set(String).new,
-          "output4" => Set(String).new,
-          "output5" => Set(String).new,
-        }
-    g, s = Croupier::Task.sorted_task_graph 
+      "root"    => Set{"output", "output2", "input", "input2"},
+      "output"  => Set(String).new,
+      "output2" => Set(String).new,
+      "output3" => Set{"output4"},
+      "input"   => Set{"output3"},
+      "output4" => Set(String).new,
+      "output5" => Set(String).new,
+      "input2"  => Set{"output5"},
+    }
+    g, s = Croupier::Task.sorted_task_graph
     g.@vertice_dict.should eq expected
-    s.should eq ["root", "input2", "output5", "input", "output3", "output4"]
+    s.size.should eq expected.size
+    s.should eq [
+      "root",
+      "input2",
+      "output5",
+      "input",
+      "output3",
+      "output4",
+      "output2",
+      "output",
+    ]
   end
 
   it "should detect cycles in the graph" do
     expect_raises(Exception) do
       Croupier::Task.new("name", "output4", ["input"], dummy_proc)
-      g = Croupier::Task.sorted_task_graph 
+      g = Croupier::Task.sorted_task_graph
     end
+  end
+
+  it "should run all tasks" do
+    y = x
+    Croupier::Task.run_tasks
+    x.should eq y + 1
   end
 end
