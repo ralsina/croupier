@@ -16,6 +16,10 @@ describe Croupier::Task do
     task.@stale.should be_false
   end
 
+  it "should have a nice string representation" do
+    Croupier::Task.tasks["output"].to_s.should eq "name::output"
+  end
+
   it "should be registered" do
     Croupier::Task.tasks.has_key?("output").should eq true
   end

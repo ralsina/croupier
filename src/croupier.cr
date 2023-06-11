@@ -177,7 +177,7 @@ module Croupier
     end
 
     def to_s(io)
-      io.puts "#{@name}::#{@output}"
+      io << "#{@name}::#{@output}"
     end
   end
 end
