@@ -54,16 +54,6 @@ describe Croupier::Task do
     Croupier::Task.all_inputs.should eq ["input", "output3"]
   end
 
-  it "should calculate hashes for all inputs" do
-    expected = {
-      "input"   => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
-      "output3" => "e242ed3bffccdf271b7fbaf34ed72d089537b42f",
-    }
-    Dir.cd "spec/files" do
-      Croupier::Task.scan_inputs.should eq expected
-    end
-  end
-
   it "should create a task graph" do
     task = Croupier::Task.new("name", "output5", ["input2"], dummy_proc)
     expected = {
@@ -99,8 +89,74 @@ describe Croupier::Task do
   end
 
   it "should run all tasks" do
+    # TODO: improve this test
     y = x
     Croupier::Task.run_tasks
     x.should eq y + 1
+  end
+
+  it "should calculate hashes for all inputs" do
+    expected = {
+      "input"   => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
+      "input2"  => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+      "output3" => "e242ed3bffccdf271b7fbaf34ed72d089537b42f",
+    }
+    Dir.cd "spec/files" do
+      Croupier::Task.scan_inputs.should eq expected
+    end
+  end
+
+  it "should mark all tasks with inputs as stale if there is no .croupier file" do
+    Dir.cd "spec/files" do
+      File.delete?(".croupier")
+      # Make sure no files are modified
+      Croupier::Task.clear_modified
+      tasks = Croupier::Task.tasks
+      tasks.size.should eq 5
+      tasks.values.select { |t| t.stale? }.size.should eq 0
+
+      Croupier::Task.mark_stale
+
+      # Only tasks with inputs should be stale
+      tasks.values.select { |t| t.stale? }.size.should eq 3
+      tasks.keys.select { |k| tasks[k].stale? }.should eq ["output3", "output4", "output5"]
+    end
+  end
+
+  it "should mark tasks depending indirectly on a modified file as stale" do
+    Dir.cd "spec/files" do
+      File.delete?(".croupier")
+      # Make sure only "input" is modified
+      Croupier::Task.clear_modified
+      tasks = Croupier::Task.tasks
+      tasks.size.should eq 5
+      tasks.values.select { |t| t.stale? }.size.should eq 0
+
+      Croupier::Task.mark_modified("input")
+
+      # Only tasks depending on "input" should be stale
+      tasks.values.select { |t| t.stale? }.size.should eq 2
+      tasks.keys.select { |k| tasks[k].stale? }.should eq ["output3", "output4"]
+    end
+  end
+
+  it "should mark with wrong hash as modified" do
+    Dir.cd "spec/files" do
+      File.delete?(".croupier")
+      # Make sure no files are modified
+      Croupier::Task.clear_modified
+      Croupier::Task.modified.empty?.should be_true
+      File.open(".croupier", "w") do |f|
+        f.puts(%({
+          "input": "thisiswrong",
+          "input2": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+          "output3": "e242ed3bffccdf271b7fbaf34ed72d089537b42f",
+      }))
+      end
+
+      Croupier::Task.mark_stale
+
+      Croupier::Task.modified.should eq Set{"input"}
+    end
   end
 end

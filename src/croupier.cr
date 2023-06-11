@@ -1,5 +1,6 @@
 # Croupier describes a task graph and lets you operate on them
 require "digest/sha1"
+require "yaml"
 require "crystalline"
 
 module Croupier
@@ -55,8 +56,18 @@ module Croupier
     # Registry of modified files, which will make tasks stale
     @@Modified = Set(String).new
 
+    def self.modified
+      @@Modified
+    end
+
+    # Mark one file as modified
     def self.mark_modified(file)
       @@Modified << file
+    end
+
+    # Mark all files as unmodified (only meant for testing)
+    def self.clear_modified
+      @@Modified.clear
     end
 
     # SHA1 of files from last run
@@ -65,6 +76,20 @@ module Croupier
     # All inputs from all tasks
     def self.all_inputs
       @@Tasks.values.map { |task| task.@inputs }.flatten.uniq
+    end
+
+    # Read state of last run, then scan inputs and compare
+    def self.mark_stale
+      if File.exists? ".croupier"
+        @@LastRun = File.open(".croupier") do |file|
+          YAML.parse(file).as_h.map { |k, v| [k.to_s, v.to_s] }.to_h
+        end
+      end
+      scan_inputs.each do |file, sha1|
+        if @@LastRun.fetch(file, "") != sha1
+          mark_modified(file)
+        end
+      end
     end
 
     # Scan all inputs and return a hash with their sha1
@@ -106,8 +131,6 @@ module Croupier
     # This should generate the output file
     def run
       @block.call
-      # Since we just generated it, output is modified and Task is not stale
-      @stale = false
     end
 
     # Tasks are stale if any of their inputs are stale
