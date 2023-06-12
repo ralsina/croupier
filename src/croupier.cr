@@ -183,6 +183,7 @@ module Croupier
     # Tasks are stale if any of their inputs are stale
     def stale?
       @stale = (
+        !File.exists?(@output) ||
         @inputs.any? { |input| @@modified.includes? input } ||
         @inputs.any? { |input| @@tasks.has_key?(input) && @@tasks[input].stale? }
       )
