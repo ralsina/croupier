@@ -163,7 +163,7 @@ module Croupier
       @proc = proc
       @output = output
       @inputs = inputs
-      @stale = false
+      @stale = true
       @no_save = no_save
       if @@tasks.has_key? output
         # Can't have two tasks generating the same output
