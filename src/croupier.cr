@@ -96,7 +96,7 @@ module Croupier
     end
 
     # Read state of last run, then scan inputs and compare
-    def self.mark_stale
+    def self.mark_stale_inputs
       if File.exists? ".croupier"
         @@last_run = File.open(".croupier") do |file|
           YAML.parse(file).as_h.map { |k, v| [k.to_s, v.to_s] }.to_h
@@ -125,7 +125,7 @@ module Croupier
     #
     # If `run_all` is true, run non-stale tasks too
     def self.run_tasks(run_all : Bool = false)
-      mark_stale
+      mark_stale_inputs
       _, tasks = Task.sorted_task_graph
       tasks.each do |task|
         if @@tasks.has_key?(task) && (run_all || @@tasks[task].stale?)

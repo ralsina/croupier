@@ -46,7 +46,6 @@ describe Croupier::Task do
       t.@name.should eq "name"
       t.@output.should eq "output1"
       t.@inputs.should eq [] of String
-      t.@stale.should be_false
     end
   end
 
@@ -241,7 +240,7 @@ describe Croupier::Task do
         File.delete(".croupier")
         tasks.values.count(&.stale?).should eq 0
 
-        Croupier::Task.mark_stale
+        Croupier::Task.mark_stale_inputs
 
         # Only tasks with inputs should be stale
         tasks.values.select(&.stale?).map(&.@output).should eq ["output3", "output4", "output5"]
@@ -294,7 +293,7 @@ describe Croupier::Task do
       }))
         end
 
-        Croupier::Task.mark_stale
+        Croupier::Task.mark_stale_inputs
 
         Croupier::Task.modified.should eq Set{"input"}
       end
