@@ -18,14 +18,20 @@ def with_tasks(&)
   Croupier::Task.new("name", "output3", ["input"], dummy_proc)
   Croupier::Task.new("name", "output4", ["output3"], dummy_proc)
   Croupier::Task.new("name", "output5", ["input2"], dummy_proc)
-  yield
-  Croupier::Task.cleanup
-  Dir.cd("spec/files") do
-    File.delete?("output1")
-    File.delete?("output2")
-    File.delete?("output3")
-    File.delete?("output4")
-    File.delete?("output5")
+  begin
+    yield
+  rescue ex
+    puts "Error: #{ex}"
+    raise ex
+  ensure
+    Croupier::Task.cleanup
+    Dir.cd("spec/files") do
+      File.delete?("output1")
+      File.delete?("output2")
+      File.delete?("output3")
+      File.delete?("output4")
+      File.delete?("output5")
+    end
   end
 end
 
@@ -227,6 +233,18 @@ describe Croupier::Task do
         # Only tasks depending on "input" should be stale
         tasks.values.count(&.stale?).should eq 2
         tasks.keys.select { |k| tasks[k].stale? }.should eq ["output3", "output4"]
+      end
+    end
+  end
+
+  it "should mark tasks as stale if the output doesn't exist" do
+    with_tasks do
+      Dir.cd "spec/files" do
+        File.delete?(".croupier")
+        Croupier::Task.run_tasks
+        Croupier::Task.task("output1").stale?.should be_false
+        File.delete?("output1")
+        Croupier::Task.task("output1").stale?.should be_true
       end
     end
   end
