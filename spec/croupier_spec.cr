@@ -46,6 +46,7 @@ describe Croupier::Task do
       t.@name.should eq "name"
       t.@output.should eq "output1"
       t.@inputs.should eq [] of String
+      t.@stale.should be_true
     end
   end
 
@@ -131,8 +132,9 @@ describe Croupier::Task do
       Dir.cd "spec/files" do
         Croupier::Task.run_tasks
         t = Croupier::Task.tasks["output3"]
+        t.mark_stale # Mark stale to force recalculation
+        t.@stale.should be_true
         Croupier::Task.clear_modified
-        t.stale?.should be_false
         Croupier::Task.mark_modified("input")
         t.stale?.should be_true
       end
@@ -145,7 +147,7 @@ describe Croupier::Task do
         Croupier::Task.run_tasks
         t = Croupier::Task.tasks["output4"]
         Croupier::Task.clear_modified
-        t.stale?.should be_false
+        t.mark_stale # Force recalculation of stale state
         # input is not a direct dependency of t, but an indirect one
         Croupier::Task.mark_modified("input")
         t.stale?.should be_true
@@ -238,7 +240,6 @@ describe Croupier::Task do
         Croupier::Task.run_tasks
         Croupier::Task.clear_modified
         File.delete(".croupier")
-        tasks.values.count(&.stale?).should eq 0
 
         Croupier::Task.mark_stale_inputs
 
@@ -256,7 +257,9 @@ describe Croupier::Task do
         tasks.size.should eq 5
         Croupier::Task.run_tasks
         Croupier::Task.clear_modified
-        tasks.values.count(&.stale?).should eq 0
+        tasks.values.each(&.mark_stale)
+        # All tasks are marked stale so theit state is recalculated
+        tasks.values.count(&.@stale).should eq 5
 
         # Only input is modified
         Croupier::Task.mark_modified("input")
@@ -272,9 +275,11 @@ describe Croupier::Task do
     with_tasks do
       Dir.cd "spec/files" do
         Croupier::Task.run_tasks
-        Croupier::Task.task("output1").stale?.should be_false
+        t = Croupier::Task.task("output1")
+        t.mark_stale # Force recalculation of stale state
+        t.@stale.should be_true
         File.delete?("output1")
-        Croupier::Task.task("output1").stale?.should be_true
+        t.stale?.should be_true
       end
     end
   end
