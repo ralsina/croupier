@@ -92,7 +92,8 @@ describe Croupier::Task do
     y = x = 0
     p = ->{
       x += 1
-      x.to_s
+      File.write("output2", "foo")
+      ""
     }
     t = Croupier::Task.new(
       "name",
@@ -104,6 +105,25 @@ describe Croupier::Task do
     x.should eq y + 1
     t.run
     x.should eq y + 2
+    Croupier::Task.cleanup
+  end
+
+  it "should fail if a no_save task doesn't generate the output when Task.run is called" do
+    p = ->{
+      ""
+    }
+    t = Croupier::Task.new(
+      "name",
+      "output2",
+      [] of String,
+      p,
+      no_save: true)
+    Dir.cd "spec/files" do
+      File.delete?("output2")
+      expect_raises(Exception, "Task name::output2 did not generate output2") do
+        t.run
+      end
+    end
     Croupier::Task.cleanup
   end
 
