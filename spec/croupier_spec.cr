@@ -31,6 +31,7 @@ def with_tasks(&)
       File.delete?("output3")
       File.delete?("output4")
       File.delete?("output5")
+      File.delete?(".croupier")
     end
   end
 end
@@ -108,19 +109,28 @@ describe Croupier::Task do
 
   it "should be stale if an input is marked modified" do
     with_tasks do
-      t = Croupier::Task.tasks["output3"]
-      t.stale?.should be_false
-      Croupier::Task.mark_modified("input")
-      t.stale?.should be_true
+      Dir.cd "spec/files" do
+        Croupier::Task.run_tasks
+        t = Croupier::Task.tasks["output3"]
+        Croupier::Task.clear_modified
+        t.stale?.should be_false
+        Croupier::Task.mark_modified("input")
+        t.stale?.should be_true
+      end
     end
   end
 
   it "should be stale if a dependent task is stale" do
     with_tasks do
-      t = Croupier::Task.tasks["output4"]
-      t.stale?.should be_false
-      Croupier::Task.mark_modified("input")
-      t.stale?.should be_true
+      Dir.cd "spec/files" do
+        Croupier::Task.run_tasks
+        t = Croupier::Task.tasks["output4"]
+        Croupier::Task.clear_modified
+        t.stale?.should be_false
+        # input is not a direct dependency of t, but an indirect one
+        Croupier::Task.mark_modified("input")
+        t.stale?.should be_true
+      end
     end
   end
 
@@ -184,9 +194,8 @@ describe Croupier::Task do
   it "should save files but respect the no_save flag" do
     with_tasks do
       Dir.cd "spec/files" do
-        File.delete?(".croupier")
-        File.delete?("output1")
-        File.delete?("output2")
+        File.exists?("output1").should be_false
+        File.exists?("output2").should be_false
 
         Croupier::Task.run_tasks(run_all: true)
 
@@ -196,6 +205,7 @@ describe Croupier::Task do
         # so it's created by the proc, which creates it
         # with "foo" as the contents
         File.exists?("output2").should be_true
+        File.read("output2").should eq "foo"
       end
     end
   end
@@ -203,11 +213,12 @@ describe Croupier::Task do
   it "should mark all tasks with inputs as stale if there is no .croupier file" do
     with_tasks do
       Dir.cd "spec/files" do
-        File.delete?(".croupier")
-        # Make sure no files are modified
-        Croupier::Task.clear_modified
+        # Make sure al tasks run, but no files are marked
+        # modified and there is no .croupier file
         tasks = Croupier::Task.tasks
-        tasks.size.should eq 5
+        Croupier::Task.run_tasks
+        Croupier::Task.clear_modified
+        File.delete(".croupier")
         tasks.values.count(&.stale?).should eq 0
 
         Croupier::Task.mark_stale
@@ -221,13 +232,14 @@ describe Croupier::Task do
   it "should mark tasks depending indirectly on a modified file as stale" do
     with_tasks do
       Dir.cd "spec/files" do
-        File.delete?(".croupier")
-        # Make sure only "input" is modified
-        Croupier::Task.clear_modified
+        # Make sure all outputs exists and no files are modified
         tasks = Croupier::Task.tasks
         tasks.size.should eq 5
+        Croupier::Task.run_tasks
+        Croupier::Task.clear_modified
         tasks.values.count(&.stale?).should eq 0
 
+        # Only input is modified
         Croupier::Task.mark_modified("input")
 
         # Only tasks depending on "input" should be stale
@@ -240,7 +252,6 @@ describe Croupier::Task do
   it "should mark tasks as stale if the output doesn't exist" do
     with_tasks do
       Dir.cd "spec/files" do
-        File.delete?(".croupier")
         Croupier::Task.run_tasks
         Croupier::Task.task("output1").stale?.should be_false
         File.delete?("output1")
@@ -252,7 +263,6 @@ describe Croupier::Task do
   it "should mark file with wrong hash as modified" do
     with_tasks do
       Dir.cd "spec/files" do
-        File.delete?(".croupier")
         # Make sure no files are modified
         Croupier::Task.clear_modified
         Croupier::Task.modified.empty?.should be_true
