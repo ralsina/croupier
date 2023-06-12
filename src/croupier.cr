@@ -6,7 +6,7 @@ require "log"
 require "./topo_sort"
 
 module Croupier
-  VERSION = "0.1.0"
+  VERSION = "0.1.1"
 
   # A Task is a code that generates an output file
   #
