@@ -201,7 +201,7 @@ module Croupier
         end
         sleep(0.001)
       end
-      # It's losing outputs for some reason
+      # FIXME It's losing outputs for some reason
       save_run
     end
 
