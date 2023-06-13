@@ -160,7 +160,7 @@ module Croupier
     end
 
     # Run the tasks needed to create or update the requested targets
-    def self.run_tasks(targets : Array(String))
+    def self.run_tasks(targets : Array(String), run_all : Bool = false)
       mark_stale_inputs
       tasks = dependencies(targets)
       _run_tasks(tasks, run_all)
@@ -174,7 +174,7 @@ module Croupier
       _, tasks = Task.sorted_task_graph
       _run_tasks(tasks, run_all)
     end
-    
+
     # Helper to run tasks
     def self._run_tasks(tasks, run_all : Bool = false)
       tasks.each do |task|

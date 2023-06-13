@@ -382,6 +382,19 @@ describe Croupier::Task do
     end
   end
 
+  it "should run only required tasks to produce specified outputs" do
+    with_tasks do
+      Dir.cd "spec/files" do
+        Croupier::Task.run_tasks(["output4", "output5"])
+        File.exists?("output1").should be_false
+        File.exists?("output2").should be_false
+        File.exists?("output3").should be_true # Required for output4
+        File.exists?("output4").should be_true # Required
+        File.exists?("output5").should be_true # Required
+      end
+    end
+  end
+
   it "should fail if asked for dependencies of an unknown output" do
     with_tasks do
       Dir.cd "spec/files" do
