@@ -121,6 +121,13 @@ module Croupier
       end
     end
 
+    # We ran all tasks, store the current state
+    def self.save_run
+      File.open(".croupier", "w") do |file|
+        file << YAML.dump(@@this_run.merge @@next_run)
+      end
+    end
+
     # Run all stale tasks in dependency order
     #
     # If `run_all` is true, run non-stale tasks too
@@ -131,33 +138,20 @@ module Croupier
         if @@tasks.has_key?(task) && (run_all || @@tasks[task].stale?)
           path = @@tasks[task].@output
           data = @@tasks[task].run
-
-          if @@tasks[task].@no_save
-            if File.exists? path
-              data = File.read(path)
-            end
-          else # Save the file
-            Dir.mkdir_p(File.dirname path)
-            File.open(path, "w") do |io|
-              io.puts data
-            end
-          end
-
           @@next_run[path] = Digest::SHA1.hexdigest(data)
         end
       end
-
-      # We ran all tasks, store the current state
-      File.open(".croupier", "w") do |file|
-        file << YAML.dump(@@this_run.merge @@next_run)
-      end
+      save_run
     end
 
+    # Run all stale tasks as concurrently as possible.
+    #
     # Whenever a task is ready, launch it in a separate fiber
     # This is only concurrency, not parallelism, but on tests
     # it seems to be faster than running tasks sequentially.
     #
     # However, it's a bit buggy (the .croupier file is not correct)
+    # TODO: support run_all
     def self.run_tasks_parallel
       mark_stale_inputs
       loop do
@@ -170,30 +164,14 @@ module Croupier
         batch.each do |t|
           spawn do
             path = t.@output
-            Fiber.yield
-            data = t.run
-            Fiber.yield
-            if t.@no_save
-              if File.exists? path
-                data = File.read(path)
-              end
-            else # Save the file
-              Dir.mkdir_p(File.dirname path)
-              File.open(path, "w") do |io|
-                io.puts data
-              end
-            end
             # FIXME: most of these are getting lost
-            @@next_run[path] = Digest::SHA1.hexdigest(data)
+            @@next_run[path] = Digest::SHA1.hexdigest(t.run)
           end
         end
         sleep(0.001)
       end
-      # We ran all tasks, store the current state
       # It's losing outputs for some reason
-      File.open(".croupier", "w") do |file|
-        file << YAML.dump(@@this_run.merge @@next_run)
-      end
+      save_run
     end
 
     @proc : Proc(String)
@@ -215,16 +193,24 @@ module Croupier
       @@tasks[output] = self
     end
 
-    # Executes the proc for the task.
-    # Unless the task is marked `no_save`, it should return the
-    # desired contents of the file.
+    # Executes the proc for the task and returns the contents of the output file.
     def run : String
-      r = @proc.call
-      if @no_save && !File.exists?(@output)
-        raise "Task #{self} did not generate #{@output}"
+      Fiber.yield
+      data = @proc.call
+      Fiber.yield
+      if @no_save
+        if !File.exists?(@output)
+          raise "Task #{self} did not generate #{@output}"
+        end
+        data = File.read(@output)
+      else # Save the file
+        Dir.mkdir_p(File.dirname @output)
+        File.open(@output, "w") do |io|
+          io << data
+        end
       end
       @stale = false # Done, not stale anymore
-      r
+      data
     end
 
     # Tasks are stale if any of their inputs are stale, if the
