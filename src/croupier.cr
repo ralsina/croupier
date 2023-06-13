@@ -159,12 +159,24 @@ module Croupier
       end
     end
 
+    # Run the tasks needed to create or update the requested targets
+    def self.run_tasks(targets : Array(String))
+      mark_stale_inputs
+      tasks = dependencies(targets)
+      _run_tasks(tasks, run_all)
+    end
+
     # Run all stale tasks in dependency order
     #
     # If `run_all` is true, run non-stale tasks too
     def self.run_tasks(run_all : Bool = false)
       mark_stale_inputs
       _, tasks = Task.sorted_task_graph
+      _run_tasks(tasks, run_all)
+    end
+    
+    # Helper to run tasks
+    def self._run_tasks(tasks, run_all : Bool = false)
       tasks.each do |task|
         if @@tasks.has_key?(task) && (run_all || @@tasks[task].stale?)
           path = @@tasks[task].@output
