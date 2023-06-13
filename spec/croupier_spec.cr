@@ -365,4 +365,30 @@ describe Croupier::Task do
       end
     end
   end
+
+  it "should report all tasks required to produce an output" do
+    with_tasks do
+      Dir.cd "spec/files" do
+        Croupier::Task.dependencies("output4").should eq ["output3", "output4"]
+      end
+    end
+  end
+
+  it "should report all tasks required to produce multiple outputs" do
+    with_tasks do
+      Dir.cd "spec/files" do
+        Croupier::Task.dependencies(["output4", "output5"]).should eq ["output3", "output4", "output5"]
+      end
+    end
+  end
+
+  it "should fail if asked for dependencies of an unknown output" do
+    with_tasks do
+      Dir.cd "spec/files" do
+        expect_raises(Exception) do
+          Croupier::Task.dependencies("output99")
+        end
+      end
+    end
+  end
 end

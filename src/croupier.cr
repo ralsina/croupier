@@ -95,6 +95,37 @@ module Croupier
       @@tasks.values.flat_map { |task| task.@inputs }.uniq!
     end
 
+    # Get a task list of what tasks need to be done to produce `output`
+    # The list is sorted so it can be executed in order
+    def self.dependencies(output : String)
+      self.dependencies [output]
+    end
+
+    # Get a task list of what tasks need to be done to produce `outputs`
+    # The list is sorted so it can be executed in order
+    def self.dependencies(outputs : Array(String))
+      outputs.each do |output|
+        if !@@tasks.has_key?(output)
+          raise "Unknown output #{output}"
+        end
+      end
+      self._dependencies outputs
+    end
+
+    # Helper function for dependencies
+    def self._dependencies(outputs : Array(String))
+      result = Set(String).new
+      outputs.each do |output|
+        if @@tasks.has_key? output
+          result << output
+          _dependencies(@@tasks[output].@inputs).each do |dep|
+            result << dep
+          end
+        end
+      end
+      self.sorted_task_graph[1].select(->(v : String) { result.includes? v })
+    end
+
     # Read state of last run, then scan inputs and compare
     def self.mark_stale_inputs
       if File.exists? ".croupier"
