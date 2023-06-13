@@ -191,12 +191,29 @@ module Croupier
       if !@stale
         return false
       end
+
       @stale = (
-        !File.exists?(@output) || # No output file
+        !File.exists?(@output) ||
         # Any input file is modified
         @inputs.any? { |input| @@modified.includes? input } ||
         # Any input file is created by a stale task
         @inputs.any? { |input| @@tasks.has_key?(input) && @@tasks[input].stale? }
+      )
+    end
+
+    # A task is ready if it is stale but all its dependencies are not
+    # For inputs that are tasks, we check if they are stale
+    # For inputs that are not tasks, they should exist
+    def ready?
+      (
+        stale? &&
+          @inputs.all? { |input|
+            if @@tasks.has_key? input
+              !@@tasks[input].stale?
+            else
+              File.exists? input
+            end
+          }
       )
     end
 

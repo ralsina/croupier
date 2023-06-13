@@ -89,23 +89,27 @@ describe Croupier::Task do
   end
 
   it "should execute the task's proc when Task.run is called" do
-    y = x = 0
-    p = ->{
-      x += 1
-      File.write("output2", "foo")
-      ""
-    }
-    t = Croupier::Task.new(
-      "name",
-      "output2",
-      [] of String,
-      p,
-      no_save: true)
-    t.run
-    x.should eq y + 1
-    t.run
-    x.should eq y + 2
-    Croupier::Task.cleanup
+    begin
+      y = x = 0
+      p = ->{
+        x += 1
+        File.write("output2", "foo")
+        ""
+      }
+      t = Croupier::Task.new(
+        "name",
+        "output2",
+        [] of String,
+        p,
+        no_save: true)
+      t.run
+      x.should eq y + 1
+      t.run
+      x.should eq y + 2
+    ensure
+      Croupier::Task.cleanup
+      File.delete?("output2")
+    end
   end
 
   it "should fail if a no_save task doesn't generate the output when Task.run is called" do
@@ -311,6 +315,29 @@ describe Croupier::Task do
       Croupier::Task.new("name", "input", ["output4"], b)
       expect_raises(Exception, "Cycle detected") do
         Croupier::Task.sorted_task_graph
+      end
+    end
+  end
+
+  it "should consider all tasks without task dependencies as ready" do
+    with_tasks do
+      Dir.cd("spec/files") do
+        Croupier::Task.tasks.values.select(&.ready?).map(&.@output).should \
+          eq ["output1", "output2", "output3", "output5"]
+      end
+    end
+  end
+
+  it "should consider all tasks with missing file inputs as not ready" do
+    with_tasks do
+      Dir.cd("spec/files") do
+        begin
+          File.rename("input", "foo")
+          Croupier::Task.tasks.values.select(&.ready?).map(&.@output).should \
+            eq ["output1", "output2", "output5"]
+        ensure
+          File.rename("foo", "input")
+        end
       end
     end
   end
