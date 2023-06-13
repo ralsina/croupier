@@ -151,6 +151,7 @@ describe Croupier::Task do
         Croupier::Task.run_tasks
         t = Croupier::Task.tasks["output4"]
         Croupier::Task.clear_modified
+        Croupier::Task.tasks.values.each(&.mark_stale)
         t.mark_stale # Force recalculation of stale state
         # input is not a direct dependency of t, but an indirect one
         Croupier::Task.mark_modified("input")
@@ -188,6 +189,17 @@ describe Croupier::Task do
     with_tasks do
       Dir.cd "spec/files" do
         Croupier::Task.run_tasks(run_all: true)
+        Croupier::Task.tasks.keys.each do |k|
+          File.exists?(k).should be_true
+        end
+      end
+    end
+  end
+
+  it "should run all tasks in parallel" do
+    with_tasks do
+      Dir.cd "spec/files" do
+        Croupier::Task.run_tasks_parallel
         Croupier::Task.tasks.keys.each do |k|
           File.exists?(k).should be_true
         end
@@ -242,6 +254,7 @@ describe Croupier::Task do
         # modified and there is no .croupier file
         tasks = Croupier::Task.tasks
         Croupier::Task.run_tasks
+        Croupier::Task.tasks.values.each(&.mark_stale)
         Croupier::Task.clear_modified
         File.delete(".croupier")
 
@@ -337,6 +350,17 @@ describe Croupier::Task do
             eq ["output1", "output2", "output5"]
         ensure
           File.rename("foo", "input")
+        end
+      end
+    end
+  end
+
+  it "should run all tasks in parallel" do
+    with_tasks do
+      Dir.cd "spec/files" do
+        Croupier::Task.run_tasks_parallel
+        Croupier::Task.tasks.keys.each do |k|
+          File.exists?(k).should be_true
         end
       end
     end

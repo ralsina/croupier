@@ -6,7 +6,7 @@ require "log"
 require "./topo_sort"
 
 module Croupier
-  VERSION = "0.1.1"
+  VERSION = "0.1.2"
 
   # A Task is a code that generates an output file
   #
@@ -149,7 +149,50 @@ module Croupier
 
       # We ran all tasks, store the current state
       File.open(".croupier", "w") do |file|
-        file.puts YAML.dump(@@this_run.merge @@next_run)
+        file << YAML.dump(@@this_run.merge @@next_run)
+      end
+    end
+
+    # Whenever a task is ready, launch it in a separate fiber
+    # This is only concurrency, not parallelism, but on tests
+    # it seems to be faster than running tasks sequentially.
+    #
+    # However, it's a bit buggy (the .croupier file is not correct)
+    def self.run_tasks_parallel
+      mark_stale_inputs
+      loop do
+        stale_tasks = @@tasks.values.select(&.stale?).to_set
+        if stale_tasks.empty?
+          break
+        end
+        batch = stale_tasks.select(&.ready?)
+        batch.each(&.not_ready)
+        batch.each do |t|
+          spawn do
+            path = t.@output
+            Fiber.yield
+            data = t.run
+            Fiber.yield
+            if t.@no_save
+              if File.exists? path
+                data = File.read(path)
+              end
+            else # Save the file
+              Dir.mkdir_p(File.dirname path)
+              File.open(path, "w") do |io|
+                io.puts data
+              end
+            end
+            # FIXME: most of these are getting lost
+            @@next_run[path] = Digest::SHA1.hexdigest(data)
+          end
+        end
+        sleep(0.001)
+      end
+      # We ran all tasks, store the current state
+      # It's losing outputs for some reason
+      File.open(".croupier", "w") do |file|
+        file << YAML.dump(@@this_run.merge @@next_run)
       end
     end
 
@@ -180,6 +223,7 @@ module Croupier
       if @no_save && !File.exists?(@output)
         raise "Task #{self} did not generate #{@output}"
       end
+      @stale = false # Done, not stale anymore
       r
     end
 
@@ -220,6 +264,11 @@ module Croupier
     # Mark this task as stale. Only use for testing.
     def mark_stale
       @stale = true
+    end
+
+    # Mark as not ready
+    def not_ready
+      @stale = false
     end
 
     def to_s(io)
