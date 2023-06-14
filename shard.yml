@@ -15,3 +15,9 @@ dependencies:
 # Not the same crystalline as above :-)
 crystalline:
   main: src/run_tests.cr
+
+
+development_dependencies:
+  crytic:
+    github: hanneskaeufler/crytic
+    version: ~> 8
