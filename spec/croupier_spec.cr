@@ -420,4 +420,19 @@ describe Croupier::Task do
       end
     end
   end
+
+  it "should fail to run if a task depends on an input that doesn't exist and won't be generated" do
+    with_tasks do
+      Dir.cd "spec/files" do
+        begin
+          File.rename("input", "foo")
+          expect_raises(Exception) do
+            Croupier::Task.run_tasks
+          end
+        ensure
+          File.rename("foo", "input")
+        end
+      end
+    end
+  end
 end

@@ -166,12 +166,22 @@ module Croupier
       _run_tasks(tasks, run_all)
     end
 
+    # Check if all inputs are either task outputs or existing files
+    def self.check_dependencies
+      bad_inputs = all_inputs.select { |input|
+        !tasks.has_key?(input) && !File.exists?(input)
+      }
+      return unless !bad_inputs.empty?
+      raise "Can't run: Unknown inputs #{bad_inputs.join(", ")}"
+    end
+
     # Run all stale tasks in dependency order
     #
     # If `run_all` is true, run non-stale tasks too
     def self.run_tasks(run_all : Bool = false)
       mark_stale_inputs
       _, tasks = Task.sorted_task_graph
+      check_dependencies
       _run_tasks(tasks, run_all)
     end
 
