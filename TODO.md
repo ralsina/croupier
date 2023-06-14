@@ -5,4 +5,5 @@ Thinks it may make sense to add:
 * ~~Run only tasks needed to produce specific outputs~~
 * Instrument the concurrent runner using https://github.com/didactic-drunk/fiber_metrics.cr
 * Maybe migrate to crotest or microtest (Nicer)
-* Automate running crytic every now and then
+* ~~Automate running crytic every now and then~~
+* Once it works fine with files, generalize to a k/v store using [kiwi](ihttps://github.com/crystal-community/kiwi)
