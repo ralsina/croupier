@@ -1,10 +1,11 @@
 # Croupier
 
-Croupier is a smart task definition and execution library.
+Croupier is a smart task definition and execution library, which can be used for [dataflow programming](https://en.wikipedia.org/wiki/Dataflow_programming).
 
 [![Docs](https://github.com/ralsina/croupier/actions/workflows/static.yml/badge.svg)](https://ralsina.github.io/croupier/)
 ![GitHub](https://img.shields.io/github/license/ralsina/croupier)
 [![GitHub release](https://img.shields.io/github/release/ralsina/croupier.svg)](https://GitHub.com/ralsina/croupier/releases/)
+[![News about Croupier](https://img.shields.io/badge/News-About%20Croupier-blue)](https://ralsina.me/categories/croupier.html)
 
 
 [![Tests](https://github.com/ralsina/croupier/actions/workflows/ci.yml/badge.svg)](https://github.com/ralsina/croupier/actions/workflows/ci.yml)
