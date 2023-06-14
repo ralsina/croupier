@@ -185,12 +185,28 @@ describe Croupier::Task do
     end
   end
 
-  it "should run all tasks" do
+  it "should run all tasks when run_all is true" do
     with_tasks do
       Dir.cd "spec/files" do
         Croupier::Task.run_tasks(run_all: true)
         Croupier::Task.tasks.keys.each do |k|
           File.exists?(k).should be_true
+        end
+      end
+    end
+  end
+
+  it "should run all stale tasks when run_all is false" do
+    with_tasks do
+      Dir.cd "spec/files" do
+        Croupier::Task.task("output1").not_ready # Not stale
+        Croupier::Task.run_tasks(run_all: false)
+        Croupier::Task.tasks.keys.each do |k|
+          if k == "output1"
+            File.exists?(k).should be_false
+          else
+            File.exists?(k).should be_true
+          end
         end
       end
     end
