@@ -1,5 +1,6 @@
 Thinks it may make sense to add:
 
+* Use getters/setters/properties properly
 * Tasks that operate in-place (output is also input)
 * Instrument the concurrent runner using https://github.com/didactic-drunk/fiber_metrics.cr
 * Maybe migrate to crotest or microtest (Nicer)
