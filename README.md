@@ -57,12 +57,11 @@ Further documentation at the [doc pages](https://ralsina.github.io/croupier/)
 
 **No target conflicts**
 
-If there are two or more tasks with the same output they will be executed
-in order of creation. For all practical purposes, it would be as if it was
-a single task that performed all the procs in order.
+If there are two or more tasks with the same output they will be merged into the first task created. The resulting task will:
+ 
+* Depend on the combination of all dependencies of all merged tasks
+* Run the procs of all merged tasks in order of creation
 
-If there are multiple tasks with the same target, and one of them is stale,
-then all the latter tasks will be stale too.
 
 ## Installation
 

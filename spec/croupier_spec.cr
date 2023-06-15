@@ -42,7 +42,7 @@ end
 describe "Croupier::TaskManager" do
   it "should be able to create a task and fetch it" do
     with_tasks do
-      t = Croupier::TaskManager.tasks("output1")[0]
+      t = Croupier::TaskManager.tasks("output1")
       if t.nil?
         fail "Task not found"
       end
@@ -63,7 +63,7 @@ describe "Croupier::TaskManager" do
 
   it "should have a nice string representation" do
     with_tasks do
-      Croupier::TaskManager.tasks["output1"][0].to_s.should eq "name::output1"
+      Croupier::TaskManager.tasks["output1"].to_s.should eq "name::output1"
     end
   end
 
@@ -124,7 +124,7 @@ describe "Croupier::TaskManager" do
     with_tasks do
       Dir.cd "spec/files" do
         Croupier::TaskManager.run_tasks
-        t = Croupier::TaskManager.tasks["output3"][0]
+        t = Croupier::TaskManager.tasks["output3"]
         t.mark_stale # Mark stale to force recalculation
         t.@stale.should be_true
         Croupier::TaskManager.clear_modified
@@ -138,12 +138,10 @@ describe "Croupier::TaskManager" do
     with_tasks do
       Dir.cd "spec/files" do
         Croupier::TaskManager.run_tasks
-        t = Croupier::TaskManager.tasks["output4"][0]
+        t = Croupier::TaskManager.tasks["output4"]
         Croupier::TaskManager.clear_modified
-        Croupier::TaskManager.tasks.values.each do |tasks|
-          tasks.each do |task|
-            task.mark_stale
-          end
+        Croupier::TaskManager.tasks.values.each do |task|
+          task.mark_stale
         end
         t.mark_stale # Force recalculation of stale state
         # input is not a direct dependency of t, but an indirect one
@@ -193,7 +191,7 @@ describe "Croupier::TaskManager" do
   it "should run all stale tasks when run_all is false" do
     with_tasks do
       Dir.cd "spec/files" do
-        Croupier::TaskManager.tasks("output1")[0].not_ready # Not stale
+        Croupier::TaskManager.tasks("output1").not_ready # Not stale
         Croupier::TaskManager.run_tasks(run_all: false)
         Croupier::TaskManager.tasks.keys.each do |k|
           if k == "output1"
@@ -291,7 +289,7 @@ describe "Croupier::TaskManager" do
 
         # Only tasks depending on "input" should be stale
         tasks.values.flatten.count(&.stale?).should eq 2
-        tasks.keys.select { |k| tasks[k][0].stale? }.should eq ["output3", "output4"]
+        tasks.keys.select { |k| tasks[k].stale? }.should eq ["output3", "output4"]
       end
     end
   end
@@ -300,7 +298,7 @@ describe "Croupier::TaskManager" do
     with_tasks do
       Dir.cd "spec/files" do
         Croupier::TaskManager.run_tasks
-        t = Croupier::TaskManager.tasks("output1")[0]
+        t = Croupier::TaskManager.tasks("output1")
         t.mark_stale # Force recalculation of stale state
         t.@stale.should be_true
         File.delete?("output1")
@@ -411,43 +409,33 @@ describe "Croupier::TaskManager" do
 
   it "should be possible to create two tasks with the same output" do
     dummy_proc = ->{ "" }
-    t1 = Croupier::Task.new("name", "output", [] of String, dummy_proc)
-    t2 = Croupier::Task.new("name", "output", [] of String, dummy_proc)
-    Croupier::TaskManager.tasks["output"].should eq [t1, t2]
+    t1 = Croupier::Task.new("name", "output", ["i1"] of String, dummy_proc)
+    Croupier::Task.new("name", "output", ["i2"] of String, dummy_proc)
+
+    # t2 is merged into t1
+    Croupier::TaskManager.tasks["output"].should eq t1
+    t1.@inputs == ["i1", "i2"]
   end
 
-  it "should mark as stale all tasks that are newer than a stale task with the same target" do
+  it "running merged tasks should have all effects of running all merged tasks" do
     Dir.cd "spec/files" do
       Croupier::TaskManager.cleanup
-      dummy_proc = ->{ "" }
-      t1 = Croupier::Task.new("t1", "output", [] of String, dummy_proc)
-      t2 = Croupier::Task.new("t2", "output", ["input"] of String, dummy_proc)
-      t3 = Croupier::Task.new("t3", "output", [] of String, dummy_proc)
-      Croupier::TaskManager.tasks["output"].should eq [t1, t2, t3]
+      proc1 = ->{ File.open("1", "w") << ""; "foo" }
+      proc2 = ->{ File.open("2", "w") << ""; "bar" }
+      t1 = Croupier::Task.new("t1", "output", [] of String, proc1)
+      Croupier::Task.new("t2", "output", [] of String, proc2)
 
-      File.write("output", "foo")
-      File.write("input", "foo")
+      # t2 merges into t1
+      Croupier::TaskManager.tasks["output"].should eq t1
+
       Croupier::TaskManager.run_tasks
 
-      # Since we just ran, no tasks should be stale
-      t1.stale?.should be_false
-      t2.stale?.should be_false
-      t3.stale?.should be_false
+      # output should have result of t2
+      File.read("output").should eq "bar"
 
-      # Make t1 not stale, t2 and t3 stale
-      t1.not_ready
-      t2.mark_stale
-      t3.mark_stale
-      Croupier::TaskManager.mark_modified("input") # T2 will be stale
-
-      t1.stale?.should be_false
-      t2.stale?.should be_true
-      # t3 is stale because t2 is earlier and stale
-      t3.stale?.should be_true
-
-      # Also, t2 and t3 should be ready to run
-      Croupier::TaskManager.tasks.values.flatten.select(&.ready?).map(&.@name).should \
-        eq ["t2", "t3"]
+      # Files 1 and 2 should exist because both procs ran
+      File.exists?("1").should be_true
+      File.exists?("2").should be_true
     end
   end
 end
