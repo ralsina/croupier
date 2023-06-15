@@ -44,7 +44,7 @@ describe "Croupier::TaskManager" do
     with_tasks do
       t = Croupier::TaskManager.tasks["output1"]
       t.@name.should eq "name"
-      t.@output.should eq "output1"
+      t.@outputs.should eq ["output1"]
       t.@inputs.empty?.should be_true
       t.@stale.should be_true
     end
@@ -58,7 +58,7 @@ describe "Croupier::TaskManager" do
       Croupier::Task.new("foobar3", proc: dummy_proc)
       t = Croupier::TaskManager.tasks("")
       t.@name.should eq "foobar1"
-      t.@output.should eq ""
+      t.@outputs.should eq [""]
       t.@inputs.empty?.should be_true
       t.@stale.should be_true
       t.@procs.size.should eq 3
@@ -79,7 +79,7 @@ describe "Croupier::TaskManager" do
 
   it "should have a nice string representation" do
     with_tasks do
-      Croupier::TaskManager.tasks["output1"].to_s.should eq "name::output1"
+      Croupier::TaskManager.tasks["output1"].to_s.should eq "name::(output1)"
     end
   end
 
@@ -132,7 +132,7 @@ describe "Croupier::TaskManager" do
         [] of String,
         p,
         no_save: true)
-      expect_raises(Exception, "Task name::output2 did not generate output2") do
+      expect_raises(Exception, "Task name::(output2) did not generate output2") do
         t.run
       end
     end
@@ -287,14 +287,14 @@ describe "Croupier::TaskManager" do
         # modified and there is no .croupier file
         tasks = Croupier::TaskManager.tasks
         Croupier::TaskManager.run_tasks
-        Croupier::TaskManager.tasks.values.flatten.each(&.mark_stale)
+        Croupier::TaskManager.tasks.values.each(&.mark_stale)
         Croupier::TaskManager.clear_modified
         File.delete(".croupier")
 
         Croupier::TaskManager.mark_stale_inputs
 
         # Only tasks with inputs should be stale
-        tasks.values.flatten.select(&.stale?).map(&.@output).should eq ["output3", "output4", "output5"]
+        tasks.values.select(&.stale?).flat_map(&.@outputs).should eq ["output3", "output4", "output5"]
       end
     end
   end
@@ -307,15 +307,15 @@ describe "Croupier::TaskManager" do
         tasks.size.should eq 5
         Croupier::TaskManager.run_tasks
         Croupier::TaskManager.clear_modified
-        tasks.values.flatten.each(&.mark_stale)
+        tasks.values.each(&.mark_stale)
         # All tasks are marked stale so theit state is recalculated
-        tasks.values.flatten.count(&.@stale).should eq 5
+        tasks.values.count(&.@stale).should eq 5
 
         # Only input is modified
         Croupier::TaskManager.mark_modified("input")
 
         # Only tasks depending on "input" should be stale
-        tasks.values.flatten.count(&.stale?).should eq 2
+        tasks.values.count(&.stale?).should eq 2
         tasks.keys.select { |k| tasks[k].stale? }.should eq ["output3", "output4"]
       end
     end
@@ -370,7 +370,7 @@ describe "Croupier::TaskManager" do
   it "should consider all tasks without task dependencies as ready" do
     with_tasks do
       Dir.cd("spec/files") do
-        Croupier::TaskManager.tasks.values.flatten.select(&.ready?).map(&.@output).should \
+        Croupier::TaskManager.tasks.values.select(&.ready?).flat_map(&.@outputs).should \
           eq ["output1", "output2", "output3", "output5"]
       end
     end
@@ -380,7 +380,7 @@ describe "Croupier::TaskManager" do
     with_tasks do
       Dir.cd("spec/files") do
         File.delete("input")
-        Croupier::TaskManager.tasks.values.flatten.select(&.ready?).map(&.@output).should \
+        Croupier::TaskManager.tasks.values.select(&.ready?).flat_map(&.@outputs).should \
           eq ["output1", "output2", "output5"]
       end
     end
@@ -438,6 +438,7 @@ describe "Croupier::TaskManager" do
 
   it "should be possible to create two tasks with the same output" do
     Dir.cd "spec/files" do
+      Croupier::TaskManager.cleanup
       dummy_proc = ->{ "" }
       t1 = Croupier::Task.new("name", "output", ["i1"] of String, dummy_proc)
       Croupier::Task.new("name", "output", ["i2"] of String, dummy_proc)
@@ -455,6 +456,17 @@ describe "Croupier::TaskManager" do
       expect_raises(Exception, "different no_save settings") do
         Croupier::Task.new("name", "output", no_save: false)
       end
+    end
+  end
+
+  it "should be possible to have more than one output" do
+    Dir.cd "spec/files" do
+      Croupier::TaskManager.cleanup
+      t1 = Croupier::Task.new("name", ["output1", "output2"])
+
+      # Should be visible in two places
+      Croupier::TaskManager.tasks["output1"].should eq t1
+      Croupier::TaskManager.tasks["output2"].should eq t1
     end
   end
 
@@ -477,6 +489,29 @@ describe "Croupier::TaskManager" do
       # Files 1 and 2 should exist because both procs ran
       File.exists?("1").should be_true
       File.exists?("2").should be_true
+    end
+  end
+
+  it "should handle a no_save task that generates multiple outputs" do
+    Dir.cd "spec/files" do
+      Croupier::TaskManager.cleanup
+      p = ->{ File.open("output1", "w") << ""; File.open("output2", "w") << ""; "" }
+      Croupier::Task.new("name", ["output1", "output2"], proc: p, no_save: true)
+      Croupier::TaskManager.run_tasks
+    end
+  end
+
+  it "should handle a task that generates multiple outputs" do
+    Dir.cd "spec/files" do
+      Croupier::TaskManager.cleanup
+      p = ->{ YAML.dump(["foo", "bar"]) }
+      Croupier::Task.new("name", ["output1", "output2"], proc: p)
+
+      Croupier::TaskManager.run_tasks
+
+      # The two files should be created with the right contents
+      File.read("output1").should eq "foo"
+      File.read("output2").should eq "bar"
     end
   end
 end
