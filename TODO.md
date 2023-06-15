@@ -5,7 +5,6 @@
 * Tasks that *always* run
 * Use getters/setters/properties properly
 * Instrument the concurrent runner using [Fiber Metrics](https://github.com/didactic-drunk/fiber_metrics.cr)
-* Maybe migrate to crotest or microtest (Nicer)
 * Once it works fine with files, generalize to a k/v store using [kiwi](ihttps://github.com/crystal-community/kiwi)
 * ~~Refactor the Task registry into its own class separate from Task itself~~
 * ~~Make `Task.run` able to return `Array(String) | String | Nil` depending on number of outputs and handle it~~
@@ -16,6 +15,15 @@
 * ~~Automate running crytic every now and then~~
 
 ## Things that look like a bad idea, and why
+
+* Maybe migrate to crotest or microtest (Nicer)
+
+  While there are a number of tet frameworks, the default spec one
+  is ... OK. And I already have written a bunch of tests which I
+  
+  really don't want to redo.
+
+  Maybe for another project.
 
 * Tasks where output is also input (self-cyclical)
 
