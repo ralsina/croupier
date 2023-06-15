@@ -1,8 +1,10 @@
-# Thinks it may make sense to add:
+# TODO
 
+## Things it may make sense to add
+
+* Tasks that *always* run
 * Use getters/setters/properties properly
-* Tasks that operate in-place (output is also input)
-* Instrument the concurrent runner using https://github.com/didactic-drunk/fiber_metrics.cr
+* Instrument the concurrent runner using [Fiber Metrics](https://github.com/didactic-drunk/fiber_metrics.cr)
 * Maybe migrate to crotest or microtest (Nicer)
 * Once it works fine with files, generalize to a k/v store using [kiwi](ihttps://github.com/crystal-community/kiwi)
 * ~~Refactor the Task registry into its own class separate from Task itself~~
@@ -12,3 +14,16 @@
 * ~~More than one task with the same output~~
 * ~~Run only tasks needed to produce specific outputs~~
 * ~~Automate running crytic every now and then~~
+
+## Things that look like a bad idea, and why
+
+* Tasks where output is also input (self-cyclical)
+
+  This feel very hard to get right and maybe unnecessary.
+
+  If the file is always preexisting, then the task should run
+  every time, which can be handled by "always run" tasks
+
+  If the file is created by another previous task t1, then this one
+  will be merged into it, which means it doesn't need to have the
+  input declared, and it will always run after t1, which looks ok.
