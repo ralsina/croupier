@@ -415,4 +415,39 @@ describe Croupier::Task do
     t2 = Croupier::Task.new("name", "output", [] of String, dummy_proc)
     Croupier::Task.tasks["output"].should eq [t1, t2]
   end
+
+  it "should mark as stale all tasks that are newer than a stale task with the same target" do
+    Dir.cd "spec/files" do
+      Croupier::Task.cleanup
+      dummy_proc = ->{ "" }
+      t1 = Croupier::Task.new("t1", "output", [] of String, dummy_proc)
+      t2 = Croupier::Task.new("t2", "output", ["input"] of String, dummy_proc)
+      t3 = Croupier::Task.new("t3", "output", [] of String, dummy_proc)
+      Croupier::Task.tasks["output"].should eq [t1, t2, t3]
+
+      File.write("output", "foo")
+      File.write("input", "foo")
+      Croupier::Task.run_tasks
+
+      # Since we just ran, no tasks should be stale
+      t1.stale?.should be_false
+      t2.stale?.should be_false
+      t3.stale?.should be_false
+
+      # Make t1 not stale, t2 and t3 stale
+      t1.not_ready
+      t2.mark_stale
+      t3.mark_stale
+      Croupier::Task.mark_modified("input") # T2 will be stale
+
+      t1.stale?.should be_false
+      t2.stale?.should be_true
+      # t3 is stale because t2 is earlier and stale
+      t3.stale?.should be_true
+
+      # Also, t2 and t3 should be ready to run
+      Croupier::Task.tasks.values.flatten.select(&.ready?).map(&.@name).should \
+        eq ["t2", "t3"]
+    end
+  end
 end
