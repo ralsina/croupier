@@ -18,7 +18,7 @@ You use Croupier to define tasks. Tasks have:
 
 * A name
 * Zero or more input files
-* Zero or more output file
+* Zero or more output files
 * A `Proc` that consumes the inputs and returns a string
 * After the `Proc` returns a string it's saved to the output unless
   the task has the `no_save` flag set to `true`, in which case it's expected to have already saved it.
