@@ -83,36 +83,39 @@ describe "Croupier::TaskManager" do
   end
 
   it "should execute the task's proc when Task.run is called" do
-    y = x = 0
-    p = ->{
-      x += 1
-      File.write("output2", "foo")
-      ""
-    }
-    t = Croupier::Task.new(
-      "name",
-      "output2",
-      [] of String,
-      p,
-      no_save: true)
-    t.run
-    x.should eq y + 1
-    t.run
-    x.should eq y + 2
+    Dir.cd "spec/files" do
+      y = x = 0
+      p = ->{
+        x += 1
+        File.write("output2", "foo")
+        ""
+      }
+      t = Croupier::Task.new(
+        "name",
+        "output2",
+        [] of String,
+        p,
+        no_save: true)
+      t.run
+      x.should eq y + 1
+      t.run
+      x.should eq y + 2
+    end
   end
 
   it "should fail if a no_save task doesn't generate the output when Task.run is called" do
-    Croupier::TaskManager.cleanup
-    p = ->{
-      ""
-    }
-    t = Croupier::Task.new(
-      "name",
-      "output2",
-      [] of String,
-      p,
-      no_save: true)
     Dir.cd "spec/files" do
+      File.delete?("output2") # Make sure this doesn't exist
+      Croupier::TaskManager.cleanup
+      p = ->{
+        ""
+      }
+      t = Croupier::Task.new(
+        "name",
+        "output2",
+        [] of String,
+        p,
+        no_save: true)
       expect_raises(Exception, "Task name::output2 did not generate output2") do
         t.run
       end
@@ -154,7 +157,9 @@ describe "Croupier::TaskManager" do
   it "should list all inputs for all tasks" do
     # TODO: check inputs are not repeated
     with_tasks do
-      Croupier::TaskManager.all_inputs.should eq ["input", "output3", "input2"]
+      Dir.cd "spec/files" do
+        Croupier::TaskManager.all_inputs.should eq ["input", "output3", "input2"]
+      end
     end
   end
 
@@ -170,10 +175,12 @@ describe "Croupier::TaskManager" do
       "output5" => Set(String).new,
     }
     with_tasks do
-      g, s = Croupier::TaskManager.sorted_task_graph
-      g.@vertice_dict.should eq expected
-      s.size.should eq Croupier::TaskManager.tasks.size
-      s.should eq ["output3", "output4", "output5", "output1", "output2"]
+      Dir.cd "spec/files" do
+        g, s = Croupier::TaskManager.sorted_task_graph
+        g.@vertice_dict.should eq expected
+        s.size.should eq Croupier::TaskManager.tasks.size
+        s.should eq ["output3", "output4", "output5", "output1", "output2"]
+      end
     end
   end
 
@@ -228,9 +235,13 @@ describe "Croupier::TaskManager" do
   end
 
   it "should not hash files that don't exist" do
-    # This is running where the files don't exist
     with_tasks do
-      Croupier::TaskManager.scan_inputs.size.should eq 0
+      Dir.cd "spec/files" do
+        Dir.glob("*").each do |f|
+          File.delete?(f)
+        end
+        Croupier::TaskManager.scan_inputs.size.should eq 0
+      end
     end
   end
 
@@ -330,10 +341,12 @@ describe "Croupier::TaskManager" do
 
   it "should detect cycles in the graph when calling sorted_task_graph" do
     with_tasks do
-      b = ->{ "" }
-      Croupier::Task.new("name", "input", ["output4"], b)
-      expect_raises(Exception, "Cycle detected") do
-        Croupier::TaskManager.sorted_task_graph
+      Dir.cd "spec/files" do
+        b = ->{ "" }
+        Croupier::Task.new("name", "input", ["output4"], b)
+        expect_raises(Exception, "Cycle detected") do
+          Croupier::TaskManager.sorted_task_graph
+        end
       end
     end
   end
@@ -408,13 +421,15 @@ describe "Croupier::TaskManager" do
   end
 
   it "should be possible to create two tasks with the same output" do
-    dummy_proc = ->{ "" }
-    t1 = Croupier::Task.new("name", "output", ["i1"] of String, dummy_proc)
-    Croupier::Task.new("name", "output", ["i2"] of String, dummy_proc)
+    Dir.cd "spec/files" do
+      dummy_proc = ->{ "" }
+      t1 = Croupier::Task.new("name", "output", ["i1"] of String, dummy_proc)
+      Croupier::Task.new("name", "output", ["i2"] of String, dummy_proc)
 
-    # t2 is merged into t1
-    Croupier::TaskManager.tasks["output"].should eq t1
-    t1.@inputs == ["i1", "i2"]
+      # t2 is merged into t1
+      Croupier::TaskManager.tasks["output"].should eq t1
+      t1.@inputs == ["i1", "i2"]
+    end
   end
 
   it "running merged tasks should have all effects of running all merged tasks" do
