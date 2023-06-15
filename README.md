@@ -52,6 +52,12 @@ The state between runs is kept in `.croupier` so if you delete that file
 all tasks will run.
 
 Further documentation at the [doc pages](https://ralsina.github.io/croupier/)
+
+### Notes
+
+* If there are two or more tasks with the same output they will be executed
+  in order of creation. For all practical purposes, it would be as if it was a single task that performed all the procs in order.
+
 ## Installation
 
 1. Add the dependency to your `shard.yml`:

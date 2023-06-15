@@ -42,7 +42,7 @@ end
 describe Croupier::Task do
   it "should be able to create a task and fetch it" do
     with_tasks do
-      t = Croupier::Task.task("output1")
+      t = Croupier::Task.tasks("output1")[0]
       if t.nil?
         fail "Task not found"
       end
@@ -56,29 +56,20 @@ describe Croupier::Task do
   it "should fail when you fetch a task that doesn't exist" do
     with_tasks do
       expect_raises(KeyError) do
-        Croupier::Task.task("foo").should be_nil
+        Croupier::Task.tasks("foo")
       end
     end
   end
 
   it "should have a nice string representation" do
     with_tasks do
-      Croupier::Task.tasks["output1"].to_s.should eq "name::output1"
+      Croupier::Task.tasks["output1"][0].to_s.should eq "name::output1"
     end
   end
 
   it "should be registered" do
     with_tasks do
       Croupier::Task.tasks.has_key?("output1").should eq true
-    end
-  end
-
-  it "should not allow two tasks with same output" do
-    with_tasks do
-      expect_raises(Exception, "which is already generated") do
-        b = ->{ "" }
-        Croupier::Task.new("name", "output1", [] of String, b)
-      end
     end
   end
 
@@ -133,7 +124,7 @@ describe Croupier::Task do
     with_tasks do
       Dir.cd "spec/files" do
         Croupier::Task.run_tasks
-        t = Croupier::Task.tasks["output3"]
+        t = Croupier::Task.tasks["output3"][0]
         t.mark_stale # Mark stale to force recalculation
         t.@stale.should be_true
         Croupier::Task.clear_modified
@@ -147,9 +138,13 @@ describe Croupier::Task do
     with_tasks do
       Dir.cd "spec/files" do
         Croupier::Task.run_tasks
-        t = Croupier::Task.tasks["output4"]
+        t = Croupier::Task.tasks["output4"][0]
         Croupier::Task.clear_modified
-        Croupier::Task.tasks.values.each(&.mark_stale)
+        Croupier::Task.tasks.values.each do |tasks|
+          tasks.each do |task|
+            task.mark_stale
+          end
+        end
         t.mark_stale # Force recalculation of stale state
         # input is not a direct dependency of t, but an indirect one
         Croupier::Task.mark_modified("input")
@@ -159,6 +154,7 @@ describe Croupier::Task do
   end
 
   it "should list all inputs for all tasks" do
+    # TODO: check inputs are not repeated
     with_tasks do
       Croupier::Task.all_inputs.should eq ["input", "output3", "input2"]
     end
@@ -197,7 +193,7 @@ describe Croupier::Task do
   it "should run all stale tasks when run_all is false" do
     with_tasks do
       Dir.cd "spec/files" do
-        Croupier::Task.task("output1").not_ready # Not stale
+        Croupier::Task.tasks("output1")[0].not_ready # Not stale
         Croupier::Task.run_tasks(run_all: false)
         Croupier::Task.tasks.keys.each do |k|
           if k == "output1"
@@ -266,14 +262,14 @@ describe Croupier::Task do
         # modified and there is no .croupier file
         tasks = Croupier::Task.tasks
         Croupier::Task.run_tasks
-        Croupier::Task.tasks.values.each(&.mark_stale)
+        Croupier::Task.tasks.values.flatten.each(&.mark_stale)
         Croupier::Task.clear_modified
         File.delete(".croupier")
 
         Croupier::Task.mark_stale_inputs
 
         # Only tasks with inputs should be stale
-        tasks.values.select(&.stale?).map(&.@output).should eq ["output3", "output4", "output5"]
+        tasks.values.flatten.select(&.stale?).map(&.@output).should eq ["output3", "output4", "output5"]
       end
     end
   end
@@ -286,16 +282,16 @@ describe Croupier::Task do
         tasks.size.should eq 5
         Croupier::Task.run_tasks
         Croupier::Task.clear_modified
-        tasks.values.each(&.mark_stale)
+        tasks.values.flatten.each(&.mark_stale)
         # All tasks are marked stale so theit state is recalculated
-        tasks.values.count(&.@stale).should eq 5
+        tasks.values.flatten.count(&.@stale).should eq 5
 
         # Only input is modified
         Croupier::Task.mark_modified("input")
 
         # Only tasks depending on "input" should be stale
-        tasks.values.count(&.stale?).should eq 2
-        tasks.keys.select { |k| tasks[k].stale? }.should eq ["output3", "output4"]
+        tasks.values.flatten.count(&.stale?).should eq 2
+        tasks.keys.select { |k| tasks[k][0].stale? }.should eq ["output3", "output4"]
       end
     end
   end
@@ -304,7 +300,7 @@ describe Croupier::Task do
     with_tasks do
       Dir.cd "spec/files" do
         Croupier::Task.run_tasks
-        t = Croupier::Task.task("output1")
+        t = Croupier::Task.tasks("output1")[0]
         t.mark_stale # Force recalculation of stale state
         t.@stale.should be_true
         File.delete?("output1")
@@ -347,7 +343,7 @@ describe Croupier::Task do
   it "should consider all tasks without task dependencies as ready" do
     with_tasks do
       Dir.cd("spec/files") do
-        Croupier::Task.tasks.values.select(&.ready?).map(&.@output).should \
+        Croupier::Task.tasks.values.flatten.select(&.ready?).map(&.@output).should \
           eq ["output1", "output2", "output3", "output5"]
       end
     end
@@ -357,19 +353,8 @@ describe Croupier::Task do
     with_tasks do
       Dir.cd("spec/files") do
         File.delete("input")
-        Croupier::Task.tasks.values.select(&.ready?).map(&.@output).should \
+        Croupier::Task.tasks.values.flatten.select(&.ready?).map(&.@output).should \
           eq ["output1", "output2", "output5"]
-      end
-    end
-  end
-
-  it "should run all tasks in parallel" do
-    with_tasks do
-      Dir.cd "spec/files" do
-        Croupier::Task.run_tasks_parallel
-        Croupier::Task.tasks.keys.each do |k|
-          File.exists?(k).should be_true
-        end
       end
     end
   end
@@ -422,5 +407,12 @@ describe Croupier::Task do
         end
       end
     end
+  end
+
+  it "should be possible to create two tasks with the same output" do
+    dummy_proc = ->{ "" }
+    t1 = Croupier::Task.new("name", "output", [] of String, dummy_proc)
+    t2 = Croupier::Task.new("name", "output", [] of String, dummy_proc)
+    Croupier::Task.tasks["output"].should eq [t1, t2]
   end
 end
