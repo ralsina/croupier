@@ -1,3 +1,7 @@
+# Version v0.1.6
+
+* Improved handling of Proc return types.
+
 # Version v0.1.5
 
 * Support tasks that generate multiple outputs

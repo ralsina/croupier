@@ -6,23 +6,27 @@ require "log"
 require "./topo_sort"
 
 module Croupier
-  VERSION = "0.1.5"
+  VERSION = "0.1.6"
 
-  # A Task is a code that generates an output file
+  # A Task is an object that may generate output
   #
-  # It can have one or more inputs, which may also be outputs of other tasks
   # It has a descriptive `name` which should be understandable to the user
   # It has a `Proc` which is executed when the task is run
+  # It can have zero or more inputs
+  # It has zero or more outputs
+  # Tasks are connected by dependencies, where one task's output is another's input
+
+  alias TaskProc = -> String? | Array(String)
 
   class Task
-    @procs = Array(Proc(String)).new
+    @procs = [] of TaskProc
     @outputs = Array(String).new
 
     def initialize(
       name : String,
       output : String = "",
       inputs : Array(String) = [] of String,
-      proc : Proc(String) | Nil = nil,
+      proc : TaskProc | Nil = nil,
       no_save = false
     )
       initialize(name, [output], inputs, proc, no_save)
@@ -32,7 +36,7 @@ module Croupier
       name : String,
       output : Array(String) = [] of String,
       inputs : Array(String) = [] of String,
-      proc : Proc(String) | Nil = nil,
+      proc : TaskProc | Nil = nil,
       no_save = false
     )
       if !(inputs.to_set.& output.to_set).empty?
@@ -74,20 +78,22 @@ module Croupier
           end
         else
           # We have to save the files ourselves
-
-          # If we have more than one output, then data is a json array
           if @outputs.size > 1
+            if call_result.nil?
+              raise "Task #{self} did not return any data"
+            end
+
             begin
-              data = Array(String).from_yaml(call_result)
+              data = call_result.as(Array(String))
             rescue Exception
-              raise "Task #{self} did not generate a YAML array"
+              raise "Task #{self} did not return an array, got #{call_result}"
+            end
+
+            if data.size != @outputs.size
+              raise "Task #{self} did not generate the correct number of outputs (#{data.size} != #{@outputs.size})"
             end
           else # We have a single output, and data is it
             data = [call_result]
-          end
-
-          if data.size != @outputs.size
-            raise "Task #{self} did not generate the correct number of outputs (#{data.size} != #{@outputs.size})"
           end
 
           # Save all files, update all hashes
@@ -95,7 +101,8 @@ module Croupier
             Dir.mkdir_p(File.dirname output)
             File.open(output, "w") do |io|
               io << data[i]
-              TaskManager.next_run[output] = Digest::SHA1.hexdigest(data[i])
+              # FIXME
+              # TaskManager.next_run[output] = Digest::SHA1.hexdigest(data[i])
             end
           end
         end

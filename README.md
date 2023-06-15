@@ -20,16 +20,16 @@ You use Croupier to define tasks. Tasks have:
 * Zero or more input files
 * Zero or more output files
 * A `Proc` that consumes the inputs and returns a string
-* After the `Proc` returns a string it's saved to the output unless
-  the task has the `no_save` flag set to `true`, in which case it's expected to have already saved it.
+* After the `Proc` returns data which is saved to the output(s)
+  unless the task has the `no_save` flag set to `true`, in which case it's expected to have already saved it.
 
-  **Note:** if a task has multiple outputs, read below for an explanation
+  **Note:** the return value for procs depends on several factors, see below.
 
 And here is the fun part:
 
 Croupier will examine the inputs and outputs for your tasks and
 use them to build a dependency graph. This expresses the connections
-between your tasks and the files on disk, and between tasks, and **will 
+between your tasks and the files on disk, and between tasks, and **will
 use that information to decide what to run**.
 
 So, suppose you have `task1` consuming `input.txt` producing `fileA` and `task2` that has `fileA` as input and outputs `fileB`. That means your tasks look something like this:
@@ -57,22 +57,25 @@ Further documentation at the [doc pages](https://ralsina.github.io/croupier/)
 
 ### Notes
 
-**Notes about procs and multiple outputs**
+**Notes about proc return types**
 
-For tasks with `no_save == false`
+* Procs in Tasks without outputs can return nil or a string,
+  it will be ignored.
 
-* If a task has no output, its proc should return a string, which is ignored.
-* If a task has one output, its proc should return a string, which is saved into the output file
-* If a task has multiple outputs, its proc should return a string which when parsed as YAML is an array of strings, which will be saved in their respective outputs in order.
-  
-For tasks with `no_save == true`
+* Procs with one output and `no_save==false` should return a
+  string which will be saved to that output.
 
-The proc should return a string, which will be ignored. However, TaskManager will check that the outputs exist and are readable.
+  If `no_save==true` then the returned value is ignored.
+
+* Procs with multiple outputs and `no_save==false` should
+  return an `Array(String)` which will be saved to those outputs.
+
+  If `no_save==true` then the returned value is ignored.
 
 **No target conflicts**
 
 If there are two or more tasks with the same output they will be merged into the first task created. The resulting task will:
- 
+
 * Depend on the combination of all dependencies of all merged tasks
 * Run the procs of all merged tasks in order of creation
 
@@ -107,7 +110,7 @@ This is the example described above, in actual code:
 ```crystal
 require "croupier"
 
-b1 = ->{
+b1 = Croupier::TaskProc.new{
   puts "task1 running"
   File.read("input.txt").downcase
 }
@@ -119,10 +122,11 @@ Croupier::Task.new(
   proc: b1
 )
 
-b2 = ->{
+b2 = Croupier::TaskProc.new{
   puts "task2 running"
   File.read("fileA").upcase
 }
+
 Croupier::Task.new(
   name: "task2",
   output: "fileB",

@@ -9,9 +9,9 @@ def with_tasks(&)
   File.write("spec/files/input", "foo")
   File.write("spec/files/input2", "bar")
 
-  dummy_proc = ->{ "" }
+  dummy_proc = Croupier::TaskProc.new { "" }
   x = 0
-  counter_proc = ->{
+  counter_proc = Croupier::TaskProc.new {
     x += 1
     File.write("output2", "foo")
     ""
@@ -52,7 +52,7 @@ describe "Croupier::TaskManager" do
 
   it "should be able to create task without output and fetch them" do
     Dir.cd("spec/files") do
-      dummy_proc = ->{ "" }
+      dummy_proc = Croupier::TaskProc.new { "" }
       Croupier::Task.new("foobar1", proc: dummy_proc)
       Croupier::Task.new("foobar2", proc: dummy_proc)
       Croupier::Task.new("foobar3", proc: dummy_proc)
@@ -92,8 +92,8 @@ describe "Croupier::TaskManager" do
   it "should reject self-cyclical tasks" do
     with_tasks do
       expect_raises(Exception, "Cycle detected") do
-        b = ->{ "" }
-        Croupier::Task.new("name", "output6", ["input.txt", "output6"], b)
+        p = Croupier::TaskProc.new { "" }
+        Croupier::Task.new("name", "output6", ["input.txt", "output6"], p)
       end
     end
   end
@@ -101,7 +101,7 @@ describe "Croupier::TaskManager" do
   it "should execute the task's proc when Task.run is called" do
     Dir.cd "spec/files" do
       y = x = 0
-      p = ->{
+      b = Croupier::TaskProc.new {
         x += 1
         File.write("output2", "foo")
         ""
@@ -110,7 +110,7 @@ describe "Croupier::TaskManager" do
         "name",
         "output2",
         [] of String,
-        p,
+        b,
         no_save: true)
       t.run
       x.should eq y + 1
@@ -123,14 +123,14 @@ describe "Croupier::TaskManager" do
     Dir.cd "spec/files" do
       File.delete?("output2") # Make sure this doesn't exist
       Croupier::TaskManager.cleanup
-      p = ->{
+      b = Croupier::TaskProc.new {
         ""
       }
       t = Croupier::Task.new(
         "name",
         "output2",
         [] of String,
-        p,
+        b,
         no_save: true)
       expect_raises(Exception, "Task name::(output2) did not generate output2") do
         t.run
@@ -358,7 +358,7 @@ describe "Croupier::TaskManager" do
   it "should detect cycles in the graph when calling sorted_task_graph" do
     with_tasks do
       Dir.cd "spec/files" do
-        b = ->{ "" }
+        b = Croupier::TaskProc.new { "" }
         Croupier::Task.new("name", "input", ["output4"], b)
         expect_raises(Exception, "Cycle detected") do
           Croupier::TaskManager.sorted_task_graph
@@ -439,7 +439,7 @@ describe "Croupier::TaskManager" do
   it "should be possible to create two tasks with the same output" do
     Dir.cd "spec/files" do
       Croupier::TaskManager.cleanup
-      dummy_proc = ->{ "" }
+      dummy_proc = Croupier::TaskProc.new { "" }
       t1 = Croupier::Task.new("name", "output", ["i1"] of String, dummy_proc)
       Croupier::Task.new("name", "output", ["i2"] of String, dummy_proc)
 
@@ -473,8 +473,8 @@ describe "Croupier::TaskManager" do
   it "running merged tasks should have all effects of running all merged tasks" do
     Dir.cd "spec/files" do
       Croupier::TaskManager.cleanup
-      proc1 = ->{ File.open("1", "w") << ""; "foo" }
-      proc2 = ->{ File.open("2", "w") << ""; "bar" }
+      proc1 = Croupier::TaskProc.new { File.open("1", "w") << ""; "foo" }
+      proc2 = Croupier::TaskProc.new { File.open("2", "w") << ""; "bar" }
       t1 = Croupier::Task.new("t1", "output", [] of String, proc1)
       Croupier::Task.new("t2", "output", [] of String, proc2)
 
@@ -495,7 +495,7 @@ describe "Croupier::TaskManager" do
   it "should handle a no_save task that generates multiple outputs" do
     Dir.cd "spec/files" do
       Croupier::TaskManager.cleanup
-      p = ->{ File.open("output1", "w") << ""; File.open("output2", "w") << ""; "" }
+      p = Croupier::TaskProc.new { File.open("output1", "w") << ""; File.open("output2", "w") << ""; "" }
       Croupier::Task.new("name", ["output1", "output2"], proc: p, no_save: true)
       Croupier::TaskManager.run_tasks
     end
@@ -504,7 +504,7 @@ describe "Croupier::TaskManager" do
   it "should handle a task that generates multiple outputs" do
     Dir.cd "spec/files" do
       Croupier::TaskManager.cleanup
-      p = ->{ YAML.dump(["foo", "bar"]) }
+      p = Croupier::TaskProc.new { ["foo", "bar"] }
       Croupier::Task.new("name", ["output1", "output2"], proc: p)
 
       Croupier::TaskManager.run_tasks
@@ -518,7 +518,7 @@ describe "Croupier::TaskManager" do
   it "should fail if a task generates wrong number of outputs" do
     Dir.cd "spec/files" do
       Croupier::TaskManager.cleanup
-      p = ->{ YAML.dump(["foo", "bar"]) }
+      p = Croupier::TaskProc.new { ["foo", "bar"] }
       Croupier::Task.new("name", ["output1", "output2", "output3"], proc: p)
 
       expect_raises(Exception, "correct number of outputs") do
@@ -534,10 +534,10 @@ describe "Croupier::TaskManager" do
   it "should fail if a task generates invalid output" do
     Dir.cd "spec/files" do
       Croupier::TaskManager.cleanup
-      p = ->{ YAML.dump("bar") }
+      p = Croupier::TaskProc.new { "foo" } # Should be an array
       Croupier::Task.new("name", ["output1", "output2", "output3"], proc: p)
 
-      expect_raises(Exception, "not generate a YAML array") do
+      expect_raises(Exception, "did not return an array") do
         Croupier::TaskManager.run_tasks
       end
 
