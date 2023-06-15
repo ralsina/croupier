@@ -7,7 +7,6 @@ Croupier is a smart task definition and execution library, which can be used for
 [![Release](https://img.shields.io/github/release/ralsina/croupier.svg)](https://GitHub.com/ralsina/croupier/releases/)
 [![News about Croupier](https://img.shields.io/badge/News-About%20Croupier-blue)](https://ralsina.me/categories/croupier.html)
 
-
 [![Tests](https://github.com/ralsina/croupier/actions/workflows/ci.yml/badge.svg)](https://github.com/ralsina/croupier/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/ralsina/croupier/branch/main/graph/badge.svg?token=YW23EDL5T5)](https://codecov.io/gh/ralsina/croupier)
 [![Mutation Tests](https://github.com/ralsina/croupier/actions/workflows/mutation.yml/badge.svg)](https://github.com/ralsina/croupier/actions/workflows/mutation.yml)
@@ -57,7 +56,7 @@ Further documentation at the [doc pages](https://ralsina.github.io/croupier/)
 
 ### Notes
 
-**Notes about proc return types**
+### Notes about proc return types
 
 * Procs in Tasks without outputs can return nil or a string,
   it will be ignored.
@@ -72,19 +71,19 @@ Further documentation at the [doc pages](https://ralsina.github.io/croupier/)
 
   If `no_save==true` then the returned value is ignored.
 
-**No target conflicts**
+### No target conflicts
 
 If there are two or more tasks with the same output they will be merged into the first task created. The resulting task will:
 
 * Depend on the combination of all dependencies of all merged tasks
 * Run the procs of all merged tasks in order of creation
 
-**Tasks without output**
+### Tasks without output
 
 A task with no output will be registered under output "" and is not expected
 to create any output files. Other than that, it's just a regular task.
 
-**Tasks with multiple outputs**
+### Tasks with multiple outputs
 
 If a task expects the TaskManager to create multiple files, it
 should return a YAML-encoded array of strings.
@@ -157,4 +156,4 @@ Let's try to keep test coverage good :-)
 
 ## Contributors
 
-- [Roberto Alsina](https://github.com/ralsina) - creator and maintainer
+* [Roberto Alsina](https://github.com/ralsina) - creator and maintainer
