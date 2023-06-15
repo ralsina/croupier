@@ -13,19 +13,9 @@ jobs:
         uses: actions/checkout@v3
       - name: Install Crystal
         uses: crystal-lang/install-crystal@v1
-      - name: Build test runner
+      - name: Run tests
         run: |
-          shards install
-          crystal build src/run_tests.cr
-      - name: lint
-        run: |
+          shards install --without-development
           crystal tool format --check
-      - name: Run tests using kcov
-        run: |
-          sudo apt update && sudo apt install kcov
-          kcov --clean --include-path=./src coverage ./run_tests
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v3
-        env: 
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          crystal spec -v 
 
