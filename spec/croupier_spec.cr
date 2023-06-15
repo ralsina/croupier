@@ -514,4 +514,36 @@ describe "Croupier::TaskManager" do
       File.read("output2").should eq "bar"
     end
   end
+
+  it "should fail if a task generates wrong number of outputs" do
+    Dir.cd "spec/files" do
+      Croupier::TaskManager.cleanup
+      p = ->{ YAML.dump(["foo", "bar"]) }
+      Croupier::Task.new("name", ["output1", "output2", "output3"], proc: p)
+
+      expect_raises(Exception, "correct number of outputs") do
+        Croupier::TaskManager.run_tasks
+      end
+
+      # The two files should be created with the right contents
+      File.read("output1").should eq "foo"
+      File.read("output2").should eq "bar"
+    end
+  end
+
+  it "should fail if a task generates invalid output" do
+    Dir.cd "spec/files" do
+      Croupier::TaskManager.cleanup
+      p = ->{ YAML.dump("bar") }
+      Croupier::Task.new("name", ["output1", "output2", "output3"], proc: p)
+
+      expect_raises(Exception, "not generate a YAML array") do
+        Croupier::TaskManager.run_tasks
+      end
+
+      # The two files should be created with the right contents
+      File.read("output1").should eq "foo"
+      File.read("output2").should eq "bar"
+    end
+  end
 end

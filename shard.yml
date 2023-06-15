@@ -1,5 +1,5 @@
 name: croupier
-version: 0.1.4
+version: 0.1.5
 description: A smart task definition and execution library
 authors:
   - Roberto Alsina <roberto.alsina@gmail.com>
@@ -20,4 +20,3 @@ crystalline:
 development_dependencies:
   crytic:
     github: hanneskaeufler/crytic
-    version: ~> 8
