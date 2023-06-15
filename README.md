@@ -18,10 +18,12 @@ You use Croupier to define tasks. Tasks have:
 
 * A name
 * Zero or more input files
-* Zero or one output file
+* Zero or more output file
 * A `Proc` that consumes the inputs and returns a string
 * After the `Proc` returns a string it's saved to the output unless
-  the task has the `no_save` flag set to `true`
+  the task has the `no_save` flag set to `true`, in which case it's expected to have already saved it.
+
+  **Note:** if a task has multiple outputs, read below for an explanation
 
 And here is the fun part:
 
@@ -55,6 +57,18 @@ Further documentation at the [doc pages](https://ralsina.github.io/croupier/)
 
 ### Notes
 
+**Notes about procs and multiple outputs**
+
+For tasks with `no_save == false`
+
+* If a task has no output, its proc should return a string, which is ignored.
+* If a task has one output, its proc should return a string, which is saved into the output file
+* If a task has multiple outputs, its proc should return a string which when parsed as YAML is an array of strings, which will be saved in their respective outputs in order.
+  
+For tasks with `no_save == true`
+
+The proc should return a string, which will be ignored. However, TaskManager will check that the outputs exist and are readable.
+
 **No target conflicts**
 
 If there are two or more tasks with the same output they will be merged into the first task created. The resulting task will:
@@ -66,6 +80,13 @@ If there are two or more tasks with the same output they will be merged into the
 
 A task with no output will be registered under output "" and is not expected
 to create any output files. Other than that, it's just a regular task.
+
+**Tasks with multiple outputs**
+
+If a task expects the TaskManager to create multiple files, it
+should return a YAML-encoded array of strings.
+
+This will change soonish.
 
 ## Installation
 
