@@ -1,7 +1,7 @@
 require "./spec_helper"
 
 def with_tasks(&)
-  Croupier::Task.cleanup
+  Croupier::TaskManager.cleanup
   Dir.glob("spec/files/*").each do |f|
     File.delete?(f)
   end
@@ -32,17 +32,17 @@ def with_tasks(&)
     puts "Error: #{ex}"
     raise ex
   ensure
-    Croupier::Task.cleanup
+    Croupier::TaskManager.cleanup
     Dir.glob("spec/files/*").each do |f|
       File.delete?(f)
     end
   end
 end
 
-describe Croupier::Task do
+describe "Croupier::TaskManager" do
   it "should be able to create a task and fetch it" do
     with_tasks do
-      t = Croupier::Task.tasks("output1")[0]
+      t = Croupier::TaskManager.tasks("output1")[0]
       if t.nil?
         fail "Task not found"
       end
@@ -56,20 +56,20 @@ describe Croupier::Task do
   it "should fail when you fetch a task that doesn't exist" do
     with_tasks do
       expect_raises(KeyError) do
-        Croupier::Task.tasks("foo")
+        Croupier::TaskManager.tasks("foo")
       end
     end
   end
 
   it "should have a nice string representation" do
     with_tasks do
-      Croupier::Task.tasks["output1"][0].to_s.should eq "name::output1"
+      Croupier::TaskManager.tasks["output1"][0].to_s.should eq "name::output1"
     end
   end
 
   it "should be registered" do
     with_tasks do
-      Croupier::Task.tasks.has_key?("output1").should eq true
+      Croupier::TaskManager.tasks.has_key?("output1").should eq true
     end
   end
 
@@ -102,7 +102,7 @@ describe Croupier::Task do
   end
 
   it "should fail if a no_save task doesn't generate the output when Task.run is called" do
-    Croupier::Task.cleanup
+    Croupier::TaskManager.cleanup
     p = ->{
       ""
     }
@@ -117,18 +117,18 @@ describe Croupier::Task do
         t.run
       end
     end
-    Croupier::Task.cleanup
+    Croupier::TaskManager.cleanup
   end
 
   it "should be stale if an input is marked modified" do
     with_tasks do
       Dir.cd "spec/files" do
-        Croupier::Task.run_tasks
-        t = Croupier::Task.tasks["output3"][0]
+        Croupier::TaskManager.run_tasks
+        t = Croupier::TaskManager.tasks["output3"][0]
         t.mark_stale # Mark stale to force recalculation
         t.@stale.should be_true
-        Croupier::Task.clear_modified
-        Croupier::Task.mark_modified("input")
+        Croupier::TaskManager.clear_modified
+        Croupier::TaskManager.mark_modified("input")
         t.stale?.should be_true
       end
     end
@@ -137,17 +137,17 @@ describe Croupier::Task do
   it "should be stale if a dependent task is stale" do
     with_tasks do
       Dir.cd "spec/files" do
-        Croupier::Task.run_tasks
-        t = Croupier::Task.tasks["output4"][0]
-        Croupier::Task.clear_modified
-        Croupier::Task.tasks.values.each do |tasks|
+        Croupier::TaskManager.run_tasks
+        t = Croupier::TaskManager.tasks["output4"][0]
+        Croupier::TaskManager.clear_modified
+        Croupier::TaskManager.tasks.values.each do |tasks|
           tasks.each do |task|
             task.mark_stale
           end
         end
         t.mark_stale # Force recalculation of stale state
         # input is not a direct dependency of t, but an indirect one
-        Croupier::Task.mark_modified("input")
+        Croupier::TaskManager.mark_modified("input")
         t.stale?.should be_true
       end
     end
@@ -156,7 +156,7 @@ describe Croupier::Task do
   it "should list all inputs for all tasks" do
     # TODO: check inputs are not repeated
     with_tasks do
-      Croupier::Task.all_inputs.should eq ["input", "output3", "input2"]
+      Croupier::TaskManager.all_inputs.should eq ["input", "output3", "input2"]
     end
   end
 
@@ -172,9 +172,9 @@ describe Croupier::Task do
       "output5" => Set(String).new,
     }
     with_tasks do
-      g, s = Croupier::Task.sorted_task_graph
+      g, s = Croupier::TaskManager.sorted_task_graph
       g.@vertice_dict.should eq expected
-      s.size.should eq Croupier::Task.tasks.size
+      s.size.should eq Croupier::TaskManager.tasks.size
       s.should eq ["output3", "output4", "output5", "output1", "output2"]
     end
   end
@@ -182,8 +182,8 @@ describe Croupier::Task do
   it "should run all tasks when run_all is true" do
     with_tasks do
       Dir.cd "spec/files" do
-        Croupier::Task.run_tasks(run_all: true)
-        Croupier::Task.tasks.keys.each do |k|
+        Croupier::TaskManager.run_tasks(run_all: true)
+        Croupier::TaskManager.tasks.keys.each do |k|
           File.exists?(k).should be_true
         end
       end
@@ -193,9 +193,9 @@ describe Croupier::Task do
   it "should run all stale tasks when run_all is false" do
     with_tasks do
       Dir.cd "spec/files" do
-        Croupier::Task.tasks("output1")[0].not_ready # Not stale
-        Croupier::Task.run_tasks(run_all: false)
-        Croupier::Task.tasks.keys.each do |k|
+        Croupier::TaskManager.tasks("output1")[0].not_ready # Not stale
+        Croupier::TaskManager.run_tasks(run_all: false)
+        Croupier::TaskManager.tasks.keys.each do |k|
           if k == "output1"
             File.exists?(k).should be_false
           else
@@ -209,8 +209,8 @@ describe Croupier::Task do
   it "should run all tasks in parallel" do
     with_tasks do
       Dir.cd "spec/files" do
-        Croupier::Task.run_tasks_parallel
-        Croupier::Task.tasks.keys.each do |k|
+        Croupier::TaskManager.run_tasks_parallel
+        Croupier::TaskManager.tasks.keys.each do |k|
           File.exists?(k).should be_true
         end
       end
@@ -224,7 +224,7 @@ describe Croupier::Task do
                 "input2" => "62cdb7020ff920e5aa642c3d4066950dd1f01f4d"}
     with_tasks do
       Dir.cd "spec/files" do
-        Croupier::Task.scan_inputs.should eq expected
+        Croupier::TaskManager.scan_inputs.should eq expected
       end
     end
   end
@@ -232,7 +232,7 @@ describe Croupier::Task do
   it "should not hash files that don't exist" do
     # This is running where the files don't exist
     with_tasks do
-      Croupier::Task.scan_inputs.size.should eq 0
+      Croupier::TaskManager.scan_inputs.size.should eq 0
     end
   end
 
@@ -242,7 +242,7 @@ describe Croupier::Task do
         File.exists?("output1").should be_false
         File.exists?("output2").should be_false
 
-        Croupier::Task.run_tasks(run_all: true)
+        Croupier::TaskManager.run_tasks(run_all: true)
 
         # The output task has no_save = false, so it should be created
         File.exists?("output1").should be_true
@@ -260,13 +260,13 @@ describe Croupier::Task do
       Dir.cd "spec/files" do
         # Make sure al tasks run, but no files are marked
         # modified and there is no .croupier file
-        tasks = Croupier::Task.tasks
-        Croupier::Task.run_tasks
-        Croupier::Task.tasks.values.flatten.each(&.mark_stale)
-        Croupier::Task.clear_modified
+        tasks = Croupier::TaskManager.tasks
+        Croupier::TaskManager.run_tasks
+        Croupier::TaskManager.tasks.values.flatten.each(&.mark_stale)
+        Croupier::TaskManager.clear_modified
         File.delete(".croupier")
 
-        Croupier::Task.mark_stale_inputs
+        Croupier::TaskManager.mark_stale_inputs
 
         # Only tasks with inputs should be stale
         tasks.values.flatten.select(&.stale?).map(&.@output).should eq ["output3", "output4", "output5"]
@@ -278,16 +278,16 @@ describe Croupier::Task do
     with_tasks do
       Dir.cd "spec/files" do
         # Make sure all outputs exists and no files are modified
-        tasks = Croupier::Task.tasks
+        tasks = Croupier::TaskManager.tasks
         tasks.size.should eq 5
-        Croupier::Task.run_tasks
-        Croupier::Task.clear_modified
+        Croupier::TaskManager.run_tasks
+        Croupier::TaskManager.clear_modified
         tasks.values.flatten.each(&.mark_stale)
         # All tasks are marked stale so theit state is recalculated
         tasks.values.flatten.count(&.@stale).should eq 5
 
         # Only input is modified
-        Croupier::Task.mark_modified("input")
+        Croupier::TaskManager.mark_modified("input")
 
         # Only tasks depending on "input" should be stale
         tasks.values.flatten.count(&.stale?).should eq 2
@@ -299,8 +299,8 @@ describe Croupier::Task do
   it "should mark tasks as stale if the output doesn't exist" do
     with_tasks do
       Dir.cd "spec/files" do
-        Croupier::Task.run_tasks
-        t = Croupier::Task.tasks("output1")[0]
+        Croupier::TaskManager.run_tasks
+        t = Croupier::TaskManager.tasks("output1")[0]
         t.mark_stale # Force recalculation of stale state
         t.@stale.should be_true
         File.delete?("output1")
@@ -313,8 +313,8 @@ describe Croupier::Task do
     with_tasks do
       Dir.cd "spec/files" do
         # Make sure no files are modified
-        Croupier::Task.clear_modified
-        Croupier::Task.modified.empty?.should be_true
+        Croupier::TaskManager.clear_modified
+        Croupier::TaskManager.modified.empty?.should be_true
         File.open(".croupier", "w") do |f|
           f.puts(%({
           "input": "thisiswrong",
@@ -323,9 +323,9 @@ describe Croupier::Task do
       }))
         end
 
-        Croupier::Task.mark_stale_inputs
+        Croupier::TaskManager.mark_stale_inputs
 
-        Croupier::Task.modified.should eq Set{"input"}
+        Croupier::TaskManager.modified.should eq Set{"input"}
       end
     end
   end
@@ -335,7 +335,7 @@ describe Croupier::Task do
       b = ->{ "" }
       Croupier::Task.new("name", "input", ["output4"], b)
       expect_raises(Exception, "Cycle detected") do
-        Croupier::Task.sorted_task_graph
+        Croupier::TaskManager.sorted_task_graph
       end
     end
   end
@@ -343,7 +343,7 @@ describe Croupier::Task do
   it "should consider all tasks without task dependencies as ready" do
     with_tasks do
       Dir.cd("spec/files") do
-        Croupier::Task.tasks.values.flatten.select(&.ready?).map(&.@output).should \
+        Croupier::TaskManager.tasks.values.flatten.select(&.ready?).map(&.@output).should \
           eq ["output1", "output2", "output3", "output5"]
       end
     end
@@ -353,7 +353,7 @@ describe Croupier::Task do
     with_tasks do
       Dir.cd("spec/files") do
         File.delete("input")
-        Croupier::Task.tasks.values.flatten.select(&.ready?).map(&.@output).should \
+        Croupier::TaskManager.tasks.values.flatten.select(&.ready?).map(&.@output).should \
           eq ["output1", "output2", "output5"]
       end
     end
@@ -362,7 +362,7 @@ describe Croupier::Task do
   it "should report all tasks required to produce an output" do
     with_tasks do
       Dir.cd "spec/files" do
-        Croupier::Task.dependencies("output4").should eq ["output3", "output4"]
+        Croupier::TaskManager.dependencies("output4").should eq ["output3", "output4"]
       end
     end
   end
@@ -370,7 +370,7 @@ describe Croupier::Task do
   it "should report all tasks required to produce multiple outputs" do
     with_tasks do
       Dir.cd "spec/files" do
-        Croupier::Task.dependencies(["output4", "output5"]).should eq ["output3", "output4", "output5"]
+        Croupier::TaskManager.dependencies(["output4", "output5"]).should eq ["output3", "output4", "output5"]
       end
     end
   end
@@ -378,7 +378,7 @@ describe Croupier::Task do
   it "should run only required tasks to produce specified outputs" do
     with_tasks do
       Dir.cd "spec/files" do
-        Croupier::Task.run_tasks(["output4", "output5"])
+        Croupier::TaskManager.run_tasks(["output4", "output5"])
         File.exists?("output1").should be_false
         File.exists?("output2").should be_false
         File.exists?("output3").should be_true # Required for output4
@@ -392,7 +392,7 @@ describe Croupier::Task do
     with_tasks do
       Dir.cd "spec/files" do
         expect_raises(Exception) do
-          Croupier::Task.dependencies("output99")
+          Croupier::TaskManager.dependencies("output99")
         end
       end
     end
@@ -403,7 +403,7 @@ describe Croupier::Task do
       Dir.cd "spec/files" do
         File.delete("input")
         expect_raises(Exception) do
-          Croupier::Task.run_tasks
+          Croupier::TaskManager.run_tasks
         end
       end
     end
@@ -413,21 +413,21 @@ describe Croupier::Task do
     dummy_proc = ->{ "" }
     t1 = Croupier::Task.new("name", "output", [] of String, dummy_proc)
     t2 = Croupier::Task.new("name", "output", [] of String, dummy_proc)
-    Croupier::Task.tasks["output"].should eq [t1, t2]
+    Croupier::TaskManager.tasks["output"].should eq [t1, t2]
   end
 
   it "should mark as stale all tasks that are newer than a stale task with the same target" do
     Dir.cd "spec/files" do
-      Croupier::Task.cleanup
+      Croupier::TaskManager.cleanup
       dummy_proc = ->{ "" }
       t1 = Croupier::Task.new("t1", "output", [] of String, dummy_proc)
       t2 = Croupier::Task.new("t2", "output", ["input"] of String, dummy_proc)
       t3 = Croupier::Task.new("t3", "output", [] of String, dummy_proc)
-      Croupier::Task.tasks["output"].should eq [t1, t2, t3]
+      Croupier::TaskManager.tasks["output"].should eq [t1, t2, t3]
 
       File.write("output", "foo")
       File.write("input", "foo")
-      Croupier::Task.run_tasks
+      Croupier::TaskManager.run_tasks
 
       # Since we just ran, no tasks should be stale
       t1.stale?.should be_false
@@ -438,7 +438,7 @@ describe Croupier::Task do
       t1.not_ready
       t2.mark_stale
       t3.mark_stale
-      Croupier::Task.mark_modified("input") # T2 will be stale
+      Croupier::TaskManager.mark_modified("input") # T2 will be stale
 
       t1.stale?.should be_false
       t2.stale?.should be_true
@@ -446,7 +446,7 @@ describe Croupier::Task do
       t3.stale?.should be_true
 
       # Also, t2 and t3 should be ready to run
-      Croupier::Task.tasks.values.flatten.select(&.ready?).map(&.@name).should \
+      Croupier::TaskManager.tasks.values.flatten.select(&.ready?).map(&.@name).should \
         eq ["t2", "t3"]
     end
   end
