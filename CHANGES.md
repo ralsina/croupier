@@ -1,5 +1,7 @@
 # Version v0.1.5
 
+* Support tasks that generate no output
+* Forbid merging tasks with different `no_save` settings
 * Minor change in semantics of tasks with the same output
 
 # Version v0.1.4

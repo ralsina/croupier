@@ -17,18 +17,25 @@ module Croupier
   class Task
     @procs = Array(Proc(String)).new
 
-    def initialize(name : String, output : String, inputs : Array(String), proc : Proc(String), no_save = false)
+    def initialize(
+      name : String,
+      output : String = "",
+      inputs : Array(String) = [] of String,
+      proc : Proc(String) | Nil = nil,
+      no_save = false
+    )
       if inputs.includes?(output)
         raise "Cycle detected"
       end
       @name = name
-      @procs << proc
+      unless proc.nil?
+        @procs << proc
+      end
       @output = output
       @inputs = inputs
       @stale = true
       @no_save = no_save
       if TaskManager.tasks.has_key?(output)
-        # FIXME implement task merging
         TaskManager.tasks[output].merge(self)
       else
         TaskManager.tasks[output] = self
@@ -41,15 +48,17 @@ module Croupier
       @procs.each do |proc|
         Fiber.yield
         data = proc.call
-        if @no_save
-          if !File.exists?(@output)
-            raise "Task #{self} did not generate #{@output}"
-          end
-          data = File.read(@output)
-        else # Save the file
-          Dir.mkdir_p(File.dirname @output)
-          File.open(@output, "w") do |io|
-            io << data
+        if !@output.empty? # This task generates output
+          if @no_save
+            if !File.exists?(@output)
+              raise "Task #{self} did not generate #{@output}"
+            end
+            data = File.read(@output)
+          else # Save the file
+            Dir.mkdir_p(File.dirname @output)
+            File.open(@output, "w") do |io|
+              io << data
+            end
           end
         end
         Fiber.yield
@@ -117,6 +126,9 @@ module Croupier
     # inputs are joined
     # proc is replaced with a proc that runs both procs
     def merge(other : Task)
+      if @no_save != other.@no_save
+        raise "Cannot merge tasks with different no_save settings"
+      end
       @inputs += other.@inputs
       @inputs.uniq!
       @procs += other.@procs

@@ -62,6 +62,10 @@ If there are two or more tasks with the same output they will be merged into the
 * Depend on the combination of all dependencies of all merged tasks
 * Run the procs of all merged tasks in order of creation
 
+**Tasks without output**
+
+A task with no output will be registered under output "" and is not expected
+to create any output files. Other than that, it's just a regular task.
 
 ## Installation
 

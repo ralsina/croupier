@@ -42,14 +42,30 @@ end
 describe "Croupier::TaskManager" do
   it "should be able to create a task and fetch it" do
     with_tasks do
-      t = Croupier::TaskManager.tasks("output1")
-      if t.nil?
-        fail "Task not found"
-      end
+      t = Croupier::TaskManager.tasks["output1"]
       t.@name.should eq "name"
       t.@output.should eq "output1"
-      t.@inputs.should eq [] of String
+      t.@inputs.empty?.should be_true
       t.@stale.should be_true
+    end
+  end
+
+  it "should be able to create task without output and fetch them" do
+    Dir.cd("spec/files") do
+      dummy_proc = ->{ "" }
+      Croupier::Task.new("foobar1", proc: dummy_proc)
+      Croupier::Task.new("foobar2", proc: dummy_proc)
+      Croupier::Task.new("foobar3", proc: dummy_proc)
+      t = Croupier::TaskManager.tasks("")
+      t.@name.should eq "foobar1"
+      t.@output.should eq ""
+      t.@inputs.empty?.should be_true
+      t.@stale.should be_true
+      t.@procs.size.should eq 3
+
+      # It should run and do nothing
+      Croupier::TaskManager.run_tasks
+      Dir.glob("*").empty?.should be_true
     end
   end
 
@@ -413,7 +429,7 @@ describe "Croupier::TaskManager" do
     with_tasks do
       Dir.cd "spec/files" do
         File.delete("input")
-        expect_raises(Exception) do
+        expect_raises(Exception, "Unknown inputs") do
           Croupier::TaskManager.run_tasks
         end
       end
@@ -429,6 +445,16 @@ describe "Croupier::TaskManager" do
       # t2 is merged into t1
       Croupier::TaskManager.tasks["output"].should eq t1
       t1.@inputs == ["i1", "i2"]
+    end
+  end
+
+  it "should not allow merging tasks with different `no_save`" do
+    Dir.cd "spec/files" do
+      Croupier::TaskManager.cleanup
+      Croupier::Task.new("name", "output", no_save: true)
+      expect_raises(Exception, "different no_save settings") do
+        Croupier::Task.new("name", "output", no_save: false)
+      end
     end
   end
 
