@@ -1,4 +1,4 @@
-all: test coverage mutation
+all: test coverage
 
 test:
 	shards install
