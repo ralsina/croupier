@@ -1,3 +1,5 @@
+all: test coverage mutation
+
 test:
 	shards install
 	crystal spec -v --error-trace
@@ -16,3 +18,5 @@ bin/crytic:
 clean:
 	rm -rf lib/ bin/ coverage/
 	git clean -f
+
+.PHONY: clean coverage mutation test all

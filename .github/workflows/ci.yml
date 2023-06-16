@@ -17,5 +17,4 @@ jobs:
         run: |
           shards install --without-development
           crystal tool format --check
-          crystal spec -v 
-
+          crystal spec -v

@@ -1,6 +1,7 @@
 # Croupier
 
-Croupier is a smart task definition and execution library, which can be used for [dataflow programming](https://en.wikipedia.org/wiki/Dataflow_programming).
+Croupier is a smart task definition and execution library, which
+can be used for [dataflow programming](https://en.wikipedia.org/wiki/Dataflow_programming).
 
 [![Docs](https://github.com/ralsina/croupier/actions/workflows/static.yml/badge.svg)](https://ralsina.github.io/croupier/)
 [![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/ralsina/croupier/blob/main/LICENSE)
@@ -11,7 +12,7 @@ Croupier is a smart task definition and execution library, which can be used for
 [![codecov](https://codecov.io/gh/ralsina/croupier/branch/main/graph/badge.svg?token=YW23EDL5T5)](https://codecov.io/gh/ralsina/croupier)
 [![Mutation Tests](https://github.com/ralsina/croupier/actions/workflows/mutation.yml/badge.svg)](https://github.com/ralsina/croupier/actions/workflows/mutation.yml)
 
-## What does that mean?
+## What does it mean
 
 You use Croupier to define tasks. Tasks have:
 
@@ -20,7 +21,8 @@ You use Croupier to define tasks. Tasks have:
 * Zero or more output files
 * A `Proc` that consumes the inputs and returns a string
 * After the `Proc` returns data which is saved to the output(s)
-  unless the task has the `no_save` flag set to `true`, in which case it's expected to have already saved it.
+  unless the task has the `no_save` flag set to `true`, in which
+  case it's expected to have already saved it.
 
   **Note:** the return value for procs depends on several factors, see below.
 
@@ -31,7 +33,9 @@ use them to build a dependency graph. This expresses the connections
 between your tasks and the files on disk, and between tasks, and **will
 use that information to decide what to run**.
 
-So, suppose you have `task1` consuming `input.txt` producing `fileA` and `task2` that has `fileA` as input and outputs `fileB`. That means your tasks look something like this:
+So, suppose you have `task1` consuming `input.txt` producing
+`fileA` and `task2` that has `fileA` as input and outputs `fileB`.
+That means your tasks look something like this:
 
 ```mermaid
   graph LR;
@@ -47,10 +51,14 @@ Croupier guarantees the following:
 * If `task1` runs, `task2` *will run* and create `fileB`
 * `task1` will run *before* `task2`
 
-That's a very long way to say: Croupier will run whatever needs running, based on the content of the dependency files and the dependencies between tasks. In this example it may look silly because it's simple, but it should work even for thousands of tasks and dependencies.
+That's a very long way to say: Croupier will run whatever needs
+running, based on the content of the dependency files and the
+dependencies between tasks. In this example it may look silly
+because it's simple, but it should work even for thousands of
+tasks and dependencies.
 
-The state between runs is kept in `.croupier` so if you delete that file
-all tasks will run.
+The state between runs is kept in `.croupier` so if you delete
+that file all tasks will run.
 
 Further documentation at the [doc pages](https://ralsina.github.io/croupier/)
 
@@ -73,7 +81,8 @@ Further documentation at the [doc pages](https://ralsina.github.io/croupier/)
 
 ### No target conflicts
 
-If there are two or more tasks with the same output they will be merged into the first task created. The resulting task will:
+If there are two or more tasks with the same output they will be
+merged into the first task created. The resulting task will:
 
 * Depend on the combination of all dependencies of all merged tasks
 * Run the procs of all merged tasks in order of creation
@@ -136,11 +145,16 @@ Croupier::Task.new(
 Croupier::Task.run_tasks
 ```
 
-If we create a `index.txt` file with some text in it and run this program, it will print it's running `task1` and `task2` and produce `fileA` with that same text in upper case, and `fileB` with the text in lowercase.
+If we create a `index.txt` file with some text in it and run this
+program, it will print it's running `task1` and `task2` and
+produce `fileA` with that same text in upper case, and `fileB`
+with the text in lowercase.
 
-The second time we run it, it will *do nothing* because all tasks dependencies are unchanged.
+The second time we run it, it will *do nothing* because all tasks
+dependencies are unchanged.
 
-If we modify `index.txt` or `fileA` then one or both will tasks will run, as needed.
+If we modify `index.txt` or `fileA` then one or both will tasks
+will run, as needed.
 
 ## Development
 
