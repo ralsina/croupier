@@ -23,6 +23,6 @@ repos:
       hooks:
           - id: check-github-workflows
     - repo: ssh://git@pinky:222/ralsina/pre-commit-hooks.git
-      rev: 4087f2ceb3a4c06fc0f2a594019f3d494a16e397
+      rev: 04cd8606213a6508e697b1f187c59cab16453ebd
       hooks:
           - id: ameba
