@@ -144,6 +144,7 @@ describe "Croupier::TaskManager" do
       Dir.cd "spec/files" do
         Croupier::TaskManager.run_tasks
         t = Croupier::TaskManager.tasks["output3"]
+        t.@stale.should be_false
         t.mark_stale # Mark stale to force recalculation
         t.@stale.should be_true
         Croupier::TaskManager.clear_modified
@@ -166,6 +167,32 @@ describe "Croupier::TaskManager" do
         # input is not a direct dependency of t, but an indirect one
         Croupier::TaskManager.mark_modified("input")
         t.stale?.should be_true
+      end
+    end
+  end
+
+  it "should do nothing on a second run" do
+    with_tasks do
+      Dir.cd "spec/files" do
+        # Set things up as they should look after running
+        File.write("input", "foo")
+        File.write("input2", "bar")
+        File.write("output1", "")
+        File.write("output2", "foo")
+        File.write("output3", "")
+        File.write("output4", "")
+        File.write("output5", "")
+        File.write(".croupier", YAML.dump({
+          "input"   => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
+          "input2"  => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+          "output1" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+          "output2" => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
+          "output3" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+          "output4" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+          "output5" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+        }))
+        Croupier::TaskManager.tasks.size.should eq 5
+        Croupier::TaskManager.tasks.values.select(&.stale?).should be_empty
       end
     end
   end
