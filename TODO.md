@@ -7,6 +7,7 @@
 * Instrument the concurrent runner using [Fiber Metrics](https://github.com/didactic-drunk/fiber_metrics.cr)
 * Once it works fine with files, generalize to a k/v store using [kiwi](ihttps://github.com/crystal-community/kiwi)
 * Make Task/TaskManager structs
+* Provide a way to ask to run tasks without outputs (needed for hacé)
 
 * ~~Refactor the Task registry into its own class separate from Task itself~~
 * ~~Make `Task.run` able to return `Array(String) | String | Nil`~~
