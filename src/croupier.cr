@@ -21,23 +21,23 @@ module Croupier
   class Task
     @procs = [] of TaskProc
     @outputs = Array(String).new
+    @id : String = ""
 
-    def initialize(
-      name : String,
-      output : String = "",
-      inputs : Array(String) = [] of String,
-      proc : TaskProc | Nil = nil,
-      no_save = false
-    )
-      initialize(name, [output], inputs, proc, no_save)
-    end
-
+    # Create a task with zero or more outputs.
+    #
+    # name is a descriptive name for the task
+    # output is an array of files that the task generates
+    # inputs is an array of files or task ids that the task depends on
+    # proc is a proc that is executed when the task is run
+    # no_save is a boolean that tells croupier that the task will save the files itself
+    # id is a unique identifier for the task. If the task has no outputs, it *must* have an id
     def initialize(
       name : String,
       output : Array(String) = [] of String,
       inputs : Array(String) = [] of String,
       proc : TaskProc | Nil = nil,
-      no_save = false
+      no_save : Bool = false,
+      id : String | Nil = nil
     )
       if !(inputs.to_set.& output.to_set).empty?
         raise "Cycle detected"
@@ -48,9 +48,22 @@ module Croupier
       end
       @outputs += output
       @outputs.uniq!
+      if id.nil?
+        @id = Digest::SHA1.hexdigest(@outputs.join(","))
+      else
+        @id = id
+      end
       @inputs = inputs
       @stale = true
       @no_save = no_save
+      if @outputs.empty?
+        raise "Task #{@name} has no outputs and no id" if @id.nil?
+        if TaskManager.tasks.has_key?(@id)
+          TaskManager.tasks[@id.to_s].merge(self)
+        else
+          TaskManager.tasks[@id.to_s] = self
+        end
+      end
       @outputs.each do |o|
         if TaskManager.tasks.has_key?(o)
           TaskManager.tasks[o].merge(self)
@@ -58,6 +71,18 @@ module Croupier
           TaskManager.tasks[o] = self
         end
       end
+    end
+
+    # Create a task with zero or one outputs. Overload for convenience.
+    def initialize(
+      name : String,
+      output : String | Nil = nil,
+      inputs : Array(String) = [] of String,
+      proc : TaskProc | Nil = nil,
+      no_save : Bool = false,
+      id : String | Nil = nil
+    )
+      initialize(name, output ? [output] : [] of String, inputs, proc, no_save, id)
     end
 
     # Executes the proc for the task
@@ -200,6 +225,8 @@ module Croupier
 
       # The start node is just a convenience
       g.add_vertex "start"
+
+      # All inputs are vertices
       all_inputs.each do |input|
         if !@@tasks.has_key? input
           g.add_vertex input
@@ -207,6 +234,14 @@ module Croupier
         end
       end
 
+      # Tasks without outputs are added as vertices by ID
+      @@tasks.values.each do |task|
+        if task.@outputs.empty?
+          g.add_vertex task.@id
+        end
+      end
+
+      # Add vertices and edges for dependencies
       @@tasks.each do |output, task|
         g.add_vertex output
         if task.@inputs.empty?

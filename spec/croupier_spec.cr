@@ -53,15 +53,31 @@ describe "Croupier::TaskManager" do
   it "should be able to create task without output and fetch them" do
     Dir.cd("spec/files") do
       dummy_proc = Croupier::TaskProc.new { "" }
-      Croupier::Task.new("foobar1", proc: dummy_proc)
-      Croupier::Task.new("foobar2", proc: dummy_proc)
-      Croupier::Task.new("foobar3", proc: dummy_proc)
-      t = Croupier::TaskManager.tasks("")
-      t.@name.should eq "foobar1"
-      t.@outputs.should eq [""]
-      t.@inputs.empty?.should be_true
-      t.@stale.should be_true
-      t.@procs.size.should eq 3
+      Croupier::Task.new("foobar1", proc: dummy_proc, id: "t1")
+      Croupier::Task.new("foobar2", proc: dummy_proc, id: "t1")
+      Croupier::Task.new("foobar3", proc: dummy_proc, id: "t2")
+      Croupier::TaskManager.tasks.keys.should eq ["t1", "t2"]
+      Croupier::TaskManager.tasks["t1"].@name.should eq "foobar1"
+      Croupier::TaskManager.tasks["t1"].@procs.size.should eq 2
+
+      Croupier::TaskManager.tasks["t2"].@name.should eq "foobar3"
+      Croupier::TaskManager.tasks["t2"].@procs.size.should eq 1
+
+      # It should run and do nothing
+      Croupier::TaskManager.run_tasks
+      Dir.glob("*").empty?.should be_true
+    end
+  end
+
+  it "should allow a task to depend on a task without output referenced by id" do
+    Dir.cd("spec/files") do
+      dummy_proc = Croupier::TaskProc.new { "" }
+      Croupier::Task.new("foobar1", inputs: ["t2"], proc: dummy_proc, id: "t1")
+      Croupier::Task.new("foobar3", proc: dummy_proc, id: "t2")
+      Croupier::TaskManager.tasks.keys.should eq ["t1", "t2"]
+
+      # Should respect dependencies even if they are just IDs
+      Croupier::TaskManager.sorted_task_graph[1].should eq ["t2", "t1"]
 
       # It should run and do nothing
       Croupier::TaskManager.run_tasks
