@@ -1,5 +1,10 @@
 # Changelog
 
+## Version v0.1.7
+
+* Improve handling of tasks without outputs.
+  They now have an ID they can be referred by.
+
 ## Version v0.1.6
 
 * Improved handling of Proc return types.
