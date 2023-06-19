@@ -577,7 +577,8 @@ describe "Croupier::TaskManager" do
   it "should fail if a task generates invalid output" do
     Dir.cd "spec/files" do
       Croupier::TaskManager.cleanup
-      p = Croupier::TaskProc.new { "foo" } # Should be an array
+      # The proc in a task with multiple outputs should return an array
+      p = Croupier::TaskProc.new { "foo" }
       Croupier::Task.new("name", ["output1", "output2", "output3"], proc: p)
 
       expect_raises(Exception, "did not return an array") do
@@ -587,6 +588,48 @@ describe "Croupier::TaskManager" do
       # The two files should be created with the right contents
       File.read("output1").should eq "foo"
       File.read("output2").should eq "bar"
+    end
+  end
+
+  it "should run tasks marked with 'always_run' even if the dependencies are not changed" do
+    x1 = 0
+    counter_proc_1 = Croupier::TaskProc.new {
+      x1 += 1
+      ""
+    }
+    x2 = 0
+    counter_proc_2 = Croupier::TaskProc.new {
+      x2 += 1
+      ""
+    }
+    Dir.cd "spec/files" do
+      Croupier::TaskManager.cleanup
+
+      # Need to have an input file, because tasks without
+      # inputs are implicitly always_run
+      File.open("input", "w") << ""
+      Croupier::Task.new(
+        "t1",
+        inputs: ["input"],
+        always_run: true,
+        proc: counter_proc_1,
+        id: "t1"
+      )
+      Croupier::Task.new(
+        "t2",
+        inputs: ["input"],
+        always_run: false,
+        proc: counter_proc_2,
+        id: "t2"
+      )
+      x1.should eq 0
+      x2.should eq 0
+      Croupier::TaskManager.run_tasks
+      x1.should eq 1
+      x2.should eq 1
+      Croupier::TaskManager.run_tasks
+      x1.should eq 2
+      x2.should eq 1
     end
   end
 end

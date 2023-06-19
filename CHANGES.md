@@ -1,5 +1,10 @@
 # Changelog
 
+## Version v0.1.8
+
+* `always_run` for tasks that run even if their dependencies
+  are unchanged.
+
 ## Version v0.1.7
 
 * Improve handling of tasks without outputs.

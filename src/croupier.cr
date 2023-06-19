@@ -31,17 +31,21 @@ module Croupier
     # proc is a proc that is executed when the task is run
     # no_save is a boolean that tells croupier that the task will save the files itself
     # id is a unique identifier for the task. If the task has no outputs, it *must* have an id
+    # always_run is a boolean that tells croupier that the task is always
+    #   stale regardless of its dependencies' state
     def initialize(
       name : String,
       output : Array(String) = [] of String,
       inputs : Array(String) = [] of String,
       proc : TaskProc | Nil = nil,
       no_save : Bool = false,
-      id : String | Nil = nil
+      id : String | Nil = nil,
+      always_run : Bool = false
     )
       if !(inputs.to_set.& output.to_set).empty?
         raise "Cycle detected"
       end
+      @always_run = always_run
       @name = name
       unless proc.nil?
         @procs << proc
@@ -393,7 +397,7 @@ module Croupier
     # Helper to run tasks
     def self._run_tasks(outputs, run_all : Bool = false)
       outputs.each do |output|
-        if @@tasks.has_key?(output) && (run_all || @@tasks[output].@stale)
+        if @@tasks.has_key?(output) && (run_all || @@tasks[output].@stale || @@tasks[output].@always_run)
           @@tasks[output].run
         end
       end
