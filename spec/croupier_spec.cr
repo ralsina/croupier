@@ -254,6 +254,17 @@ describe "Croupier::TaskManager" do
     end
   end
 
+  it "should run no tasks when dry_run is true" do
+    with_tasks do
+      Dir.cd "spec/files" do
+        Croupier::TaskManager.run_tasks(run_all: true, dry_run: true)
+        Croupier::TaskManager.tasks.keys.each do |k|
+          File.exists?(k).should be_false
+        end
+      end
+    end
+  end
+
   it "should run all stale tasks when run_all is false" do
     with_tasks do
       Dir.cd "spec/files" do

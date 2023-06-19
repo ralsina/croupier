@@ -2,8 +2,10 @@
 
 ## Version v0.1.8
 
-* `always_run` for tasks that run even if their dependencies
+* Added `always_run` flag for tasks that run even if their dependencies
   are unchanged.
+* Added `dry_run` flag for run_tasks, which will not actually run the
+  procs.
 
 ## Version v0.1.7
 

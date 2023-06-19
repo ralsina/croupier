@@ -7,6 +7,7 @@
 * Once it works fine with files, generalize to a k/v store using [kiwi](ihttps://github.com/crystal-community/kiwi)
 * Make Task/TaskManager structs
 
+* ~~Implement dry runs~~
 * ~~Tasks that *always* run~~
 * ~~Provide a way to ask to run tasks without outputs (needed for hacé)~~
 * ~~Refactor the Task registry into its own class separate from Task itself~~

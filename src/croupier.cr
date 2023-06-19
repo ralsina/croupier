@@ -6,7 +6,7 @@ require "log"
 require "./topo_sort"
 
 module Croupier
-  VERSION = "0.1.7"
+  VERSION = "0.1.8"
 
   # A Task is an object that may generate output
   #
@@ -369,10 +369,10 @@ module Croupier
     end
 
     # Run the tasks needed to create or update the requested targets
-    def self.run_tasks(targets : Array(String), run_all : Bool = false)
+    def self.run_tasks(targets : Array(String), run_all : Bool = false, dry_run : Bool = false)
       mark_stale_inputs
       tasks = dependencies(targets)
-      _run_tasks(tasks, run_all)
+      _run_tasks(tasks, run_all, dry_run)
     end
 
     # Check if all inputs are either task outputs or existing files
@@ -387,18 +387,19 @@ module Croupier
     # Run all stale tasks in dependency order
     #
     # If `run_all` is true, run non-stale tasks too
-    def self.run_tasks(run_all : Bool = false)
+    def self.run_tasks(run_all : Bool = false, dry_run : Bool = false)
       mark_stale_inputs
       _, tasks = TaskManager.sorted_task_graph
       check_dependencies
-      _run_tasks(tasks, run_all)
+      _run_tasks(tasks, run_all, dry_run)
     end
 
     # Helper to run tasks
-    def self._run_tasks(outputs, run_all : Bool = false)
+    def self._run_tasks(outputs, run_all : Bool = false, dry_run : Bool = false)
       outputs.each do |output|
         if @@tasks.has_key?(output) && (run_all || @@tasks[output].@stale || @@tasks[output].@always_run)
-          @@tasks[output].run
+          Log.info { "Running task for #{output}" }
+          @@tasks[output].run unless dry_run
         end
       end
       save_run
