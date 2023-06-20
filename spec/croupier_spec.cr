@@ -164,6 +164,15 @@ describe "Task" do
       end
     end
 
+    it "should not allow merging tasks with different `always_run`" do
+      with_scenario("empty") do
+        Task.new("name", "output", always_run: true)
+        expect_raises(Exception, "different always_run settings") do
+          Task.new("name", "output", always_run: false)
+        end
+      end
+    end
+
     it "should add the effects of the merged task to the first one" do
       with_scenario("empty") do
         proc1 = TaskProc.new { File.open("1", "w") << ""; "foo" }

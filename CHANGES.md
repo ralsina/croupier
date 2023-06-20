@@ -7,7 +7,9 @@
 * TaskManager is now a struct
 * Renamed argument `output` to `outputs` in `Task.initialize` where
   it makes sense.
-* Fixed bugs when merging tasks with multiple outputs
+* Fixed bug merging tasks with multiple outputs
+* Fixed bug merging tasks with different flags
+* Added missing always_run flag to overloaded `Task.initialize`
 
 ## Version v0.1.8
 

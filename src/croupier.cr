@@ -83,9 +83,18 @@ module Croupier
       inputs : Array(String) = [] of String,
       proc : TaskProc | Nil = nil,
       no_save : Bool = false,
-      id : String | Nil = nil
+      id : String | Nil = nil,
+      always_run : Bool = false,
     )
-      initialize(name, output ? [output] : [] of String, inputs, proc, no_save, id)
+      initialize(
+        name: name,
+        outputs: output ? [output] : [] of String,
+        inputs: inputs,
+        proc: proc,
+        no_save: no_save,
+        id: id,
+        always_run: always_run
+      )
     end
 
     # Executes the proc for the task
@@ -189,7 +198,9 @@ module Croupier
     def merge(other : Task)
       raise "Cannot merge tasks with different no_save settings" \
         unless no_save? == other.no_save?
-      # FIXME: check other task flags are compatible
+      raise "Cannot merge tasks with different always_run settings" \
+        unless always_run? == other.always_run?
+
       # @outputs is NOT unique! We can save multiple times
       @outputs += other.@outputs
       @inputs += other.@inputs
