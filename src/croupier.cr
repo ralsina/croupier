@@ -19,13 +19,18 @@ module Croupier
   alias TaskProc = -> String? | Array(String)
 
   class Task
+    include YAML::Serializable
+    include YAML::Serializable::Strict
+
     property id : String = ""
     property name : String = ""
     property inputs : Array(String) = [] of String
     property outputs : Array(String) = [] of String
-    property procs : Array(TaskProc) = [] of TaskProc
     property? always_run : Bool = false
     property? no_save : Bool = false
+    @[YAML::Field(ignore: true)]
+    property procs : Array(TaskProc) = [] of TaskProc
+
     @stale : Bool = true
 
     # Create a task with zero or more outputs.

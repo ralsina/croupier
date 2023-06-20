@@ -1,5 +1,10 @@
 # Changelog
 
+## Version 0.2.0
+
+* Tasks are mostly YAML serializable (procs can't be serialized)
+* Task class uses properties instead of instance variables
+
 ## Version v0.1.8
 
 * Added `always_run` flag for tasks that run even if their dependencies

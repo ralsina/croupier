@@ -116,7 +116,22 @@ describe "Croupier::TaskManager" do
 
   it "should have a nice string representation" do
     with_tasks do
-      Croupier::TaskManager.tasks["output1"].to_s.should eq "name::(output1)"
+      YAML.parse(Croupier::TaskManager.tasks["output1"].to_s).should eq "name::(output1)"
+    end
+  end
+
+  it "should be yaml serializable" do
+    with_tasks do
+      expected = {
+        "id"         => "77012200e4c39aa279b0d3e16dca43a7b02eb4a5",
+        "name"       => "name",
+        "inputs"     => [] of String,
+        "outputs"    => ["output1"],
+        "always_run" => false,
+        "no_save"    => false,
+        "stale"      => true,
+      }
+      YAML.parse(Croupier::TaskManager.tasks["output1"].to_yaml).should eq expected
     end
   end
 
