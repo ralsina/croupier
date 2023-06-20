@@ -2,11 +2,13 @@
 
 ## Things it may make sense to add
 
-* Use getters/setters/properties properly
+* Use getters/setters/properties properly (part done)
 * Instrument the concurrent runner using [Fiber Metrics](https://github.com/didactic-drunk/fiber_metrics.cr)
 * Once it works fine with files, generalize to a k/v store using [kiwi](ihttps://github.com/crystal-community/kiwi)
 * Make Task/TaskManager structs
+* Use state machines for tasks (see veelenga/aasm.cr)
 
+* ~~Restructure tests~~
 * ~~Implement dry runs~~
 * ~~Tasks that *always* run~~
 * ~~Provide a way to ask to run tasks without outputs (needed for hacé)~~
