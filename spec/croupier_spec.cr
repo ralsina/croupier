@@ -236,6 +236,7 @@ describe "Task" do
           },
         )
         t.run
+        # this is the sha1sum of "sarasa"
         TaskManager.next_run["output2"].should eq \
           "609df08764e873e6f090a0064b38b2c5422cdf87"
       end
