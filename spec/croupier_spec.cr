@@ -164,7 +164,7 @@ describe "Task" do
       end
     end
 
-    it "should end with all the effects of the merged tasks" do
+    it "should add the effects of the merged task to the first one" do
       with_scenario("empty") do
         proc1 = TaskProc.new { File.open("1", "w") << ""; "foo" }
         proc2 = TaskProc.new { File.open("2", "w") << ""; "bar" }
@@ -178,6 +178,35 @@ describe "Task" do
 
         # output should have result of t2
         File.read("output").should eq "bar"
+
+        # Files 1 and 2 should exist because both procs ran
+        File.exists?("1").should be_true
+        File.exists?("2").should be_true
+      end
+    end
+
+    it "should add the outputs of the merged task to the first one" do
+      with_scenario("empty") do
+        proc1 = TaskProc.new { File.open("1", "w") << ""; ["foo1", "foo2"] }
+        proc2 = TaskProc.new { File.open("2", "w") << ""; ["bar1", "bar2"] }
+        t1 = Task.new("t1", ["output", "output2"], [] of String, proc1)
+        t2 = Task.new("t2", ["output", "output3"], [] of String, proc2)
+
+        # t2 merges into t1
+        TaskManager.tasks["output"].should eq t1
+        TaskManager.tasks["output2"].should eq t1
+        TaskManager.tasks["output3"].should eq t2
+        # Yes, output is there twice, because it will be written twice!
+        t1.outputs.should eq ["output", "output2", "output", "output3"]
+
+        TaskManager.run_tasks
+
+        # output should have result of t2
+        File.read("output").should eq "bar1"
+
+        # The other outputs should be ok
+        File.read("output2").should eq "foo2"
+        File.read("output3").should eq "bar2"
 
         # Files 1 and 2 should exist because both procs ran
         File.exists?("1").should be_true
@@ -507,7 +536,7 @@ describe "TaskManager" do
         p = TaskProc.new { "foo" }
         Task.new("name", ["output1", "output2", "output3"], proc: p)
 
-        expect_raises(Exception, "did not return an array") do
+        expect_raises(Exception, "did not return the correct number of outputs") do
           TaskManager.run_tasks
         end
       end

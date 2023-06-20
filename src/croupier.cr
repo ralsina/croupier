@@ -90,48 +90,41 @@ module Croupier
 
     # Executes the proc for the task
     def run
-      data = [] of String
+      call_results = Array(String | Nil).new
       @procs.each do |proc|
         Fiber.yield
-        call_result = proc.call
-
-        if @no_save
-          # The task saved the data so we should not do it
-          # but we need to update hashes
-          @outputs.reject(&.empty?).each do |output|
-            if !File.exists?(output)
-              raise "Task #{self} did not generate #{output}"
-            end
-            TaskManager.next_run[output] = Digest::SHA1.hexdigest(File.read(output))
-          end
+        result = proc.call
+        if result.nil?
+          call_results << nil
+        elsif result.is_a?(String)
+          call_results << result
         else
-          # We have to save the files ourselves
-          if @outputs.size > 1
-            if call_result.nil?
-              raise "Task #{self} did not return any data"
-            end
+          call_results += result.as(Array(String))
+        end
+      end
 
-            begin
-              data = call_result.as(Array(String))
-            rescue Exception
-              raise "Task #{self} did not return an array, got #{call_result}"
-            end
-
-            if data.size != @outputs.size
-              raise "Task #{self} did not generate the correct number of outputs (#{data.size} != #{@outputs.size})"
-            end
-          else # We have a single output, and data is it
-            data = [call_result]
+      if @no_save
+        # The task saved the data so we should not do it
+        # but we need to update hashes
+        @outputs.reject(&.empty?).each do |output|
+          if !File.exists?(output)
+            raise "Task #{self} did not generate #{output}"
           end
-
-          # Save all files, update all hashes
-          @outputs.reject(&.empty?).each_with_index do |output, i|
+          TaskManager.next_run[output] = Digest::SHA1.hexdigest(File.read(output))
+        end
+      else
+        # We have to save the files ourselves
+        begin
+          @outputs.zip(call_results) do |output, call_result|
+            raise "Task #{self} did not return any data for output #{output}" if call_result.nil?
             Dir.mkdir_p(File.dirname output)
             File.open(output, "w") do |io|
-              io << data[i]
-              TaskManager.next_run[output] = Digest::SHA1.hexdigest(data[i].to_s)
+              io << call_result
             end
+            TaskManager.next_run[output] = Digest::SHA1.hexdigest(call_result)
           end
+        rescue IndexError
+          raise "Task #{self} did not return the correct number of outputs"
         end
       end
       @stale = false # Done, not stale anymore
@@ -197,7 +190,8 @@ module Croupier
       raise "Cannot merge tasks with different no_save settings" \
         unless no_save? == other.no_save?
       # FIXME: check other task flags are compatible
-      # FIXME: what happens if outputs only partly match???
+      # @outputs is NOT unique! We can save multiple times
+      @outputs += other.@outputs
       @inputs += other.@inputs
       @inputs.uniq!
       @procs += other.@procs
