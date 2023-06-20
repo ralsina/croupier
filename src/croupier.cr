@@ -137,8 +137,7 @@ module Croupier
             Dir.mkdir_p(File.dirname output)
             File.open(output, "w") do |io|
               io << data[i]
-              # FIXME
-              # TaskManager.next_run[output] = Digest::SHA1.hexdigest(data[i])
+              TaskManager.next_run[output] = Digest::SHA1.hexdigest(data[i].to_s)
             end
           end
         end
