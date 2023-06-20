@@ -210,8 +210,6 @@ describe "Task" do
 
     it "should fail if a no_save task doesn't generate the output when called" do
       with_scenario("empty") do
-        File.delete?("output2") # Make sure this doesn't exist
-        TaskManager.cleanup
         b = TaskProc.new {
           ""
         }
@@ -224,6 +222,22 @@ describe "Task" do
         expect_raises(Exception, "Task name::(output2) did not generate output2") do
           t.run
         end
+      end
+    end
+
+    it "should record hash for outputs in the TaskManager" do
+      with_scenario("empty") do
+        t = Task.new(
+          "name",
+          "output2",
+          [] of String,
+          TaskProc.new {
+            "sarasa"
+          },
+        )
+        t.run
+        TaskManager.next_run["output2"].should eq \
+          "609df08764e873e6f090a0064b38b2c5422cdf87"
       end
     end
   end
