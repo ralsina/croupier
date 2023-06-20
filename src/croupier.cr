@@ -64,21 +64,14 @@ module Croupier
       @inputs = inputs
       @no_save = no_save
 
-      # FIXME: messy code
-      if @outputs.empty?
-        raise "Task #{@name} has no outputs and no id" if @id.nil?
-        if TaskManager.tasks.has_key?(@id)
-          TaskManager.tasks[@id.to_s].merge(self)
-        else
-          TaskManager.tasks[@id.to_s] = self
-        end
-      end
+      raise "Task #{@name} has no outputs and no id" if @id.nil? && @outputs.empty?
 
-      @outputs.each do |o|
-        if TaskManager.tasks.has_key?(o)
-          TaskManager.tasks[o].merge(self)
+      # Register with the task manager
+      (@outputs.empty? ? [@id] : @outputs).each do |k|
+        if TaskManager.tasks.has_key?(k)
+          TaskManager.tasks[k].merge(self)
         else
-          TaskManager.tasks[o] = self
+          TaskManager.tasks[k] = self
         end
       end
     end
@@ -366,6 +359,7 @@ module Croupier
     end
 
     # We ran all tasks, store the current state
+    # FIXME add tests for this
     def self.save_run
       File.open(".croupier", "w") do |file|
         file << YAML.dump(@@this_run.merge @@next_run)
