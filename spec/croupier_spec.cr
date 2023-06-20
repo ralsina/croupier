@@ -1,5 +1,26 @@
 require "./spec_helper"
 
+# For future test refactoring
+def with_scenario(
+  name,
+  keep = [] of String,
+  create = {} of String => String, &
+)
+  logs = IO::Memory.new
+  Log.setup(:debug, Log::IOBackend.new(io: logs)) # Helps for coverage
+  Dir.cd("spec/testcases/#{name}") do
+    File.delete?(".croupier")
+    Dir.glob("*").each do |f|
+      File.delete?(f) unless keep.includes?(f) || f == "tasks.yml"
+    end
+    create.each do |k, v|
+      File.open(k, "w") << v
+    end
+    TaskManager.cleanup
+    yield
+  end
+end
+
 def with_tasks(&)
   Croupier::TaskManager.cleanup
   Dir.glob("spec/files/*").each do |f|
