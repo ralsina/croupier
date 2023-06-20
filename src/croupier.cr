@@ -44,6 +44,7 @@ module Croupier
     # always_run is a boolean that tells croupier that the task is always
     #   stale regardless of its dependencies' state
     # FIXME: the id/name/output thing is confusing
+    # FIXME: rename output to outputs
     def initialize(
       name : String,
       output : Array(String) = [] of String,

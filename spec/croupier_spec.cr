@@ -1,26 +1,68 @@
 require "./spec_helper"
+include Croupier
 
-# For future test refactoring
 def with_scenario(
   name,
   keep = [] of String,
-  create = {} of String => String, &
+  create = {} of String => String,
+  procs = {} of String => Croupier::TaskProc, &
 )
+  # Setup logging, helps coverage
   logs = IO::Memory.new
-  Log.setup(:debug, Log::IOBackend.new(io: logs)) # Helps for coverage
+  Log.setup(:debug, Log::IOBackend.new(io: logs))
+
+  # Library of procs
+  x = 0
+  _procs = {
+    "dummy"   => Croupier::TaskProc.new { "" },
+    "counter" => Croupier::TaskProc.new {
+      x += 1
+      ""
+    },
+    "output2" => Croupier::TaskProc.new {
+      x += 1
+      File.write("output2", "foo")
+    },
+  }.merge procs
+
   Dir.cd("spec/testcases/#{name}") do
+    # Clean up
     File.delete?(".croupier")
     Dir.glob("*").each do |f|
       File.delete?(f) unless keep.includes?(f) || f == "tasks.yml"
     end
+    TaskManager.cleanup
+
+    # Create files as requested in scenario
     create.each do |k, v|
       File.open(k, "w") << v
     end
-    TaskManager.cleanup
-    yield
+
+    # Create tasks from tasks.yml
+    tasks = YAML.parse(File.read("tasks.yml"))
+    tasks.as_h.values.each do |t|
+      Task.new(
+        name: t["name"].to_s,
+        output: t["outputs"].as_a.map(&.to_s),
+        inputs: t["inputs"].as_a.map(&.to_s),
+        proc: _procs[t["procs"]],
+        always_run: t["always_run"].as_bool,
+        no_save: t["no_save"].as_bool,
+        id: t["id"].to_s,
+      )
+    end
+    begin
+      yield
+    rescue ex
+      puts "Error: #{ex}"
+      raise ex
+    ensure
+      TaskManager.cleanup
+    end
   end
 end
 
+# FIXME: DEPRECATED
 def with_tasks(&)
   Croupier::TaskManager.cleanup
   Dir.glob("spec/files/*").each do |f|
@@ -62,7 +104,7 @@ end
 
 describe "Croupier::TaskManager" do
   it "should be able to create a task and fetch it" do
-    with_tasks do
+    with_scenario("basic") do
       t = Croupier::TaskManager.tasks["output1"]
       t.@name.should eq "name"
       t.@outputs.should eq ["output1"]
@@ -73,6 +115,7 @@ describe "Croupier::TaskManager" do
 
   it "should be able to create task without output and fetch them" do
     Dir.cd("spec/files") do
+      before = Dir.glob("*")
       dummy_proc = Croupier::TaskProc.new { "" }
       Croupier::Task.new("foobar1", proc: dummy_proc, id: "t1")
       Croupier::Task.new("foobar2", proc: dummy_proc, id: "t1")
@@ -86,12 +129,13 @@ describe "Croupier::TaskManager" do
 
       # It should run and do nothing
       Croupier::TaskManager.run_tasks
-      Dir.glob("*").empty?.should be_true
+      Dir.glob("*").should eq before
     end
   end
 
   it "should allow a task to depend on a task without output referenced by id" do
     Dir.cd("spec/files") do
+      before = Dir.glob("*")
       dummy_proc = Croupier::TaskProc.new { "" }
       Croupier::Task.new("foobar1", inputs: ["t2"], proc: dummy_proc, id: "t1")
       Croupier::Task.new("foobar3", proc: dummy_proc, id: "t2")
@@ -102,7 +146,7 @@ describe "Croupier::TaskManager" do
 
       # It should run and do nothing
       Croupier::TaskManager.run_tasks
-      Dir.glob("*").empty?.should be_true
+      Dir.glob("*").should eq before
     end
   end
 

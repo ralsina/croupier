@@ -1,0 +1,54 @@
+---
+output1:
+  id: 77012200e4c39aa279b0d3e16dca43a7b02eb4a5
+  name: name
+  inputs: []
+  outputs:
+  - output1
+  always_run: false
+  no_save: false
+  stale: true
+  procs: "dummy"
+output2:
+  id: 052cd9c6f04c7451518f3f12a3f48caad072ec2a
+  name: name
+  inputs: []
+  outputs:
+  - output2
+  always_run: false
+  no_save: true
+  stale: true
+  procs: "output2"
+output3:
+  id: 0a1aac149aec98f492c33b9d16ed614f59a68ad2
+  name: name
+  inputs:
+  - input
+  outputs:
+  - output3
+  always_run: false
+  no_save: false
+  stale: true
+  procs: "dummy"
+output4:
+  id: 17784bf5bc94505ca6482934fd032365ca8e77ca
+  name: name
+  inputs:
+  - output3
+  outputs:
+  - output4
+  always_run: false
+  no_save: false
+  stale: true
+  procs: "dummy"
+output5:
+  id: 56a52c692975240c307099ebcd9cba944c0fb7ac
+  name: name
+  inputs:
+  - input2
+  outputs:
+  - output5
+  always_run: false
+  no_save: false
+  stale: true
+  procs: "dummy"
