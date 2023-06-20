@@ -44,7 +44,7 @@ def with_scenario(
       tasks.as_h.values.each do |t|
         Task.new(
           name: t["name"].to_s,
-          output: t["outputs"].as_a.map(&.to_s),
+          outputs: t["outputs"].as_a.map(&.to_s),
           inputs: t["inputs"].as_a.map(&.to_s),
           proc: _procs[t["procs"]],
           always_run: t["always_run"].as_bool,

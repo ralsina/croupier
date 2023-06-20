@@ -44,23 +44,22 @@ module Croupier
     # always_run is a boolean that tells croupier that the task is always
     #   stale regardless of its dependencies' state
     # FIXME: the id/name/output thing is confusing
-    # FIXME: rename output to outputs
     def initialize(
       name : String,
-      output : Array(String) = [] of String,
+      outputs : Array(String) = [] of String,
       inputs : Array(String) = [] of String,
       proc : TaskProc | Nil = nil,
       no_save : Bool = false,
       id : String | Nil = nil,
       always_run : Bool = false
     )
-      if !(inputs.to_set & output.to_set).empty?
+      if !(inputs.to_set & outputs.to_set).empty?
         raise "Cycle detected"
       end
       @always_run = always_run
       @name = name
       @procs << proc unless proc.nil?
-      @outputs = output.uniq
+      @outputs = outputs.uniq
       @id = id ? id : Digest::SHA1.hexdigest(@outputs.join(","))
       @inputs = inputs
       @no_save = no_save

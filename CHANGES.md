@@ -4,6 +4,9 @@
 
 * Tasks are mostly YAML serializable (procs can't be serialized)
 * Task class uses properties instead of instance variables
+* TaskManager is now a struct
+* Renamed argument `output` to `outputs` in `Task.initialize` where
+  it makes sense.
 
 ## Version v0.1.8
 
