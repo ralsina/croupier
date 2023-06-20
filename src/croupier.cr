@@ -214,7 +214,7 @@ module Croupier
     end
   end
 
-  class TaskManager
+  struct TaskManager
     # Registry of all tasks
     @@tasks = {} of String => Croupier::Task
 
