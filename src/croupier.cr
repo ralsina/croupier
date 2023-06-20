@@ -19,9 +19,14 @@ module Croupier
   alias TaskProc = -> String? | Array(String)
 
   class Task
-    @procs = [] of TaskProc
-    @outputs = Array(String).new
-    @id : String = ""
+    property id : String = ""
+    property name : String = ""
+    property inputs : Array(String) = [] of String
+    property outputs : Array(String) = [] of String
+    property procs : Array(TaskProc) = [] of TaskProc
+    property? always_run : Bool = false
+    property? no_save : Bool = false
+    @stale : Bool = true
 
     # Create a task with zero or more outputs.
     #
@@ -52,7 +57,6 @@ module Croupier
       @outputs = output.uniq
       @id = id ? id : Digest::SHA1.hexdigest(@outputs.join(","))
       @inputs = inputs
-      @stale = true
       @no_save = no_save
 
       # FIXME: messy code
