@@ -88,7 +88,7 @@ describe "Croupier::TaskManager" do
   it "should fail when you fetch a task that doesn't exist" do
     with_tasks do
       expect_raises(KeyError) do
-        Croupier::TaskManager.tasks("foo")
+        Croupier::TaskManager.tasks["foo"]
       end
     end
   end
@@ -268,7 +268,7 @@ describe "Croupier::TaskManager" do
   it "should run all stale tasks when run_all is false" do
     with_tasks do
       Dir.cd "spec/files" do
-        Croupier::TaskManager.tasks("output1").not_ready # Not stale
+        Croupier::TaskManager.tasks["output1"].not_ready # Not stale
         Croupier::TaskManager.run_tasks(run_all: false)
         Croupier::TaskManager.tasks.keys.each do |k|
           if k == "output1"
@@ -379,7 +379,7 @@ describe "Croupier::TaskManager" do
     with_tasks do
       Dir.cd "spec/files" do
         Croupier::TaskManager.run_tasks
-        t = Croupier::TaskManager.tasks("output1")
+        t = Croupier::TaskManager.tasks["output1"]
         t.mark_stale # Force recalculation of stale state
         t.@stale.should be_true
         File.delete?("output1")

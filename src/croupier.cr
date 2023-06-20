@@ -33,6 +33,7 @@ module Croupier
     # id is a unique identifier for the task. If the task has no outputs, it *must* have an id
     # always_run is a boolean that tells croupier that the task is always
     #   stale regardless of its dependencies' state
+    # FIXME: the id/name/output thing is confusing
     def initialize(
       name : String,
       output : Array(String) = [] of String,
@@ -42,24 +43,19 @@ module Croupier
       id : String | Nil = nil,
       always_run : Bool = false
     )
-      if !(inputs.to_set.& output.to_set).empty?
+      if !(inputs.to_set & output.to_set).empty?
         raise "Cycle detected"
       end
       @always_run = always_run
       @name = name
-      unless proc.nil?
-        @procs << proc
-      end
-      @outputs += output
-      @outputs.uniq!
-      if id.nil?
-        @id = Digest::SHA1.hexdigest(@outputs.join(","))
-      else
-        @id = id
-      end
+      @procs << proc unless proc.nil?
+      @outputs = output.uniq
+      @id = id ? id : Digest::SHA1.hexdigest(@outputs.join(","))
       @inputs = inputs
       @stale = true
       @no_save = no_save
+
+      # FIXME: messy code
       if @outputs.empty?
         raise "Task #{@name} has no outputs and no id" if @id.nil?
         if TaskManager.tasks.has_key?(@id)
@@ -68,6 +64,7 @@ module Croupier
           TaskManager.tasks[@id.to_s] = self
         end
       end
+
       @outputs.each do |o|
         if TaskManager.tasks.has_key?(o)
           TaskManager.tasks[o].merge(self)
@@ -103,6 +100,7 @@ module Croupier
             if !File.exists?(output)
               raise "Task #{self} did not generate #{output}"
             end
+            # FIXME: refactor into a hash_file function
             TaskManager.next_run[output] = Digest::SHA1.hexdigest(File.read(output))
           end
         else
@@ -147,9 +145,7 @@ module Croupier
 
     def stale?
       # Tasks don't get stale twice
-      if !@stale
-        return false
-      end
+      return false unless @stale
 
       @stale = (
         @outputs.any? { |output| !File.exists?(output) } ||
@@ -184,7 +180,7 @@ module Croupier
       @stale = true
     end
 
-    # Mark as not ready
+    # Mark as not ready. Only use for testing.
     def not_ready
       @stale = false
     end
@@ -196,11 +192,12 @@ module Croupier
     # Merge two tasks.
     #
     # inputs are joined
-    # proc is replaced with a proc that runs both procs
+    # procs of the second task are added to the 1st
     def merge(other : Task)
       if @no_save != other.@no_save
         raise "Cannot merge tasks with different no_save settings"
       end
+      # FIXME: check other task flags are compatible
       @inputs += other.@inputs
       @inputs.uniq!
       @procs += other.@procs
@@ -211,12 +208,9 @@ module Croupier
     # Registry of all tasks
     @@tasks = {} of String => Croupier::Task
 
+    # List of all registered tasks
     def self.tasks
       @@tasks
-    end
-
-    def self.tasks(output : String)
-      @@tasks[output]
     end
 
     # Tasks as a dependency graph sorted topologically
@@ -263,11 +257,12 @@ module Croupier
     # Registry of modified files, which will make tasks stale
     @@modified = Set(String).new
 
+    # List of all modified files
     def self.modified
       @@modified
     end
 
-    # Mark one file as modified
+    # Mark a file as modified
     def self.mark_modified(file)
       @@modified << file
     end
@@ -306,12 +301,6 @@ module Croupier
       all
     end
 
-    # Get a task list of what tasks need to be done to produce `output`
-    # The list is sorted so it can be executed in order
-    def self.dependencies(output : String)
-      self.dependencies [output]
-    end
-
     # Get a task list of what tasks need to be done to produce `outputs`
     # The list is sorted so it can be executed in order
     def self.dependencies(outputs : Array(String))
@@ -321,6 +310,13 @@ module Croupier
         end
       end
       self._dependencies outputs
+    end
+
+    # Get a task list of what tasks need to be done to produce `output`
+    # The list is sorted so it can be executed in order
+    # Overloaded to accept a single string for convenience
+    def self.dependencies(output : String)
+      self.dependencies([output])
     end
 
     # Helper function for dependencies
@@ -368,29 +364,37 @@ module Croupier
       end
     end
 
-    # Run the tasks needed to create or update the requested targets
-    def self.run_tasks(targets : Array(String), run_all : Bool = false, dry_run : Bool = false)
-      mark_stale_inputs
-      tasks = dependencies(targets)
-      _run_tasks(tasks, run_all, dry_run)
-    end
-
-    # Check if all inputs are either task outputs or existing files
+    # Check if all inputs are correct:
+    # They should all be either task outputs or existing files
     def self.check_dependencies
       bad_inputs = all_inputs.select { |input|
         !tasks.has_key?(input) && !File.exists?(input)
       }
-      return if bad_inputs.empty?
-      raise "Can't run: Unknown inputs #{bad_inputs.join(", ")}"
+      raise "Can't run: Unknown inputs #{bad_inputs.join(", ")}" \
+         unless bad_inputs.empty?
     end
 
     # Run all stale tasks in dependency order
     #
     # If `run_all` is true, run non-stale tasks too
+    # If `dry_run` is true, only log what would be done, but don't do it
     def self.run_tasks(run_all : Bool = false, dry_run : Bool = false)
       mark_stale_inputs
       _, tasks = TaskManager.sorted_task_graph
       check_dependencies
+      _run_tasks(tasks, run_all, dry_run)
+    end
+
+    # Run the tasks needed to create or update the requested targets
+    # run_all will run all tasks, not just the ones that are stale
+    # dry_run will only log what would be done, but not actually do it
+    def self.run_tasks(
+      targets : Array(String),
+      run_all : Bool = false,
+      dry_run : Bool = false
+    )
+      mark_stale_inputs
+      tasks = dependencies(targets)
       _run_tasks(tasks, run_all, dry_run)
     end
 
@@ -412,7 +416,7 @@ module Croupier
     # it seems to be faster than running tasks sequentially.
     #
     # However, it's a bit buggy (the .croupier file is not correct)
-    # TODO: support run_all
+    # FIXME: support run_all, dry_run
     def self.run_tasks_parallel
       mark_stale_inputs
       loop do
