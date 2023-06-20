@@ -102,7 +102,6 @@ module Croupier
             if !File.exists?(output)
               raise "Task #{self} did not generate #{output}"
             end
-            # FIXME: refactor into a hash_file function
             TaskManager.next_run[output] = Digest::SHA1.hexdigest(File.read(output))
           end
         else
@@ -195,10 +194,10 @@ module Croupier
     # inputs are joined
     # procs of the second task are added to the 1st
     def merge(other : Task)
-      if @no_save != other.@no_save
-        raise "Cannot merge tasks with different no_save settings"
-      end
+      raise "Cannot merge tasks with different no_save settings" \
+        unless no_save? == other.no_save?
       # FIXME: check other task flags are compatible
+      # FIXME: what happens if outputs only partly match???
       @inputs += other.@inputs
       @inputs.uniq!
       @procs += other.@procs
