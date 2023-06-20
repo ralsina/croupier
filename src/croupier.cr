@@ -407,7 +407,9 @@ module Croupier
     # Helper to run tasks
     def self._run_tasks(outputs, run_all : Bool = false, dry_run : Bool = false)
       outputs.each do |output|
-        if @@tasks.has_key?(output) && (run_all || @@tasks[output].@stale || @@tasks[output].@always_run)
+        if @@tasks.has_key?(output) && \
+           (run_all || @@tasks[output].stale? ||
+            @@tasks[output].@always_run)
           Log.info { "Running task for #{output}" }
           @@tasks[output].run unless dry_run
         end

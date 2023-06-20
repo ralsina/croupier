@@ -1,5 +1,10 @@
 # Changelog
 
+## Version 0.2.1
+
+* Fix bug that triggered too many builds in some cases in
+  [nicolino](https://github.com/ralsina/nicolino)
+
 ## Version 0.2.0
 
 * Tasks are mostly YAML serializable (procs can't be serialized)
