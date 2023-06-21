@@ -4,6 +4,8 @@
 
 * Fix bug that triggered too many builds in some cases in
   [nicolino](https://github.com/ralsina/nicolino)
+* Bring the parallel runner up to date with the serial one,
+  including equivalent tests
 
 ## Version 0.2.0
 

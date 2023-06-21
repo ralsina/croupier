@@ -147,6 +147,7 @@ module Croupier
 
     def stale?
       # Tasks don't get stale twice
+      return true if @always_run
       return false unless @stale
 
       @stale = (
@@ -166,7 +167,7 @@ module Croupier
     # For inputs that are not tasks, they should exist
     def ready?
       (
-        stale? &&
+        (stale? || always_run?) &&
           @inputs.all? { |input|
             if TaskManager.tasks.has_key? input
               !TaskManager.tasks[input].stale?
@@ -384,24 +385,29 @@ module Croupier
     #
     # If `run_all` is true, run non-stale tasks too
     # If `dry_run` is true, only log what would be done, but don't do it
-    def self.run_tasks(run_all : Bool = false, dry_run : Bool = false)
+    def self.run_tasks(run_all : Bool = false, dry_run : Bool = false, parallel : Bool = false)
       mark_stale_inputs
       _, tasks = TaskManager.sorted_task_graph
       check_dependencies
-      _run_tasks(tasks, run_all, dry_run)
+      run_tasks(tasks, run_all, dry_run, parallel)
     end
 
     # Run the tasks needed to create or update the requested targets
     # run_all will run all tasks, not just the ones that are stale
     # dry_run will only log what would be done, but not actually do it
     def self.run_tasks(
-      targets : Array(String),
-      run_all : Bool = false,
-      dry_run : Bool = false
+      targets  : Array(String),
+      run_all  : Bool = false,
+      dry_run  : Bool = false,
+      parallel : Bool = false,
     )
       mark_stale_inputs
       tasks = dependencies(targets)
-      _run_tasks(tasks, run_all, dry_run)
+      if parallel
+        _run_tasks_parallel(tasks, run_all, dry_run)
+      else
+        _run_tasks(tasks, run_all, dry_run)
+      end
     end
 
     # Helper to run tasks
@@ -424,22 +430,47 @@ module Croupier
     # it seems to be faster than running tasks sequentially.
     #
     # However, it's a bit buggy (the .croupier file is not correct)
-    # FIXME: support run_all, dry_run
-    def self.run_tasks_parallel
+    def self._run_tasks_parallel(
+        targets : Array(String) = [] of String,
+        run_all : Bool = false,
+        dry_run : Bool = false,
+      )
       mark_stale_inputs
+
+      if targets.empty?
+        targets = @@tasks.keys
+      end
+
+      eligible_tasks = @@tasks.select { |k, _|
+         targets.includes? k
+      }
+
+      finished_tasks = Set(Task).new
+
+      errors = [] of String
       loop do
-        stale_tasks = @@tasks.values.select(&.stale?)
+        stale_tasks = eligible_tasks.values.select { |t|
+          (!finished_tasks.includes?(t) ) && t.stale?
+        }
         if stale_tasks.empty?
           break
         end
         batch = stale_tasks.select(&.ready?)
         batch.each do |t|
           spawn do
-            t.run
+            begin
+              t.run unless dry_run
+            rescue ex
+              errors << ex.message.to_s
+            ensure
+              t.not_ready  # FIXME shouldn't need this
+              finished_tasks << t
+            end
           end
         end
         sleep(0.001)
       end
+      raise errors.join("\n") unless errors.empty?
       # FIXME It's losing outputs for some reason
       save_run
     end

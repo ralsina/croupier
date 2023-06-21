@@ -9,4 +9,5 @@
 /shard.lock
 .croupier
 /coverage/
-/spec/files/
+/spec/testcases/input*
+/spec/testcases/output*

@@ -438,166 +438,157 @@ describe "TaskManager" do
     end
   end
 
-  describe "run_tasks" do
-    it "should run all stale tasks when run_all is false" do
-      with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-        TaskManager.tasks["output1"].not_ready # Not stale
-        TaskManager.run_tasks(run_all: false)
-        TaskManager.tasks.keys.each do |k|
-          if k == "output1"
+  # Run the same tests for parallel and serial execution of tasks
+  [false, true].each do |parallel|
+    describe "run_task, parallel = #{parallel}" do
+      it "should run all stale tasks when run_all is false" do
+        with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
+          TaskManager.tasks["output1"].not_ready # Not stale
+          TaskManager.run_tasks(parallel: parallel, run_all: false)
+          TaskManager.tasks.keys.each do |k|
+            if k == "output1"
+              File.exists?(k).should be_false
+            else
+              File.exists?(k).should be_true
+            end
+          end
+        end
+      end
+      it "should run no tasks when dry_run is true" do
+        with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
+          TaskManager.run_tasks(parallel: parallel, run_all: true, dry_run: true)
+          TaskManager.tasks.keys.each do |k|
             File.exists?(k).should be_false
-          else
+          end
+        end
+      end
+
+      it "should run all tasks when run_all is true" do
+        with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
+          TaskManager.run_tasks(parallel: parallel, run_all: true)
+          TaskManager.tasks.keys.each do |k|
             File.exists?(k).should be_true
           end
         end
       end
-    end
 
-    it "should run no tasks when dry_run is true" do
-      with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-        TaskManager.run_tasks(run_all: true, dry_run: true)
-        TaskManager.tasks.keys.each do |k|
-          File.exists?(k).should be_false
+      it "should save files but respect the no_save flag" do
+        with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
+          File.exists?("output1").should be_false
+          File.exists?("output2").should be_false
+
+          TaskManager.run_tasks(parallel: parallel, run_all: true)
+
+          # The output task has no_save = false, so it should be created
+          File.exists?("output1").should be_true
+          # The output2 task has no_save = true
+          # so it's created by the proc, which creates it
+          # with "foo" as the contents
+          File.exists?("output2").should be_true
+          File.read("output2").should eq "foo"
         end
       end
-    end
 
-    it "should run all tasks when run_all is true" do
-      with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-        TaskManager.run_tasks(run_all: true)
-        TaskManager.tasks.keys.each do |k|
-          File.exists?(k).should be_true
+      it "should run only required tasks to produce specified outputs" do
+        with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
+          TaskManager.run_tasks(parallel: parallel, targets: ["output4", "output5"])
+          File.exists?("output1").should be_false
+          File.exists?("output2").should be_false
+          File.exists?("output3").should be_true # Required for output4
+          File.exists?("output4").should be_true # Required
+          File.exists?("output5").should be_true # Required
         end
       end
-    end
 
-    it "should save files but respect the no_save flag" do
-      with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-        File.exists?("output1").should be_false
-        File.exists?("output2").should be_false
-
-        TaskManager.run_tasks(run_all: true)
-
-        # The output task has no_save = false, so it should be created
-        File.exists?("output1").should be_true
-        # The output2 task has no_save = true
-        # so it's created by the proc, which creates it
-        # with "foo" as the contents
-        File.exists?("output2").should be_true
-        File.read("output2").should eq "foo"
-      end
-    end
-
-    it "should run only required tasks to produce specified outputs" do
-      with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-        TaskManager.run_tasks(["output4", "output5"])
-        File.exists?("output1").should be_false
-        File.exists?("output2").should be_false
-        File.exists?("output3").should be_true # Required for output4
-        File.exists?("output4").should be_true # Required
-        File.exists?("output5").should be_true # Required
-      end
-    end
-
-    it "should fail to run if a task depends on an input that doesn't exist and won't be generated" do
-      with_scenario("basic", to_create: {"input2" => "bar"}) do
-        expect_raises(Exception, "Unknown inputs") do
-          TaskManager.run_tasks
+      it "should fail to run if a task depends on an input that doesn't exist and won't be generated" do
+        with_scenario("basic", to_create: {"input2" => "bar"}) do
+          expect_raises(Exception, "Unknown inputs") do
+            TaskManager.run_tasks(parallel: parallel)
+          end
         end
       end
-    end
 
-    it "should handle a no_save task that generates multiple outputs" do
-      with_scenario("empty") do
-        p = TaskProc.new { File.open("output1", "w") << ""; File.open("output2", "w") << ""; "" }
-        Task.new("name", ["output1", "output2"], proc: p, no_save: true)
-        TaskManager.run_tasks
-      end
-    end
-
-    it "should handle a task that generates multiple outputs" do
-      with_scenario("empty") do
-        p = TaskProc.new { ["foo", "bar"] }
-        Task.new("name", ["output1", "output2"], proc: p)
-
-        TaskManager.run_tasks
-
-        # The two files should be created with the right contents
-        File.read("output1").should eq "foo"
-        File.read("output2").should eq "bar"
-      end
-    end
-
-    it "should fail if a task generates wrong number of outputs" do
-      with_scenario("empty") do
-        p = TaskProc.new { ["foo", "bar"] }
-        Task.new("name", ["output1", "output2", "output3"], proc: p)
-
-        expect_raises(Exception, "correct number of outputs") do
-          TaskManager.run_tasks
+      it "should handle a no_save task that generates multiple outputs" do
+        with_scenario("empty") do
+          p = TaskProc.new { File.open("output1", "w") << ""; File.open("output2", "w") << ""; "" }
+          Task.new("name", ["output1", "output2"], proc: p, no_save: true)
+          TaskManager.run_tasks(parallel: parallel)
         end
       end
-    end
 
-    it "should fail if a task generates invalid output" do
-      with_scenario("empty") do
-        # The proc in a task with multiple outputs should return an array
-        p = TaskProc.new { "foo" }
-        Task.new("name", ["output1", "output2", "output3"], proc: p)
+      it "should handle a task that generates multiple outputs" do
+        with_scenario("empty") do
+          p = TaskProc.new { ["foo", "bar"] }
+          Task.new("name", ["output1", "output2"], proc: p)
 
-        expect_raises(Exception, "did not return the correct number of outputs") do
-          TaskManager.run_tasks
+          TaskManager.run_tasks(parallel: parallel)
+
+          # The two files should be created with the right contents
+          File.read("output1").should eq "foo"
+          File.read("output2").should eq "bar"
         end
       end
-    end
 
-    it "should run tasks marked with 'always_run' even if the dependencies are not changed" do
-      x1 = 0
-      counter_proc_1 = TaskProc.new {
-        x1 += 1
-        ""
-      }
-      x2 = 0
-      counter_proc_2 = TaskProc.new {
-        x2 += 1
-        ""
-      }
-      with_scenario("empty") do
-        # Need to have an input file, because tasks without
-        # inputs are implicitly always_run
-        File.open("input", "w") << ""
-        Task.new(
-          "t1",
-          inputs: ["input"],
-          always_run: true,
-          proc: counter_proc_1,
-          id: "t1"
-        )
-        Task.new(
-          "t2",
-          inputs: ["input"],
-          always_run: false,
-          proc: counter_proc_2,
-          id: "t2"
-        )
-        x1.should eq 0
-        x2.should eq 0
-        TaskManager.run_tasks
-        x1.should eq 1
-        x2.should eq 1
-        TaskManager.run_tasks
-        x1.should eq 2
-        x2.should eq 1
+      it "should fail if a task generates wrong number of outputs" do
+        with_scenario("empty") do
+          p = TaskProc.new { ["foo", "bar"] }
+          Task.new("name", ["output1", "output2", "output3"], proc: p)
+
+          expect_raises(Exception, "correct number of outputs") do
+            TaskManager.run_tasks(parallel: parallel)
+          end
+        end
       end
-    end
-  end
 
-  describe "run_tasks_parallel" do
-    it "should run all tasks in parallel" do
-      with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-        TaskManager.run_tasks_parallel
-        TaskManager.tasks.keys.each do |k|
-          File.exists?(k).should be_true
+      it "should fail if a task generates invalid output" do
+        with_scenario("empty") do
+          # The proc in a task with multiple outputs should return an array
+          p = TaskProc.new { "foo" }
+          Task.new("name", ["output1", "output2", "output3"], proc: p)
+
+          expect_raises(Exception, "did not return the correct number of outputs") do
+            TaskManager.run_tasks(parallel: parallel)
+          end
+        end
+      end
+
+      it "should run tasks marked with 'always_run' even if the dependencies are not changed" do
+        x1 = 0
+        counter_proc_1 = TaskProc.new {
+          x1 += 1
+          ""
+        }
+        x2 = 0
+        counter_proc_2 = TaskProc.new {
+          x2 += 1
+          ""
+        }
+        with_scenario("empty") do
+          # Need to have an input file, because tasks without
+          # inputs are implicitly always_run
+          File.open("input", "w") << ""
+          Task.new(
+            "t1",
+            inputs: ["input"],
+            always_run: true,
+            proc: counter_proc_1,
+            id: "t1"
+          )
+          Task.new(
+            "t2",
+            inputs: ["input"],
+            always_run: false,
+            proc: counter_proc_2,
+            id: "t2"
+          )
+          x1.should eq 0
+          x2.should eq 0
+          TaskManager.run_tasks(parallel: parallel)
+          x1.should eq 1
+          x2.should eq 1
+          TaskManager.run_tasks(parallel: parallel)
+          x1.should eq 2
+          x2.should eq 1
         end
       end
     end

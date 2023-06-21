@@ -7,8 +7,8 @@
 * Use state machines for tasks (see veelenga/aasm.cr)
 * Make it fast again :-)
 * Implement -k -i make options (keep going / ignore errors)
-* Implement the missing parts of the parallel runner
 
+* ~~Implement the missing parts of the parallel runner~~
 * ~~Make TaskManager a struct~~
 * ~~Use getters/setters/properties properly~~
 * ~~Restructure tests~~
