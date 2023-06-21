@@ -194,7 +194,7 @@ module Croupier
 
     # Merge two tasks.
     #
-    # inputs are joined
+    # inputs and outputs are joined
     # procs of the second task are added to the 1st
     def merge(other : Task)
       raise "Cannot merge tasks with different no_save settings" unless no_save? == other.no_save?
