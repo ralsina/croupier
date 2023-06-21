@@ -19,10 +19,6 @@ jobs:
           shards install
           crystal build src/run_tests.cr
           kcov --clean --include-path=./src coverage ./run_tests
-          cp coverage/*/*xml .
-      - uses: codecov/codecov-action@v3
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: true
-          verbose: true
-          files: cov.xml,cobertura.xml
+          curl -Os https://uploader.codecov.io/latest/linux/codecov
+          chmod +x codecov
+          ./codecov -t ${CODECOV_TOKEN} output/*/cov.xml
