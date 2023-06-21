@@ -2,12 +2,15 @@
 
 ## Things it may make sense to add
 
-* Use getters/setters/properties properly (part done)
 * Instrument the concurrent runner using [Fiber Metrics](https://github.com/didactic-drunk/fiber_metrics.cr)
 * Once it works fine with files, generalize to a k/v store using [kiwi](ihttps://github.com/crystal-community/kiwi)
 * Make Task/TaskManager structs
 * Use state machines for tasks (see veelenga/aasm.cr)
+* Make it fast again :-)
+* Implement -k -i make options (keep going / ignore errors)
+* Implement the missing parts of the parallel runner
 
+* ~~Use getters/setters/properties properly~~
 * ~~Restructure tests~~
 * ~~Implement dry runs~~
 * ~~Tasks that *always* run~~

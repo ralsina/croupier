@@ -410,7 +410,7 @@ module Croupier
         if @@tasks.has_key?(output) && \
            (run_all || @@tasks[output].stale? ||
             @@tasks[output].@always_run)
-          Log.info { "Running task for #{output}" }
+          Log.debug { "Running task for #{output}" }
           @@tasks[output].run unless dry_run
         end
       end
