@@ -84,7 +84,7 @@ module Croupier
       proc : TaskProc | Nil = nil,
       no_save : Bool = false,
       id : String | Nil = nil,
-      always_run : Bool = false,
+      always_run : Bool = false
     )
       initialize(
         name: name,
@@ -197,10 +197,8 @@ module Croupier
     # inputs are joined
     # procs of the second task are added to the 1st
     def merge(other : Task)
-      raise "Cannot merge tasks with different no_save settings" \
-        unless no_save? == other.no_save?
-      raise "Cannot merge tasks with different always_run settings" \
-        unless always_run? == other.always_run?
+      raise "Cannot merge tasks with different no_save settings" unless no_save? == other.no_save?
+      raise "Cannot merge tasks with different always_run settings" unless always_run? == other.always_run?
 
       # @outputs is NOT unique! We can save multiple times
       @outputs += other.@outputs
@@ -396,10 +394,10 @@ module Croupier
     # run_all will run all tasks, not just the ones that are stale
     # dry_run will only log what would be done, but not actually do it
     def self.run_tasks(
-      targets  : Array(String),
-      run_all  : Bool = false,
-      dry_run  : Bool = false,
-      parallel : Bool = false,
+      targets : Array(String),
+      run_all : Bool = false,
+      dry_run : Bool = false,
+      parallel : Bool = false
     )
       mark_stale_inputs
       tasks = dependencies(targets)
@@ -414,8 +412,8 @@ module Croupier
     def self._run_tasks(outputs, run_all : Bool = false, dry_run : Bool = false)
       outputs.each do |output|
         if @@tasks.has_key?(output) && \
-           (run_all || @@tasks[output].stale? ||
-            @@tasks[output].@always_run)
+              (run_all || @@tasks[output].stale? ||
+             @@tasks[output].@always_run)
           Log.debug { "Running task for #{output}" }
           @@tasks[output].run unless dry_run
         end
@@ -431,10 +429,10 @@ module Croupier
     #
     # However, it's a bit buggy (the .croupier file is not correct)
     def self._run_tasks_parallel(
-        targets : Array(String) = [] of String,
-        run_all : Bool = false,
-        dry_run : Bool = false,
-      )
+      targets : Array(String) = [] of String,
+      run_all : Bool = false,
+      dry_run : Bool = false
+    )
       mark_stale_inputs
 
       if targets.empty?
@@ -442,7 +440,7 @@ module Croupier
       end
 
       eligible_tasks = @@tasks.select { |k, _|
-         targets.includes? k
+        targets.includes? k
       }
 
       finished_tasks = Set(Task).new
@@ -450,7 +448,7 @@ module Croupier
       errors = [] of String
       loop do
         stale_tasks = eligible_tasks.values.select { |t|
-          (!finished_tasks.includes?(t) ) && t.stale?
+          (!finished_tasks.includes?(t)) && t.stale?
         }
         if stale_tasks.empty?
           break
@@ -463,7 +461,7 @@ module Croupier
             rescue ex
               errors << ex.message.to_s
             ensure
-              t.not_ready  # FIXME shouldn't need this
+              t.not_ready # FIXME shouldn't need this
               finished_tasks << t
             end
           end
