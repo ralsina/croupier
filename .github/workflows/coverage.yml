@@ -21,6 +21,6 @@ jobs:
           kcov --clean --include-path=./src coverage ./run_tests
           curl -Os https://uploader.codecov.io/latest/linux/codecov
           chmod +x codecov
-          ./codecov -t ${CODECOV_TOKEN} output/*/cov.xml
+          ./codecov -t ${CODECOV_TOKEN} -s coverage
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
