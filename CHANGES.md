@@ -8,6 +8,7 @@
   (found via bug in Hacé)
 * Made TaskManager an instance of a struct, and lost all the
   class variables, simplifying code.
+* Removed some small methods from TaskManager.
 
 ## Version 0.2.1
 

@@ -23,15 +23,14 @@ module Croupier
     include YAML::Serializable::Strict
 
     property id : String = ""
-    property name : String = ""
     property inputs : Array(String) = [] of String
+    property name : String = ""
     property outputs : Array(String) = [] of String
+    property stale : Bool = true # ameba:disable Style/QueryBoolMethods
     property? always_run : Bool = false
     property? no_save : Bool = false
     @[YAML::Field(ignore: true)]
     property procs : Array(TaskProc) = [] of TaskProc
-
-    @stale : Bool = true
 
     # Create a task with zero or more outputs.
     #
@@ -44,6 +43,7 @@ module Croupier
     # always_run is a boolean that tells croupier that the task is always
     #   stale regardless of its dependencies' state
     # FIXME: the id/name/output thing is confusing
+
     def initialize(
       name : String,
       outputs : Array(String) = [] of String,
@@ -178,16 +178,6 @@ module Croupier
             end
           }
       )
-    end
-
-    # Mark this task as stale. Only use for testing.
-    def mark_stale
-      @stale = true
-    end
-
-    # Mark as not ready. Only use for testing.
-    def not_ready
-      @stale = false
     end
 
     def to_s(io)
@@ -437,7 +427,7 @@ module Croupier
               errors << ex.message.to_s
             ensure
               # Task is done, do not run again
-              t.not_ready
+              t.stale = false
               finished_tasks << t
             end
           end

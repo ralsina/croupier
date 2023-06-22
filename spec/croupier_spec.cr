@@ -95,7 +95,7 @@ describe "Task" do
         t.@name.should eq "name"
         t.@outputs.should eq ["output1"]
         t.@inputs.empty?.should be_true
-        t.@stale.should be_true
+        t.stale.should be_true
       end
     end
 
@@ -286,9 +286,9 @@ describe "Task" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         TaskManager.run_tasks
         t = TaskManager.tasks["output3"]
-        t.@stale.should be_false
-        t.mark_stale # Mark stale to force recalculation
-        t.@stale.should be_true
+        t.stale.should be_false
+        t.stale = true # Mark stale to force recalculation
+        t.stale.should be_true
         TaskManager.modified.clear
         TaskManager.modified << "input"
         t.stale?.should be_true
@@ -302,7 +302,7 @@ describe "Task" do
         TaskManager.modified.clear
         # Force recalculation of stale states
         TaskManager.tasks.values.each do |task|
-          task.mark_stale
+          task.stale = true
         end
         # input is not a direct dependency of t, but an indirect one
         TaskManager.modified << "input"
@@ -342,9 +342,9 @@ describe "Task" do
         tasks.size.should eq 5
         TaskManager.run_tasks
         TaskManager.modified.clear
-        tasks.values.each(&.mark_stale)
+        tasks.values.each(&.stale = true)
         # All tasks are marked stale so theit state is recalculated
-        tasks.values.count(&.@stale).should eq 5
+        tasks.values.count(&.stale).should eq 5
 
         # Only input is modified
         TaskManager.modified << "input"
@@ -359,8 +359,8 @@ describe "Task" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         TaskManager.run_tasks
         t = TaskManager.tasks["output1"]
-        t.mark_stale # Force recalculation of stale state
-        t.@stale.should be_true
+        t.stale = true # Force recalculation of stale state
+        t.stale.should be_true
         File.delete?("output1")
         t.stale?.should be_true
       end
@@ -444,7 +444,7 @@ describe "TaskManager" do
     describe "run_task, parallel = #{parallel}" do
       it "should run all stale tasks when run_all is false" do
         with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-          TaskManager.tasks["output5"].not_ready # Not stale
+          TaskManager.tasks["output5"].stale = false
           TaskManager.run_tasks(parallel: parallel, run_all: false)
           TaskManager.tasks.keys.each do |k|
             if k == "output5"
@@ -640,7 +640,7 @@ describe "TaskManager" do
         # The 2 tasks without inputs should be stale
         tasks.values.count(&.stale?).should eq 2
 
-        TaskManager.tasks.values.each(&.mark_stale)
+        TaskManager.tasks.values.each(&.stale = true)
         TaskManager.modified.clear
         File.delete(".croupier")
         TaskManager.mark_stale_inputs
@@ -663,7 +663,6 @@ describe "TaskManager" do
         end
 
         TaskManager.mark_stale_inputs
-
         TaskManager.modified.should eq Set{"input"}
       end
     end
