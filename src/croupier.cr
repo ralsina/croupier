@@ -439,25 +439,22 @@ module Croupier
     )
       mark_stale_inputs
 
-      if targets.empty?
-        targets = @@tasks.keys
-      end
-
-      eligible_tasks = @@tasks.select { |k, _|
-        targets.includes? k
-      }
-
+      targets = @@tasks.keys if targets.empty?
+      tasks = dependencies(targets)
       finished_tasks = Set(Task).new
-
       errors = [] of String
+
       loop do
-        stale_tasks = eligible_tasks.values.select { |t|
-          (!finished_tasks.includes?(t)) && t.stale?
+        stale_tasks = (tasks.map { |t| @@tasks[t] }).select(&.stale?).reject { |t|
+          finished_tasks.includes?(t)
         }
-        if stale_tasks.empty?
-          break
-        end
-        batch = stale_tasks.select(&.ready?)
+
+        break if stale_tasks.empty?
+
+        # The uniq is because a task may be repeated in the
+        # task graph because of multiple outputs. We don't
+        # want to run it twice.
+        batch = stale_tasks.select(&.ready?).uniq!
         batch.each do |t|
           spawn do
             begin
@@ -465,7 +462,8 @@ module Croupier
             rescue ex
               errors << ex.message.to_s
             ensure
-              t.not_ready # FIXME shouldn't need this
+              # Task is done, do not run again
+              t.not_ready
               finished_tasks << t
             end
           end
