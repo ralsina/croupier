@@ -412,13 +412,15 @@ module Croupier
 
     # Helper to run tasks
     def self._run_tasks(outputs, run_all : Bool = false, dry_run : Bool = false)
+      finished = Set(Task).new
       outputs.each do |output|
-        if @@tasks.has_key?(output) && \
-              (run_all || @@tasks[output].stale? ||
-             @@tasks[output].@always_run)
-          Log.debug { "Running task for #{output}" }
-          @@tasks[output].run unless dry_run
-        end
+        next unless @@tasks.has_key?(output)
+        next if finished.includes?(@@tasks[output])
+        next unless run_all || @@tasks[output].stale? || @@tasks[output].@always_run
+
+        Log.debug { "Running task for #{output}" }
+        @@tasks[output].run unless dry_run
+        finished << @@tasks[output]
       end
       save_run
     end

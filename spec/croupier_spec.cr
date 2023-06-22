@@ -531,6 +531,22 @@ describe "TaskManager" do
         end
       end
 
+      it "should only run a task that generates multiple outputs once" do
+        with_scenario("empty") do
+          x = 0
+          p = TaskProc.new { x += 1; ["foo #{x}", "bar #{x}"] }
+          Task.new("name", ["output1", "output2"], proc: p)
+
+          TaskManager.run_tasks(parallel: parallel)
+
+          # The two files should be created with the right contents
+          # if instead of a 1 there is a 2, it means the task was
+          # run twice
+          File.read("output1").should eq "foo 1"
+          File.read("output2").should eq "bar 1"
+        end
+      end
+
       it "should fail if a task generates wrong number of outputs" do
         with_scenario("empty") do
           p = TaskProc.new { ["foo", "bar"] }

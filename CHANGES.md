@@ -3,6 +3,9 @@
 ## Version 0.2.2
 
 * Tasks without inputs should be treated like always_run tasks
+  (found via bug in Hacé)
+* Tasks without inputs and multiple outputs should not run twice
+  (found via bug in Hacé)
 
 ## Version 0.2.1
 
