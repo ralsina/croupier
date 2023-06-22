@@ -310,7 +310,7 @@ describe "Task" do
       end
     end
 
-    it "should mark all tasks stale on a second run" do
+    it "should mark some tasks stale when there is an updated .croupier" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         # Set things up as they should look after running
         File.write("input", "foo")
@@ -330,7 +330,8 @@ describe "Task" do
           "output5" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
         }))
         TaskManager.tasks.size.should eq 5
-        TaskManager.tasks.values.select(&.stale?).should be_empty
+        # output1 and output2 have no inputs, so they are always stale
+        TaskManager.tasks.values.select(&.stale?).flat_map(&.@outputs).should eq ["output1", "output2"]
       end
     end
 
@@ -348,9 +349,9 @@ describe "Task" do
         # Only input is modified
         TaskManager.mark_modified("input")
 
-        # Only tasks depending on "input" should be stale
-        tasks.values.count(&.stale?).should eq 2
-        tasks.keys.select { |k| tasks[k].stale? }.should eq ["output3", "output4"]
+        # Only tasks depending on "input" or that have no inputs should be stale
+        tasks.values.count(&.stale?).should eq 4
+        tasks.keys.select { |k| tasks[k].stale? }.should eq ["output1", "output2", "output3", "output4"]
       end
     end
 
@@ -443,10 +444,10 @@ describe "TaskManager" do
     describe "run_task, parallel = #{parallel}" do
       it "should run all stale tasks when run_all is false" do
         with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-          TaskManager.tasks["output1"].not_ready # Not stale
+          TaskManager.tasks["output5"].not_ready # Not stale
           TaskManager.run_tasks(parallel: parallel, run_all: false)
           TaskManager.tasks.keys.each do |k|
-            if k == "output1"
+            if k == "output5"
               File.exists?(k).should be_false
             else
               File.exists?(k).should be_true
@@ -454,6 +455,7 @@ describe "TaskManager" do
           end
         end
       end
+
       it "should run no tasks when dry_run is true" do
         with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
           TaskManager.run_tasks(parallel: parallel, run_all: true, dry_run: true)
@@ -613,20 +615,22 @@ describe "TaskManager" do
   end
 
   describe "mark_stale_inputs" do
-    it "should mark all tasks with inputs as stale if there is no .croupier file" do
+    it "should mark all tasks as stale if there is no .croupier file" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         # Make sure al tasks run, but no files are marked
         # modified and there is no .croupier file
         tasks = TaskManager.tasks
         TaskManager.run_tasks
+        # The 2 tasks without inputs should be stale
+        tasks.values.count(&.stale?).should eq 2
+
         TaskManager.tasks.values.each(&.mark_stale)
         TaskManager.clear_modified
         File.delete(".croupier")
-
         TaskManager.mark_stale_inputs
 
-        # Only tasks with inputs should be stale
-        tasks.values.select(&.stale?).flat_map(&.@outputs).should eq ["output3", "output4", "output5"]
+        # All 5 tasks should be stale
+        tasks.values.count(&.stale?).should eq 5
       end
     end
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## Version 0.2.2
+
+* Tasks without inputs should be treated like always_run tasks
+
 ## Version 0.2.1
 
 * Fix bug that triggered too many builds in some cases in
