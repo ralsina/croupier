@@ -210,17 +210,29 @@ module Croupier
     end
   end
 
-  struct TaskManager
+  struct TaskManagerType
     # Registry of all tasks
-    @@tasks = {} of String => Croupier::Task
+    property tasks = {} of String => Croupier::Task
+    # Registry of modified files, which will make tasks stale
+    property modified = Set(String).new
+    # SHA1 of files from last run
+    property last_run = {} of String => String
+    # SHA1 of files as of starting this run
+    property this_run = {} of String => String
+    # SAH1 of input files as of ending this run
+    property next_run = {} of String => String
 
-    # List of all registered tasks
-    def self.tasks
-      @@tasks
+    # Remove all tasks and everything else (good for tests)
+    def cleanup
+      modified.clear
+      tasks.clear
+      last_run.clear
+      this_run.clear
+      next_run.clear
     end
 
     # Tasks as a dependency graph sorted topologically
-    def self.sorted_task_graph
+    def sorted_task_graph
       # First, we create the graph
       g = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
 
@@ -232,21 +244,21 @@ module Croupier
 
       # All inputs are vertices
       all_inputs.each do |input|
-        if !@@tasks.has_key? input
+        if !tasks.has_key? input
           g.add_vertex input
           g.add_edge "start", input
         end
       end
 
       # Tasks without outputs are added as vertices by ID
-      @@tasks.values.each do |task|
+      tasks.values.each do |task|
         if task.@outputs.empty?
           g.add_vertex task.@id
         end
       end
 
       # Add vertices and edges for dependencies
-      @@tasks.each do |output, task|
+      tasks.each do |output, task|
         g.add_vertex output
         if task.@inputs.empty?
           g.add_edge "start", output
@@ -257,51 +269,13 @@ module Croupier
       end
 
       # Only return tasks, not inputs in the sorted graph
-      return g, topological_sort(g.@vertice_dict).select { |v| @@tasks.has_key? v }
-    end
-
-    # Registry of modified files, which will make tasks stale
-    @@modified = Set(String).new
-
-    # List of all modified files
-    def self.modified
-      @@modified
-    end
-
-    # Mark a file as modified
-    def self.mark_modified(file)
-      @@modified << file
-    end
-
-    # Mark all files as unmodified (only meant for testing)
-    def self.clear_modified
-      @@modified.clear
-    end
-
-    # Remove all tasks and everything else (good for tests)
-    def self.cleanup
-      self.clear_modified
-      @@tasks = {} of String => Task
-      @@last_run = {} of String => String
-      @@this_run = {} of String => String
-      @@next_run = {} of String => String
-    end
-
-    # SHA1 of files from last run
-    @@last_run = {} of String => String
-    # SHA1 of files as of starting this run
-    @@this_run = {} of String => String
-    # SAH1 of input files as of ending this run
-    @@next_run = {} of String => String
-
-    def self.next_run
-      @@next_run
+      return g, topological_sort(g.@vertice_dict).select { |v| tasks.has_key? v }
     end
 
     # All inputs from all tasks
-    def self.all_inputs
+    def all_inputs
       all = Array(String).new
-      @@tasks.values.each do |task|
+      tasks.values.each do |task|
         all += task.@inputs
       end
       all
@@ -309,9 +283,9 @@ module Croupier
 
     # Get a task list of what tasks need to be done to produce `outputs`
     # The list is sorted so it can be executed in order
-    def self.dependencies(outputs : Array(String))
+    def dependencies(outputs : Array(String))
       outputs.each do |output|
-        if !@@tasks.has_key?(output)
+        if !tasks.has_key?(output)
           raise "Unknown output #{output}"
         end
       end
@@ -321,41 +295,41 @@ module Croupier
     # Get a task list of what tasks need to be done to produce `output`
     # The list is sorted so it can be executed in order
     # Overloaded to accept a single string for convenience
-    def self.dependencies(output : String)
-      self.dependencies([output])
+    def dependencies(output : String)
+      dependencies([output])
     end
 
     # Helper function for dependencies
-    def self._dependencies(outputs : Array(String))
+    def _dependencies(outputs : Array(String))
       result = Set(String).new
       outputs.each do |output|
-        if @@tasks.has_key? output
+        if tasks.has_key? output
           result << output
-          result += _dependencies(@@tasks[output].@inputs).to_set
+          result += _dependencies(tasks[output].@inputs).to_set
         end
       end
-      self.sorted_task_graph[1].select(->(v : String) { result.includes? v })
+      sorted_task_graph[1].select(->(v : String) { result.includes? v })
     end
 
     # Read state of last run, then scan inputs and compare
-    def self.mark_stale_inputs
+    def mark_stale_inputs
       if File.exists? ".croupier"
-        @@last_run = File.open(".croupier") do |file|
+        last_run = File.open(".croupier") do |file|
           YAML.parse(file).as_h.map { |k, v| [k.to_s, v.to_s] }.to_h
         end
       else
-        @@last_run = {} of String => String
+        last_run = {} of String => String
       end
-      (@@this_run = scan_inputs).each do |file, sha1|
-        if @@last_run.fetch(file, "") != sha1
-          mark_modified(file)
+      (this_run = scan_inputs).each do |file, sha1|
+        if last_run.fetch(file, "") != sha1
+          modified << file
         end
       end
     end
 
     # Scan all inputs and return a hash with their sha1
-    def self.scan_inputs
-      self.all_inputs.reduce({} of String => String) do |hash, file|
+    def scan_inputs
+      all_inputs.reduce({} of String => String) do |hash, file|
         if File.exists? file
           hash[file] = Digest::SHA1.hexdigest(File.read(file))
         end
@@ -365,15 +339,15 @@ module Croupier
 
     # We ran all tasks, store the current state
     # FIXME add tests for this
-    def self.save_run
+    def save_run
       File.open(".croupier", "w") do |file|
-        file << YAML.dump(@@this_run.merge @@next_run)
+        file << YAML.dump(this_run.merge next_run)
       end
     end
 
     # Check if all inputs are correct:
     # They should all be either task outputs or existing files
-    def self.check_dependencies
+    def check_dependencies
       bad_inputs = all_inputs.select { |input|
         !tasks.has_key?(input) && !File.exists?(input)
       }
@@ -385,9 +359,9 @@ module Croupier
     #
     # If `run_all` is true, run non-stale tasks too
     # If `dry_run` is true, only log what would be done, but don't do it
-    def self.run_tasks(run_all : Bool = false, dry_run : Bool = false, parallel : Bool = false)
+    def run_tasks(run_all : Bool = false, dry_run : Bool = false, parallel : Bool = false)
       mark_stale_inputs
-      _, tasks = TaskManager.sorted_task_graph
+      _, tasks = sorted_task_graph
       check_dependencies
       run_tasks(tasks, run_all, dry_run, parallel)
     end
@@ -395,7 +369,7 @@ module Croupier
     # Run the tasks needed to create or update the requested targets
     # run_all will run all tasks, not just the ones that are stale
     # dry_run will only log what would be done, but not actually do it
-    def self.run_tasks(
+    def run_tasks(
       targets : Array(String),
       run_all : Bool = false,
       dry_run : Bool = false,
@@ -411,16 +385,16 @@ module Croupier
     end
 
     # Helper to run tasks
-    def self._run_tasks(outputs, run_all : Bool = false, dry_run : Bool = false)
+    def _run_tasks(outputs, run_all : Bool = false, dry_run : Bool = false)
       finished = Set(Task).new
       outputs.each do |output|
-        next unless @@tasks.has_key?(output)
-        next if finished.includes?(@@tasks[output])
-        next unless run_all || @@tasks[output].stale? || @@tasks[output].@always_run
+        next unless tasks.has_key?(output)
+        next if finished.includes?(tasks[output])
+        next unless run_all || tasks[output].stale? || tasks[output].@always_run
 
         Log.debug { "Running task for #{output}" }
-        @@tasks[output].run unless dry_run
-        finished << @@tasks[output]
+        tasks[output].run unless dry_run
+        finished << tasks[output]
       end
       save_run
     end
@@ -432,20 +406,20 @@ module Croupier
     # it seems to be faster than running tasks sequentially.
     #
     # However, it's a bit buggy (the .croupier file is not correct)
-    def self._run_tasks_parallel(
+    def _run_tasks_parallel(
       targets : Array(String) = [] of String,
       run_all : Bool = false,
       dry_run : Bool = false
     )
       mark_stale_inputs
 
-      targets = @@tasks.keys if targets.empty?
-      tasks = dependencies(targets)
+      targets = tasks.keys if targets.empty?
+      _tasks = dependencies(targets)
       finished_tasks = Set(Task).new
       errors = [] of String
 
       loop do
-        stale_tasks = (tasks.map { |t| @@tasks[t] }).select(&.stale?).reject { |t|
+        stale_tasks = (_tasks.map { |t| tasks[t] }).select(&.stale?).reject { |t|
           finished_tasks.includes?(t)
         }
 
@@ -475,4 +449,7 @@ module Croupier
       save_run
     end
   end
+
+  # The global task manager (singleton)
+  TaskManager = TaskManagerType.new
 end

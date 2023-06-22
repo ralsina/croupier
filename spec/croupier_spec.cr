@@ -289,8 +289,8 @@ describe "Task" do
         t.@stale.should be_false
         t.mark_stale # Mark stale to force recalculation
         t.@stale.should be_true
-        TaskManager.clear_modified
-        TaskManager.mark_modified("input")
+        TaskManager.modified.clear
+        TaskManager.modified << "input"
         t.stale?.should be_true
       end
     end
@@ -299,13 +299,13 @@ describe "Task" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         TaskManager.run_tasks
         t = TaskManager.tasks["output4"]
-        TaskManager.clear_modified
+        TaskManager.modified.clear
         # Force recalculation of stale states
         TaskManager.tasks.values.each do |task|
           task.mark_stale
         end
         # input is not a direct dependency of t, but an indirect one
-        TaskManager.mark_modified("input")
+        TaskManager.modified << "input"
         t.stale?.should be_true
       end
     end
@@ -341,13 +341,13 @@ describe "Task" do
         tasks = TaskManager.tasks
         tasks.size.should eq 5
         TaskManager.run_tasks
-        TaskManager.clear_modified
+        TaskManager.modified.clear
         tasks.values.each(&.mark_stale)
         # All tasks are marked stale so theit state is recalculated
         tasks.values.count(&.@stale).should eq 5
 
         # Only input is modified
-        TaskManager.mark_modified("input")
+        TaskManager.modified << "input"
 
         # Only tasks depending on "input" or that have no inputs should be stale
         tasks.values.count(&.stale?).should eq 4
@@ -641,7 +641,7 @@ describe "TaskManager" do
         tasks.values.count(&.stale?).should eq 2
 
         TaskManager.tasks.values.each(&.mark_stale)
-        TaskManager.clear_modified
+        TaskManager.modified.clear
         File.delete(".croupier")
         TaskManager.mark_stale_inputs
 

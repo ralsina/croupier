@@ -6,6 +6,8 @@
   (found via bug in Hacé)
 * Tasks without inputs and multiple outputs should not run twice
   (found via bug in Hacé)
+* Made TaskManager an instance of a struct, and lost all the
+  class variables, simplifying code.
 
 ## Version 0.2.1
 
