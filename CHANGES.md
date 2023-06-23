@@ -4,6 +4,7 @@
 
 * Made `TaskManager.all_inputs` more efficient
 * Call `TaskManager.sorted_tas_graph` less and made it faster
+* Make @id generation simpler
 
 ## Version 0.2.2
 
