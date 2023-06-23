@@ -2,7 +2,8 @@
 
 ## Version 0.2.3
 
-* Made TaskManager.all_inputs more efficient
+* Made `TaskManager.all_inputs` more efficient
+* Call `TaskManager.sorted_tas_graph` less and made it faster
 
 ## Version 0.2.2
 

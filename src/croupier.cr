@@ -220,47 +220,54 @@ module Croupier
       this_run.clear
       next_run.clear
       @all_inputs.clear
+      @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
+      @graph_sorted = [] of String
     end
 
     # Tasks as a dependency graph sorted topologically
+    @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
+    @graph_sorted = [] of String
+
     def sorted_task_graph
+      return @graph, @graph_sorted unless @graph.@vertice_dict.empty?
       # First, we create the graph
-      g = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
+      @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
 
       # Add all tasks and inputs as vertices
       # Add all dependencies as edges
 
       # The start node is just a convenience
-      g.add_vertex "start"
+      @graph.add_vertex "start"
 
       # All inputs are vertices
       all_inputs.each do |input|
         if !tasks.has_key? input
-          g.add_vertex input
-          g.add_edge "start", input
+          @graph.add_vertex input
+          @graph.add_edge "start", input
         end
       end
 
       # Tasks without outputs are added as vertices by ID
       tasks.values.each do |task|
         if task.@outputs.empty?
-          g.add_vertex task.@id
+          @graph.add_vertex task.@id
         end
       end
 
-      # Add vertices and edges for dependencies
+      # Add vertices and edges for inputs
       tasks.each do |output, task|
-        g.add_vertex output
+        @graph.add_vertex output
         if task.@inputs.empty?
-          g.add_edge "start", output
+          @graph.add_edge "start", output
         end
         task.@inputs.each do |input|
-          g.add_edge input, output
+          @graph.add_edge input, output
         end
       end
 
       # Only return tasks, not inputs in the sorted graph
-      return g, topological_sort(g.@vertice_dict).select { |v| tasks.has_key? v }
+      @graph_sorted = topological_sort(@graph.@vertice_dict).select { |v| tasks.has_key? v }
+      return @graph, @graph_sorted
     end
 
     # All inputs from all tasks
@@ -282,7 +289,8 @@ module Croupier
           raise "Unknown output #{output}"
         end
       end
-      self._dependencies outputs
+      result = self._dependencies outputs
+      sorted_task_graph[1].select(->(v : String) { result.includes? v })
     end
 
     # Get a task list of what tasks need to be done to produce `output`
@@ -298,10 +306,10 @@ module Croupier
       outputs.each do |output|
         if tasks.has_key? output
           result << output
-          result += _dependencies(tasks[output].@inputs).to_set
+          result.concat _dependencies(tasks[output].@inputs)
         end
       end
-      sorted_task_graph[1].select(->(v : String) { result.includes? v })
+      result
     end
 
     # Read state of last run, then scan inputs and compare
