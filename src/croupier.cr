@@ -219,6 +219,7 @@ module Croupier
       last_run.clear
       this_run.clear
       next_run.clear
+      @all_inputs.clear
     end
 
     # Tasks as a dependency graph sorted topologically
@@ -263,12 +264,14 @@ module Croupier
     end
 
     # All inputs from all tasks
+    @all_inputs = Set(String).new
+
     def all_inputs
-      all = Array(String).new
+      return @all_inputs unless @all_inputs.empty?
       tasks.values.each do |task|
-        all += task.@inputs
+        @all_inputs.concat task.@inputs
       end
-      all
+      @all_inputs
     end
 
     # Get a task list of what tasks need to be done to produce `outputs`

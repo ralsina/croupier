@@ -404,7 +404,7 @@ describe "TaskManager" do
     it "should list all inputs for all tasks" do
       # TODO: check inputs are not repeated
       with_scenario("basic") do
-        TaskManager.all_inputs.should eq ["input", "output3", "input2"]
+        TaskManager.all_inputs.should eq Set{"input", "output3", "input2"}
       end
     end
   end

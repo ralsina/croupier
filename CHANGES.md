@@ -1,5 +1,9 @@
 # Changelog
 
+## Version 0.2.3
+
+* Made TaskManager.all_inputs more efficient
+
 ## Version 0.2.2
 
 * Tasks without inputs should be treated like always_run tasks
