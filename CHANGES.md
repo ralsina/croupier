@@ -2,6 +2,8 @@
 
 ## Version 0.2.4
 
+* Simpler mechanism not to repeat tasks in `_run_tasks`
+
 ## Version 0.2.3
 
 * Made `TaskManager.all_inputs` more efficient
