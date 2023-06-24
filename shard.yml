@@ -1,5 +1,5 @@
 name: croupier
-version: 0.2.2
+version: 0.2.4
 description: A smart task definition and execution library
 authors:
   - Roberto Alsina <roberto.alsina@gmail.com>

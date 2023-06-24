@@ -7,6 +7,8 @@
 * Use state machines for tasks (see veelenga/aasm.cr)
 * Implement -k -i make options (keep going / ignore errors)
 * Add a faster stale input check using file dates instead of hashes (like make)
+* Add directory dependencies (depend on all files in the tree)
+* Add wildcard dependencies (depend on all files matching a pattern)
 
 * ~~Make it fast again :-)~~ [Sort of]
 * ~~Implement the missing parts of the parallel runner~~
