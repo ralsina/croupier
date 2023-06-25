@@ -9,6 +9,7 @@
 * Add a faster stale input check using file dates instead of hashes (like make)
 * Add directory dependencies (depend on all files in the tree)
 * Add wildcard dependencies (depend on all files / tasks matching a pattern)
+* Implement failed state for tasks
 
 * ~~Rationalize id/name/output thing~~
 * ~~Make it fast again :-)~~ [Sort of]
