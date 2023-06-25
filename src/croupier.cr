@@ -30,6 +30,11 @@ module Croupier
     @[YAML::Field(ignore: true)]
     property procs : Array(TaskProc) = [] of TaskProc
 
+    # Under what keys should this task be registered with TaskManager
+    def keys
+      @outputs.empty? ? [@id] : @outputs
+    end
+
     # Create a task with zero or more outputs.
     #
     # `output` is an array of files that the task generates
@@ -69,21 +74,12 @@ module Croupier
       # We should merge every task we have output/id collision with
       # into one, and register it on every output/id of every one
       # of those tasks
-      #
-      # This code looks much more complex thatn it should
-      to_merge = Array(Task).new
-      keys = Set(String).new
-      (@outputs.empty? ? [@id] : @outputs).each do |k|
-        if TaskManager.tasks.has_key?(k)
-          t = TaskManager.tasks[k]
-          to_merge << t
-          keys.concat(t.@outputs.empty? ? [t.@id] : t.@outputs)
-        end
-        keys << k
-      end
+      to_merge = (keys.map { |k|
+        TaskManager.tasks.fetch(k, nil)
+      }).select(Task).uniq!
       to_merge << self
-      reduced = to_merge.uniq.reduce { |t1, t2| t1.merge t2 }
-      keys.each { |k| TaskManager.tasks[k] = reduced }
+      reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
+      reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
     end
 
     # Create a task with zero or one outputs. Overload for convenience.

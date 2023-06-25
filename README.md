@@ -16,7 +16,7 @@ can be used for [dataflow programming](https://en.wikipedia.org/wiki/Dataflow_pr
 
 You use Croupier to define tasks. Tasks have:
 
-* A name
+* An id
 * Zero or more input files
 * Zero or more output files
 * A `Proc` that consumes the inputs and returns a string
@@ -89,15 +89,13 @@ merged into the first task created. The resulting task will:
 
 ### Tasks without output
 
-A task with no output will be registered under output "" and is not expected
+A task with no output will be registered under its `id` and is not expected
 to create any output files. Other than that, it's just a regular task.
 
 ### Tasks with multiple outputs
 
 If a task expects the TaskManager to create multiple files, it
-should return a YAML-encoded array of strings.
-
-This will change soonish.
+should return an array of strings.
 
 ## Installation
 
@@ -124,7 +122,6 @@ b1 = Croupier::TaskProc.new{
 }
 
 Croupier::Task.new(
-  name: "task1",
   output: "fileA",
   inputs: ["input.txt"],
   proc: b1
@@ -136,7 +133,6 @@ b2 = Croupier::TaskProc.new{
 }
 
 Croupier::Task.new(
-  name: "task2",
   output: "fileB",
   inputs: ["fileA"],
   proc: b2
@@ -159,6 +155,11 @@ will run, as needed.
 ## Development
 
 Let's try to keep test coverage good :-)
+
+Other than that, anything is fair game. In the TODO.md file there is a
+section for things that were considered and decided to be a bad idea,
+but that is conditional and can change when presented with a good
+argument.
 
 ## Contributing
 
