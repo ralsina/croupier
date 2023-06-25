@@ -138,6 +138,34 @@ describe "Task" do
       end
     end
 
+    it "should handle complex merges" do
+      with_scenario("empty") do
+        d1 = TaskProc.new { "1" }
+        d2 = TaskProc.new { "2" }
+        d3 = TaskProc.new { "3" }
+
+        # All these tasks should be merged into one and registered
+        # that one into all outputs, to avoid duplicating procs
+        t1 = Task.new(["o1", "o2"], ["i1"] of String, d1)
+        Task.new(["o1", "o3"], ["i2"] of String, d2)
+        Task.new(["o2", "o3"], ["i1", "i3"] of String, d3)
+
+        # All tasks are merged into t1
+        TaskManager.tasks["o1"].should eq t1
+        TaskManager.tasks["o2"].should eq t1
+        TaskManager.tasks["o3"].should eq t1
+
+        # t1 has all 3 inputs, not repeated
+        t1.inputs.should eq ["i1", "i2", "i3"]
+
+        # t1 has all 3 outputs, repeated as needed
+        t1.outputs.should eq ["o1", "o2", "o1", "o3", "o2", "o3"]
+
+        # t1 has all 3 procs
+        t1.@procs.should eq [d1, d2, d3]
+      end
+    end
+
     it "should allow creating tasks with more than one output" do
       with_scenario("empty") do
         t1 = Task.new(["output1", "output2"])
@@ -194,12 +222,12 @@ describe "Task" do
         proc1 = TaskProc.new { File.open("1", "w") << ""; ["foo1", "foo2"] }
         proc2 = TaskProc.new { File.open("2", "w") << ""; ["bar1", "bar2"] }
         t1 = Task.new(["output", "output2"], [] of String, proc1)
-        t2 = Task.new(["output", "output3"], [] of String, proc2)
+        Task.new(["output", "output3"], [] of String, proc2)
 
-        # t2 merges into t1
+        # t2 merges into t1, which is registered in the 3 outputs
         TaskManager.tasks["output"].should eq t1
         TaskManager.tasks["output2"].should eq t1
-        TaskManager.tasks["output3"].should eq t2
+        TaskManager.tasks["output3"].should eq t1
         # Yes, output is there twice, because it will be written twice!
         t1.outputs.should eq ["output", "output2", "output", "output3"]
 

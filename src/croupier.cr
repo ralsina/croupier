@@ -40,6 +40,11 @@ module Croupier
     # it *must* have an id. If not given, it's calculated as a hash of outputs.
     # `always_run` is a boolean that tells croupier that the task is always
     #   stale regardless of its dependencies' state
+    #
+    # Important: tasks will be registered in TaskManager. If the new task
+    # conflicts in id/outputs with others, it will be merged, and the new
+    # object will NOT be registered. For that reason, keeping references
+    # to Task objects you create is probably pointless.
 
     def initialize(
       outputs : Array(String) = [] of String,
@@ -60,14 +65,25 @@ module Croupier
       @inputs = inputs
       @no_save = no_save
 
-      # Register with the task manager
+      # Register with the task manager.
+      # We should merge every task we have output/id collision with
+      # into one, and register it on every output/id of every one
+      # of those tasks
+      #
+      # This code looks much more complex thatn it should
+      to_merge = Array(Task).new
+      keys = Set(String).new
       (@outputs.empty? ? [@id] : @outputs).each do |k|
         if TaskManager.tasks.has_key?(k)
-          TaskManager.tasks[k].merge(self)
-        else
-          TaskManager.tasks[k] = self
+          t = TaskManager.tasks[k]
+          to_merge << t
+          keys.concat(t.@outputs.empty? ? [t.@id] : t.@outputs)
         end
+        keys << k
       end
+      to_merge << self
+      reduced = to_merge.uniq.reduce { |t1, t2| t1.merge t2 }
+      keys.each { |k| TaskManager.tasks[k] = reduced }
     end
 
     # Create a task with zero or one outputs. Overload for convenience.
@@ -185,10 +201,12 @@ module Croupier
       raise "Cannot merge tasks with different always_run settings" unless always_run? == other.always_run?
 
       # @outputs is NOT unique! We can save multiple times
+      # the same file in multiple procs
       @outputs += other.@outputs
       @inputs += other.@inputs
       @inputs.uniq!
       @procs += other.@procs
+      self
     end
   end
 
