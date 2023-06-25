@@ -10,7 +10,6 @@ module Croupier
 
   # A Task is an object that may generate output
   #
-  # It has a descriptive `name` which should be understandable to the user
   # It has a `Proc` which is executed when the task is run
   # It can have zero or more inputs
   # It has zero or more outputs
@@ -24,7 +23,6 @@ module Croupier
 
     property id : String = ""
     property inputs : Array(String) = [] of String
-    property name : String = ""
     property outputs : Array(String) = [] of String
     property stale : Bool = true # ameba:disable Style/QueryBoolMethods
     property? always_run : Bool = false
@@ -34,18 +32,16 @@ module Croupier
 
     # Create a task with zero or more outputs.
     #
-    # name is a descriptive name for the task
-    # output is an array of files that the task generates
-    # inputs is an array of files or task ids that the task depends on
-    # proc is a proc that is executed when the task is run
-    # no_save is a boolean that tells croupier that the task will save the files itself
-    # id is a unique identifier for the task. If the task has no outputs, it *must* have an id
-    # always_run is a boolean that tells croupier that the task is always
+    # `output` is an array of files that the task generates
+    # `inputs` is an array of files or task ids that the task depends on
+    # `proc` is a proc that is executed when the task is run
+    # `no_save` is a boolean that tells croupier that the task will save the files itself
+    # `id` is a unique identifier for the task. If the task has no outputs,
+    # it *must* have an id. If not given, it's calculated as a hash of outputs.
+    # `always_run` is a boolean that tells croupier that the task is always
     #   stale regardless of its dependencies' state
-    # FIXME: the id/name/output thing is confusing
 
     def initialize(
-      name : String,
       outputs : Array(String) = [] of String,
       inputs : Array(String) = [] of String,
       proc : TaskProc | Nil = nil,
@@ -57,14 +53,12 @@ module Croupier
         raise "Cycle detected"
       end
       @always_run = always_run
-      @name = name
       @procs << proc unless proc.nil?
       @outputs = outputs.uniq
-      @id = id ? id : Digest::SHA1.hexdigest(@outputs.join(","))
+      raise "Task has no outputs and no id" if id.nil? && @outputs.empty?
+      @id = id ? id : Digest::SHA1.hexdigest(@outputs.join(","))[..6]
       @inputs = inputs
       @no_save = no_save
-
-      raise "Task #{@name} has no outputs and no id" if @id.nil? && @outputs.empty?
 
       # Register with the task manager
       (@outputs.empty? ? [@id] : @outputs).each do |k|
@@ -78,7 +72,6 @@ module Croupier
 
     # Create a task with zero or one outputs. Overload for convenience.
     def initialize(
-      name : String,
       output : String | Nil = nil,
       inputs : Array(String) = [] of String,
       proc : TaskProc | Nil = nil,
@@ -87,7 +80,6 @@ module Croupier
       always_run : Bool = false
     )
       initialize(
-        name: name,
         outputs: output ? [output] : [] of String,
         inputs: inputs,
         proc: proc,
@@ -181,7 +173,7 @@ module Croupier
     end
 
     def to_s(io)
-      io << "#{@name}::(#{@outputs.join(", ")})"
+      io << @id << "::" << @outputs.join(", ")
     end
 
     # Merge two tasks.

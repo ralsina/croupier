@@ -43,7 +43,6 @@ def with_scenario(
       tasks = YAML.parse(File.read("tasks.yml"))
       tasks.as_h.values.each do |t|
         Task.new(
-          name: t["name"].to_s,
           outputs: t["outputs"].as_a.map(&.to_s),
           inputs: t["inputs"].as_a.map(&.to_s),
           proc: _procs[t["procs"]],
@@ -68,7 +67,8 @@ describe "Task" do
   describe "serialization" do
     it "should have a nice string representation" do
       with_scenario("basic") do
-        TaskManager.tasks["output1"].to_s.should eq "name::(output1)"
+        id = "77012200e4c39aa279b0d3e16dca43a7b02eb4a5"
+        TaskManager.tasks["output1"].to_s.should eq "#{id}::output1"
       end
     end
 
@@ -76,7 +76,6 @@ describe "Task" do
       with_scenario("basic") do
         expected = {
           "id"         => "77012200e4c39aa279b0d3e16dca43a7b02eb4a5",
-          "name"       => "name",
           "inputs"     => [] of String,
           "outputs"    => ["output1"],
           "always_run" => false,
@@ -92,7 +91,6 @@ describe "Task" do
     it "should be possible to create a task and fetch it" do
       with_scenario("basic") do
         t = TaskManager.tasks["output1"]
-        t.@name.should eq "name"
         t.@outputs.should eq ["output1"]
         t.@inputs.empty?.should be_true
         t.stale.should be_true
@@ -101,21 +99,18 @@ describe "Task" do
 
     it "should be possible to create tasks without output and fetch them" do
       with_scenario("empty") do
-        Task.new("foobar1", id: "t1")
-        Task.new("foobar2", id: "t1")
-        Task.new("foobar3", id: "t2")
+        Task.new(id: "t1")
+        Task.new(id: "t1")
+        Task.new(id: "t2")
 
         TaskManager.tasks.keys.should eq ["t1", "t2"]
-        # foobar2 is merged into foobar1
-        TaskManager.tasks["t1"].@name.should eq "foobar1"
-        TaskManager.tasks["t2"].@name.should eq "foobar3"
       end
     end
 
     it "should allow a task to depend on a task without output referenced by id" do
       with_scenario("empty") do
-        Task.new("foobar1", inputs: ["t2"], id: "t1")
-        Task.new("foobar3", id: "t2")
+        Task.new(inputs: ["t2"], id: "t1")
+        Task.new(id: "t2")
 
         TaskManager.tasks.keys.should eq ["t1", "t2"]
         # Should respect dependencies even if they are just IDs
@@ -126,7 +121,7 @@ describe "Task" do
     it "should reject self-cyclical tasks" do
       with_scenario("basic") do
         expect_raises(Exception, "Cycle detected") do
-          Task.new("name", "output6", ["input.txt", "output6"])
+          Task.new("output6", ["input.txt", "output6"])
         end
       end
     end
@@ -134,8 +129,8 @@ describe "Task" do
     it "should allow creating two tasks with the same output" do
       with_scenario("empty") do
         dummy_proc = TaskProc.new { "" }
-        t1 = Task.new("name", "output", ["i1"] of String, dummy_proc)
-        Task.new("name", "output", ["i2"] of String, dummy_proc)
+        t1 = Task.new("output", ["i1"] of String, dummy_proc)
+        Task.new("output", ["i2"] of String, dummy_proc)
 
         # t2 is merged into t1
         TaskManager.tasks["output"].should eq t1
@@ -145,7 +140,7 @@ describe "Task" do
 
     it "should allow creating tasks with more than one output" do
       with_scenario("empty") do
-        t1 = Task.new("name", ["output1", "output2"])
+        t1 = Task.new(["output1", "output2"])
 
         # Should be visible in two places
         TaskManager.tasks["output1"].should eq t1
@@ -157,18 +152,18 @@ describe "Task" do
   describe "merge" do
     it "should not allow merging tasks with different `no_save`" do
       with_scenario("empty") do
-        Task.new("name", "output", no_save: true)
+        Task.new("output", no_save: true)
         expect_raises(Exception, "different no_save settings") do
-          Task.new("name", "output", no_save: false)
+          Task.new("output", no_save: false)
         end
       end
     end
 
     it "should not allow merging tasks with different `always_run`" do
       with_scenario("empty") do
-        Task.new("name", "output", always_run: true)
+        Task.new("output", always_run: true)
         expect_raises(Exception, "different always_run settings") do
-          Task.new("name", "output", always_run: false)
+          Task.new("output", always_run: false)
         end
       end
     end
@@ -177,8 +172,8 @@ describe "Task" do
       with_scenario("empty") do
         proc1 = TaskProc.new { File.open("1", "w") << ""; "foo" }
         proc2 = TaskProc.new { File.open("2", "w") << ""; "bar" }
-        t1 = Task.new("t1", "output", [] of String, proc1)
-        Task.new("t2", "output", [] of String, proc2)
+        t1 = Task.new("output", [] of String, proc1)
+        Task.new("output", [] of String, proc2)
 
         # t2 merges into t1
         TaskManager.tasks["output"].should eq t1
@@ -198,8 +193,8 @@ describe "Task" do
       with_scenario("empty") do
         proc1 = TaskProc.new { File.open("1", "w") << ""; ["foo1", "foo2"] }
         proc2 = TaskProc.new { File.open("2", "w") << ""; ["bar1", "bar2"] }
-        t1 = Task.new("t1", ["output", "output2"], [] of String, proc1)
-        t2 = Task.new("t2", ["output", "output3"], [] of String, proc2)
+        t1 = Task.new(["output", "output2"], [] of String, proc1)
+        t2 = Task.new(["output", "output3"], [] of String, proc2)
 
         # t2 merges into t1
         TaskManager.tasks["output"].should eq t1
@@ -234,7 +229,6 @@ describe "Task" do
           ""
         }
         t = Task.new(
-          "name",
           "output2",
           [] of String,
           b,
@@ -252,12 +246,11 @@ describe "Task" do
           ""
         }
         t = Task.new(
-          "name",
           "output2",
           [] of String,
           b,
           no_save: true)
-        expect_raises(Exception, "Task name::(output2) did not generate output2") do
+        expect_raises(Exception, "Task 052cd9c::output2 did not generate output2") do
           t.run
         end
       end
@@ -266,7 +259,6 @@ describe "Task" do
     it "should record hash for outputs in the TaskManager" do
       with_scenario("empty") do
         t = Task.new(
-          "name",
           "output2",
           [] of String,
           TaskProc.new {
@@ -431,7 +423,7 @@ describe "TaskManager" do
 
     it "should detect cycles in the graph" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-        Task.new("name", "input", ["output4"])
+        Task.new("input", ["output4"])
         expect_raises(Exception, "Cycle detected") do
           TaskManager.sorted_task_graph
         end
@@ -513,7 +505,7 @@ describe "TaskManager" do
       it "should handle a no_save task that generates multiple outputs" do
         with_scenario("empty") do
           p = TaskProc.new { File.open("output1", "w") << ""; File.open("output2", "w") << ""; "" }
-          Task.new("name", ["output1", "output2"], proc: p, no_save: true)
+          Task.new(["output1", "output2"], proc: p, no_save: true)
           TaskManager.run_tasks(parallel: parallel)
         end
       end
@@ -521,7 +513,7 @@ describe "TaskManager" do
       it "should handle a task that generates multiple outputs" do
         with_scenario("empty") do
           p = TaskProc.new { ["foo", "bar"] }
-          Task.new("name", ["output1", "output2"], proc: p)
+          Task.new(["output1", "output2"], proc: p)
 
           TaskManager.run_tasks(parallel: parallel)
 
@@ -535,7 +527,7 @@ describe "TaskManager" do
         with_scenario("empty") do
           x = 0
           p = TaskProc.new { x += 1; ["foo #{x}", "bar #{x}"] }
-          Task.new("name", ["output1", "output2"], proc: p)
+          Task.new(["output1", "output2"], proc: p)
 
           TaskManager.run_tasks(parallel: parallel)
 
@@ -550,7 +542,7 @@ describe "TaskManager" do
       it "should fail if a task generates wrong number of outputs" do
         with_scenario("empty") do
           p = TaskProc.new { ["foo", "bar"] }
-          Task.new("name", ["output1", "output2", "output3"], proc: p)
+          Task.new(["output1", "output2", "output3"], proc: p)
 
           expect_raises(Exception, "correct number of outputs") do
             TaskManager.run_tasks(parallel: parallel)
@@ -562,7 +554,7 @@ describe "TaskManager" do
         with_scenario("empty") do
           # The proc in a task with multiple outputs should return an array
           p = TaskProc.new { "foo" }
-          Task.new("name", ["output1", "output2", "output3"], proc: p)
+          Task.new(["output1", "output2", "output3"], proc: p)
 
           expect_raises(Exception, "did not return the correct number of outputs") do
             TaskManager.run_tasks(parallel: parallel)
@@ -586,14 +578,12 @@ describe "TaskManager" do
           # inputs are implicitly always_run
           File.open("input", "w") << ""
           Task.new(
-            "t1",
             inputs: ["input"],
             always_run: true,
             proc: counter_proc_1,
             id: "t1"
           )
           Task.new(
-            "t2",
             inputs: ["input"],
             always_run: false,
             proc: counter_proc_2,
