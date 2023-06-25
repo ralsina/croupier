@@ -149,7 +149,7 @@ with the text in lowercase.
 The second time we run it, it will *do nothing* because all tasks
 dependencies are unchanged.
 
-If we modify `index.txt` or `fileA` then one or both will tasks
+If we modify `index.txt` or `fileA` then one or both tasks
 will run, as needed.
 
 ## Development
