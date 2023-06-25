@@ -32,9 +32,8 @@
 
 * Maybe migrate to crotest or microtest (Nicer)
 
-  While there are a number of tet frameworks, the default spec one
+  While there are a number of test frameworks, the default spec one
   is ... OK. And I already have written a bunch of tests which I
-
   really don't want to redo.
 
   Maybe for another project.
