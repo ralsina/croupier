@@ -159,8 +159,7 @@ module Croupier
       # Tasks don't get stale twice
       return false unless @stale
 
-      @stale = (
-        @outputs.any? { |output| !File.exists?(output) } ||
+      @outputs.any? { |output| !File.exists?(output) } ||
         # Any input file is modified
         @inputs.any? { |input| TaskManager.modified.includes? input } ||
         # Any input file is created by a stale task
@@ -168,13 +167,11 @@ module Croupier
           TaskManager.tasks.has_key?(input) &&
             TaskManager.tasks[input].stale?
         }
-      )
-      @stale
     end
 
-    # A task is ready if it is stale but all its dependencies are not
+    # A task is ready if it is stale but all its inputs are not.
     # For inputs that are tasks, we check if they are stale
-    # For inputs that are not tasks, they should exist
+    # For inputs that are not tasks, they should exist as files
     def ready?
       (
         (stale? || always_run?) &&
