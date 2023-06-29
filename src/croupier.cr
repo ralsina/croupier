@@ -1,9 +1,10 @@
 # Croupier describes a task graph and lets you operate on them
-require "digest/sha1"
-require "yaml"
-require "crystalline"
-require "log"
 require "./topo_sort"
+require "crystalline"
+require "digest/sha1"
+require "inotify"
+require "log"
+require "yaml"
 
 module Croupier
   VERSION = "0.2.4"
@@ -214,6 +215,8 @@ module Croupier
     property this_run = {} of String => String
     # SAH1 of input files as of ending this run
     property next_run = {} of String => String
+
+    @queued_changes : Set(String) = Set(String).new
 
     # Remove all tasks and everything else (good for tests)
     def cleanup
@@ -451,6 +454,22 @@ module Croupier
       raise errors.join("\n") unless errors.empty?
       # FIXME It's losing outputs for some reason
       save_run
+    end
+
+    # Watch for changes in inputs.
+    #
+    # Changes are added to queued_changes
+    def watch
+      # FIXME this doesn't watch for file creation
+      all_inputs.each do |input|
+        if File.exists? input
+          Inotify.watch input do |event|
+            unless event.path.nil?
+              @queued_changes << event.path.to_s
+            end
+          end
+        end
+      end
     end
   end
 

@@ -686,6 +686,19 @@ describe "TaskManager" do
     end
   end
 
+  describe "watch" do
+    it "should queue changed inputs" do
+      with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
+        TaskManager.@queued_changes.empty?.should be_true
+        TaskManager.watch
+        File.open("input", "w") << "foo"
+        File.open("input2", "w") << "foo"
+        sleep(0.1.seconds)
+        TaskManager.@queued_changes.should eq Set{"input", "input2"}
+      end
+    end
+  end
+
   describe "dependencies" do
     it "should report all tasks required to produce an output" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
