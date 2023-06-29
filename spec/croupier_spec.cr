@@ -17,7 +17,7 @@ def with_scenario(
     "dummy"   => TaskProc.new { "" },
     "counter" => TaskProc.new {
       x += 1
-      ""
+      x.to_s
     },
     "output2" => TaskProc.new {
       x += 1
@@ -682,6 +682,52 @@ describe "TaskManager" do
 
         TaskManager.mark_stale_inputs
         TaskManager.modified.should eq Set{"input"}
+      end
+    end
+  end
+
+  describe "watch" do
+    it "should always start with no queued changes" do
+      with_scenario("basic", to_create: {"input" => "foo"}) do
+        TaskManager.watch
+        Fiber.yield
+        TaskManager.@queued_changes.empty?.should be_true
+      end
+    end
+
+    it "should queue changed inputs" do
+      with_scenario("basic", to_create: {"input" => "foo"}) do
+        TaskManager.watch
+        File.open("input", "w") << "bar"
+        # We need to yield or else the watch callbacks never run
+        Fiber.yield
+        TaskManager.@queued_changes.should eq Set{"input"}
+        File.open("input2", "w") << "foo"
+        Fiber.yield
+        TaskManager.@queued_changes.should eq Set{"input", "input2"}
+      end
+    end
+  end
+
+  describe "auto_run" do
+    it "should run tasks when inputs change" do
+      with_scenario("basic") do
+        TaskManager.auto_run
+        # We need to yield or else the watch callbacks never run
+        Fiber.yield
+        # At this point output3 doesn't exist
+        File.exists?("output3").should be_false
+        # We create input, which is output3's dependency
+        File.open("input", "w") << "bar"
+        Fiber.yield
+        # Tasks are not runnable (missing input2)
+        File.exists?("output3").should be_false
+        # We create input, which is output3's dependency
+        File.open("input2", "w") << "bar"
+        Fiber.yield
+        TaskManager.auto_stop
+        # And now output3 should exist
+        File.exists?("output3").should be_true
       end
     end
   end

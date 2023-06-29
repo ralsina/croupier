@@ -8,7 +8,7 @@ output1:
   always_run: false
   no_save: false
   stale: true
-  procs: "dummy"
+  procs: "counter"
 output2:
   id: 052cd9c6f04c7451518f3f12a3f48caad072ec2a
   name: name

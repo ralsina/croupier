@@ -1,5 +1,10 @@
 # Changelog
 
+## Version 0.3.1
+
+* Added auto_run / auto_stop that control a "watchdog" fiber that
+  automatically runs tasks if their dependencies change.
+
 ## Version 0.3.0
 
 * Removed name parameter
