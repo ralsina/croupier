@@ -10,6 +10,7 @@
 * Add directory dependencies (depend on all files in the tree)
 * Add wildcard dependencies (depend on all files / tasks matching a pattern)
 * Implement failed state for tasks
+* Implement a "watchdog" mode
 
 * ~~Rationalize id/name/output thing~~
 * ~~Make it fast again :-)~~ [Sort of]
