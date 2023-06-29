@@ -456,16 +456,74 @@ module Croupier
       save_run
     end
 
+    @stop_autorun = false
+
+    def stop_auto
+      @stop_autorun = true
+      while @stop_autorun
+        p! "task loop #{@stop_autorun}"
+        sleep 1.seconds # Give the task time to finish
+      end
+    end
+
+    def auto_run
+      @stop_autorun = false
+      watch
+      spawn do
+        loop do
+          p! "run loop #{@stop_autorun} #{@queued_changes}"
+
+          if @stop_autorun
+            p! "Stopping autorun"
+            @stop_autorun = false
+            break
+          end
+
+          begin
+            if @queued_changes.empty?
+              p! "empty"
+              Fiber.yield
+              sleep(1.seconds)
+            else
+              p! "running"
+              Log.info { "Detected changes in #{@queued_changes}" }
+              self.modified = @queued_changes
+              @queued_changes.clear
+              run_tasks
+            end
+          rescue ex
+            # Sometimes we can't run because not all dependencies
+            # are there yet. We'll try again later
+            unless ex.message.to_s.starts_with?("Can't run: Unknown inputs")
+              raise ex
+            end
+          ensure
+            @queued_changes.clear
+          end
+        end
+      end
+    end
+
     # Watch for changes in inputs.
+    # If an input has been changed BEFORE calling this method,
+    # it will NOT be detected as a change.
     #
     # Changes are added to queued_changes
     def watch
-      # FIXME this doesn't watch for file creation
       all_inputs.each do |input|
         if File.exists? input
           Inotify.watch input do |event|
-            unless event.path.nil?
-              @queued_changes << event.path.to_s
+            unless event.name.nil?
+              @queued_changes << event.name.to_s
+            end
+          end
+        else
+          # It's a file that doesn't exist. To detect it
+          # being created, we watch the directory
+          Inotify.watch((Path[input].parent).to_s) do |event|
+            if all_inputs.includes? event.name
+              # It's a file we care about, add it to the queue
+              @queued_changes << event.name.to_s
             end
           end
         end
