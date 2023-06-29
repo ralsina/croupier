@@ -3,7 +3,7 @@
 ## Things it may make sense to add
 
 * Instrument the concurrent runner using [Fiber Metrics](https://github.com/didactic-drunk/fiber_metrics.cr)
-* Once it works fine with files, generalize to a k/v store using [kiwi](ihttps://github.com/crystal-community/kiwi)
+* Once it works fine with files, generalize to a k/v store using [kiwi](https://github.com/crystal-community/kiwi)
 * Use state machines for tasks (see veelenga/aasm.cr)
 * Implement -k -i make options (keep going / ignore errors)
 * Add a faster stale input check using file dates instead of hashes (like make)
