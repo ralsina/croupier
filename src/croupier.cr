@@ -466,6 +466,8 @@ module Croupier
     end
 
     def auto_run
+      # TODO consider how to handle task trees with no inputs
+      # should they run? Once? Infinite times?
       watch
       spawn do
         loop do
@@ -482,14 +484,16 @@ module Croupier
               # we can't see the side effects without sleeping in
               # the tests.
               sleep 0.1.seconds
+              # next if @queued_changes.empty?
               Log.info { "Detected changes in #{@queued_changes}" }
-              self.modified = @queued_changes
+              self.modified += @queued_changes
               run_tasks
+              @queued_changes.clear
             rescue ex
               # Sometimes we can't run because not all dependencies
-              # are there yet. We'll try again later
+              # are there yet or whatever. We'll try again later
               unless ex.message.to_s.starts_with?("Can't run: Unknown inputs")
-                raise ex
+                Log.warn { "#{ex.message}" }
               end
             end
           end

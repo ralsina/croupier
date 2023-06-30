@@ -730,6 +730,53 @@ describe "TaskManager" do
         File.exists?("output3").should be_true
       end
     end
+
+    it "should not re-raise exceptions" do
+      with_scenario("empty") do
+        x = 0
+        error_proc = TaskProc.new { x += 1; raise "boom" }
+        Task.new(id: "t1", inputs: ["i"], proc: error_proc)
+        TaskManager.auto_run
+        Fiber.yield
+        File.open("i", "w") << "foo"
+        # We need to yield or else the watch callbacks never run
+        Fiber.yield
+        # auto_run logs all errors and continues, because it's
+        # normal to have failed runs in auto mode
+        TaskManager.auto_stop
+        # It should have run
+        (x > 0).should be_true
+      end
+    end
+
+    it "should not run when no inputs have changed" do
+      with_scenario("empty") do
+        x = 0
+        counter = TaskProc.new { x += 1; x.to_s }
+        Task.new(id: "t1", inputs: ["i"], proc: counter)
+        TaskManager.auto_run
+        # We need to yield or else the watch callbacks never run
+        Fiber.yield
+        TaskManager.auto_stop
+        # It should never have ran
+        x.should eq 0
+      end
+    end
+
+    it "should run only when inputs have changed" do
+      with_scenario("empty") do
+        x = 0
+        counter = TaskProc.new { x += 1; x.to_s }
+        Task.new(id: "t1", inputs: ["i"], proc: counter)
+        TaskManager.auto_run
+        Fiber.yield
+        File.open("i", "w") << "foo"
+        Fiber.yield
+        TaskManager.auto_stop
+        # It should only have ran once
+        x.should eq 1
+      end
+    end
   end
 
   describe "dependencies" do
