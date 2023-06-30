@@ -5,13 +5,13 @@
 * Instrument the concurrent runner using [Fiber Metrics](https://github.com/didactic-drunk/fiber_metrics.cr)
 * Once it works fine with files, generalize to a k/v store using [kiwi](ihttps://github.com/crystal-community/kiwi)
 * Use state machines for tasks (see veelenga/aasm.cr)
-* Implement -k -i make options (keep going / ignore errors)
 * Add a faster stale input check using file dates instead of hashes (like make)
 * Add directory dependencies (depend on all files in the tree)
 * Add wildcard dependencies (depend on all files / tasks matching a pattern)
 * Implement failed state for tasks
-* Implement a "watchdog" mode
+* Implement -k -i make options (keep going / ignore errors)
 
+* ~~Implement a "watchdog" mode~~
 * ~~Rationalize id/name/output thing~~
 * ~~Make it fast again :-)~~ [Sort of]
 * ~~Implement the missing parts of the parallel runner~~

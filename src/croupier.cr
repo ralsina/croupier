@@ -396,12 +396,13 @@ module Croupier
       finished = Set(Task).new
       outputs.each do |output|
         next unless tasks.has_key?(output)
-        next if finished.includes?(tasks[output])
-        next unless run_all || tasks[output].stale? || tasks[output].@always_run
+        t = tasks[output]
+        next if finished.includes?(t)
+        next unless run_all || t.stale? || t.@always_run
 
         Log.debug { "Running task for #{output}" }
-        tasks[output].run unless dry_run
-        finished << tasks[output]
+        t.run unless dry_run
+        finished << t
       end
       save_run
     end
@@ -456,49 +457,45 @@ module Croupier
       save_run
     end
 
-    @stop_autorun = false
+    @autorun_control = Channel(Bool).new
 
-    def stop_auto
-      @stop_autorun = true
-      while @stop_autorun
-        p! "task loop #{@stop_autorun}"
-        sleep 1.seconds # Give the task time to finish
-      end
+    def auto_stop
+      @autorun_control.send true
+      @autorun_control.receive?
+      @autorun_control = Channel(Bool).new
     end
 
     def auto_run
-      @stop_autorun = false
+      # TODO consider how to handle task trees with no inputs
+      # should they run? Once? Infinite times?
       watch
       spawn do
         loop do
-          p! "run loop #{@stop_autorun} #{@queued_changes}"
-
-          if @stop_autorun
-            p! "Stopping autorun"
-            @stop_autorun = false
+          select
+          when @autorun_control.receive
+            Log.info { "Stopping automatic run" }
+            @autorun_control.close
             break
-          end
-
-          begin
-            if @queued_changes.empty?
-              p! "empty"
-              Fiber.yield
-              sleep(1.seconds)
-            else
-              p! "running"
+          else
+            begin
+              # Sleep early is better for race conditions in tests
+              # If we sleep late, it's likely that we'll get the
+              # stop order and break the loop without running, so
+              # we can't see the side effects without sleeping in
+              # the tests.
+              sleep 0.1.seconds
+              # next if @queued_changes.empty?
               Log.info { "Detected changes in #{@queued_changes}" }
-              self.modified = @queued_changes
-              @queued_changes.clear
+              self.modified += @queued_changes
               run_tasks
+              @queued_changes.clear
+            rescue ex
+              # Sometimes we can't run because not all dependencies
+              # are there yet or whatever. We'll try again later
+              unless ex.message.to_s.starts_with?("Can't run: Unknown inputs")
+                Log.warn { "#{ex.message}" }
+              end
             end
-          rescue ex
-            # Sometimes we can't run because not all dependencies
-            # are there yet. We'll try again later
-            unless ex.message.to_s.starts_with?("Can't run: Unknown inputs")
-              raise ex
-            end
-          ensure
-            @queued_changes.clear
           end
         end
       end
