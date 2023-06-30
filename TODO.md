@@ -10,6 +10,7 @@
 * Add wildcard dependencies (depend on all files / tasks matching a pattern)
 * Implement failed state for tasks
 * Implement -k -i make options (keep going / ignore errors)
+* Decide what to do in auto_run when no task has inputs
 
 * ~~Implement a "watchdog" mode~~
 * ~~Rationalize id/name/output thing~~

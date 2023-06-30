@@ -735,7 +735,7 @@ describe "TaskManager" do
       with_scenario("empty") do
         x = 0
         error_proc = TaskProc.new { x += 1; raise "boom" }
-        Task.new(id: "t1", inputs: ["i"], proc: error_proc)
+        Task.new(output: "t1", inputs: ["i"], proc: error_proc)
         TaskManager.auto_run
         Fiber.yield
         File.open("i", "w") << "foo"
@@ -753,7 +753,7 @@ describe "TaskManager" do
       with_scenario("empty") do
         x = 0
         counter = TaskProc.new { x += 1; x.to_s }
-        Task.new(id: "t1", inputs: ["i"], proc: counter)
+        Task.new(output: "t1", inputs: ["i"], proc: counter)
         TaskManager.auto_run
         # We need to yield or else the watch callbacks never run
         Fiber.yield
@@ -764,6 +764,21 @@ describe "TaskManager" do
     end
 
     it "should run only when inputs have changed" do
+      with_scenario("empty") do
+        x = 0
+        counter = TaskProc.new { x += 1; x.to_s }
+        Task.new(output: "t1", inputs: ["i"], proc: counter)
+        TaskManager.auto_run
+        Fiber.yield
+        File.open("i", "w") << "foo"
+        Fiber.yield
+        TaskManager.auto_stop
+        # It should only have ran once
+        x.should eq 1
+      end
+    end
+
+    it "should run tasks without outputs" do
       with_scenario("empty") do
         x = 0
         counter = TaskProc.new { x += 1; x.to_s }

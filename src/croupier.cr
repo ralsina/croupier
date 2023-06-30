@@ -155,7 +155,6 @@ module Croupier
       return true if @always_run || @inputs.empty?
       # Tasks don't get stale twice
       return false unless @stale
-
       @outputs.any? { |output| !File.exists?(output) } ||
         # Any input file is modified
         @inputs.any? { |input| TaskManager.modified.includes? input } ||
@@ -204,7 +203,7 @@ module Croupier
     end
   end
 
-  struct TaskManagerType
+  class TaskManagerType
     # Registry of all tasks
     property tasks = {} of String => Croupier::Task
     # Registry of modified files, which will make tasks stale
@@ -488,12 +487,13 @@ module Croupier
               Log.info { "Detected changes in #{@queued_changes}" }
               self.modified += @queued_changes
               run_tasks
+              # Only clean queued changes after a successful run
               @queued_changes.clear
             rescue ex
               # Sometimes we can't run because not all dependencies
               # are there yet or whatever. We'll try again later
               unless ex.message.to_s.starts_with?("Can't run: Unknown inputs")
-                Log.warn { "#{ex.message}" }
+                Log.warn { "Automatic run failed (will retry): #{ex.message}" }
               end
             end
           end
