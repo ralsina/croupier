@@ -465,8 +465,7 @@ module Croupier
     end
 
     def auto_run
-      # TODO consider how to handle task trees with no inputs
-      # should they run? Once? Infinite times?
+      raise "No inputs to watch, can't auto_run" if all_inputs.empty?
       watch
       spawn do
         loop do

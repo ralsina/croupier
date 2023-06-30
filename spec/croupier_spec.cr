@@ -792,6 +792,15 @@ describe "TaskManager" do
         x.should eq 1
       end
     end
+
+    it "should not run if there are no inputs" do
+      with_scenario("empty") do
+        Task.new(id: "t1")
+        expect_raises(Exception, "No inputs to watch") do
+          TaskManager.auto_run
+        end
+      end
+    end
   end
 
   describe "dependencies" do
