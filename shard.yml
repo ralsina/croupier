@@ -1,5 +1,5 @@
 name: croupier
-version: 0.2.4
+version: 0.3.1
 description: A smart task definition and execution library
 authors:
   - Roberto Alsina <roberto.alsina@gmail.com>
@@ -11,6 +11,8 @@ license: MIT
 dependencies:
   crystalline:
     github: ralsina/crystalline
+  inotify:
+    github: petoem/inotify.cr
 
 # Not the same crystalline as above :-)
 crystalline:
