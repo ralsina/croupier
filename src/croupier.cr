@@ -1,9 +1,10 @@
 # Croupier describes a task graph and lets you operate on them
-require "digest/sha1"
-require "yaml"
-require "crystalline"
-require "log"
 require "./topo_sort"
+require "crystalline"
+require "digest/sha1"
+require "inotify"
+require "log"
+require "yaml"
 
 module Croupier
   VERSION = "0.3.1"
@@ -154,7 +155,6 @@ module Croupier
       return true if @always_run || @inputs.empty?
       # Tasks don't get stale twice
       return false unless @stale
-
       @outputs.any? { |output| !File.exists?(output) } ||
         # Any input file is modified
         @inputs.any? { |input| TaskManager.modified.includes? input } ||
@@ -203,7 +203,7 @@ module Croupier
     end
   end
 
-  struct TaskManagerType
+  class TaskManagerType
     # Registry of all tasks
     property tasks = {} of String => Croupier::Task
     # Registry of modified files, which will make tasks stale
@@ -214,6 +214,8 @@ module Croupier
     property this_run = {} of String => String
     # SAH1 of input files as of ending this run
     property next_run = {} of String => String
+
+    @queued_changes : Set(String) = Set(String).new
 
     # Remove all tasks and everything else (good for tests)
     def cleanup
@@ -393,12 +395,13 @@ module Croupier
       finished = Set(Task).new
       outputs.each do |output|
         next unless tasks.has_key?(output)
-        next if finished.includes?(tasks[output])
-        next unless run_all || tasks[output].stale? || tasks[output].@always_run
+        t = tasks[output]
+        next if finished.includes?(t)
+        next unless run_all || t.stale? || t.@always_run
 
         Log.debug { "Running task for #{output}" }
-        tasks[output].run unless dry_run
-        finished << tasks[output]
+        t.run unless dry_run
+        finished << t
       end
       save_run
     end
@@ -451,6 +454,77 @@ module Croupier
       raise errors.join("\n") unless errors.empty?
       # FIXME It's losing outputs for some reason
       save_run
+    end
+
+    @autorun_control = Channel(Bool).new
+
+    def auto_stop
+      @autorun_control.send true
+      @autorun_control.receive?
+      @autorun_control = Channel(Bool).new
+    end
+
+    def auto_run
+      # TODO consider how to handle task trees with no inputs
+      # should they run? Once? Infinite times?
+      watch
+      spawn do
+        loop do
+          select
+          when @autorun_control.receive
+            Log.info { "Stopping automatic run" }
+            @autorun_control.close
+            break
+          else
+            begin
+              # Sleep early is better for race conditions in tests
+              # If we sleep late, it's likely that we'll get the
+              # stop order and break the loop without running, so
+              # we can't see the side effects without sleeping in
+              # the tests.
+              sleep 0.1.seconds
+              # next if @queued_changes.empty?
+              Log.info { "Detected changes in #{@queued_changes}" }
+              self.modified += @queued_changes
+              run_tasks
+              # Only clean queued changes after a successful run
+              @queued_changes.clear
+            rescue ex
+              # Sometimes we can't run because not all dependencies
+              # are there yet or whatever. We'll try again later
+              unless ex.message.to_s.starts_with?("Can't run: Unknown inputs")
+                Log.warn { "Automatic run failed (will retry): #{ex.message}" }
+              end
+            end
+          end
+        end
+      end
+    end
+
+    # Watch for changes in inputs.
+    # If an input has been changed BEFORE calling this method,
+    # it will NOT be detected as a change.
+    #
+    # Changes are added to queued_changes
+    def watch
+      all_inputs.each do |input|
+        if File.exists? input
+          Inotify.watch input do |event|
+            unless event.name.nil?
+              @queued_changes << event.name.to_s
+            end
+          end
+        else
+          # It's a file that doesn't exist. To detect it
+          # being created, we watch the directory
+          Inotify.watch((Path[input].parent).to_s) do |event|
+            if all_inputs.includes? event.name
+              # It's a file we care about, add it to the queue
+              @queued_changes << event.name.to_s
+            end
+          end
+        end
+      end
     end
   end
 

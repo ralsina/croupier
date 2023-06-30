@@ -11,6 +11,8 @@ license: MIT
 dependencies:
   crystalline:
     github: ralsina/crystalline
+  inotify:
+    github: petoem/inotify.cr
 
 # Not the same crystalline as above :-)
 crystalline:
