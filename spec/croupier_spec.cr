@@ -703,8 +703,20 @@ describe "TaskManager" do
         Fiber.yield
         TaskManager.@queued_changes.should eq Set{"input"}
         File.open("input2", "w") << "foo"
-        Fiber.yield
+        sleep 0.1.seconds # FIXME: this should work with a yield
         TaskManager.@queued_changes.should eq Set{"input", "input2"}
+      end
+    end
+  end
+
+  describe "inputs" do
+    it "should list all inputs, including transitive dependencies" do
+      with_scenario("basic") do
+        TaskManager.inputs(["output1"]).empty?.should be_true
+        TaskManager.inputs(["output3"]).should eq Set{"input"}
+        TaskManager.inputs(["output4"]).should eq Set{"input", "output3"}
+        TaskManager.inputs(["output5"]).should eq Set{"input2"}
+        TaskManager.inputs(["output4", "output5"]).should eq Set{"input", "input2", "output3"}
       end
     end
   end
@@ -799,6 +811,40 @@ describe "TaskManager" do
         expect_raises(Exception, "No inputs to watch") do
           TaskManager.auto_run
         end
+      end
+    end
+
+    it "should only run the specified targets" do
+      with_scenario("basic") do
+        TaskManager.auto_run(targets: ["output3"])
+        # At this point output1/3 doesn't exist
+        File.exists?("output1").should be_false
+        File.exists?("output3").should be_false
+
+        # This triggers building output3
+        File.open("input", "w") << "bar"
+        Fiber.yield
+        TaskManager.auto_stop
+        # At this point output3 exists, output1 doesn't
+        File.exists?("output1").should be_false
+        File.exists?("output3").should be_true
+      end
+    end
+
+    it "should not be triggered by deps for not specified targets" do
+      with_scenario("basic") do
+        TaskManager.auto_run(targets: ["output5"])
+        sleep 0.2.seconds
+        # At this point output5 doesn't exist
+        File.exists?("output5").should be_false
+        File.exists?("output3").should be_false
+        # This triggers output3, which is not requested
+        File.open("input", "w") << "bar"
+        Fiber.yield
+        TaskManager.auto_stop
+        # No outputs created
+        File.exists?("output5").should be_false
+        File.exists?("output3").should be_false
       end
     end
   end
