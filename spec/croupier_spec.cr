@@ -834,6 +834,7 @@ describe "TaskManager" do
     it "should not be triggered by deps for not specified targets" do
       with_scenario("basic") do
         TaskManager.auto_run(targets: ["output5"])
+        sleep 0.2.seconds
         # At this point output5 doesn't exist
         File.exists?("output5").should be_false
         File.exists?("output3").should be_false

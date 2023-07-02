@@ -9,6 +9,8 @@
 * Uncommented skipping run if queued changes are empty in `auto_run`
 * Added support for calling `watch` only for the dependencies of
   specific targets
+* Simpler one-watcher implementation of watch
+* Only react to specific Inotify flags in watch
 
 ## Version 0.3.1
 

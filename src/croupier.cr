@@ -228,7 +228,6 @@ module Croupier
       @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
       @graph_sorted = [] of String
       @queued_changes.clear
-      stop_watch
     end
 
     # Tasks as a dependency graph sorted topologically
@@ -492,7 +491,7 @@ module Croupier
           when @autorun_control.receive
             Log.info { "Stopping automatic run" }
             @autorun_control.close
-            stop_watch
+            @@watcher.close # Stop watchers
             break
           else
             begin
@@ -521,13 +520,7 @@ module Croupier
     end
 
     # Internal array of watchers
-    @@watchers = Array(Inotify::Watcher).new
-
-    # Stop all inotify watches
-    def stop_watch
-      @@watchers.each(&.close)
-      @@watchers.clear
-    end
+    @@watcher = Inotify::Watcher.new
 
     # Watch for changes in inputs.
     # If an input has been changed BEFORE calling this method,
@@ -535,27 +528,28 @@ module Croupier
     #
     # Changes are added to queued_changes
     def watch(targets : Array(String) = [] of String)
+      @@watcher.close
+      @@watcher = Inotify::Watcher.new
       targets = tasks.keys if targets.empty?
       target_inputs = inputs(targets)
+
+      @@watcher.on_event do |event|
+        # It's a file we care about, add it to the queue
+        @queued_changes << event.name.to_s if target_inputs.includes? event.name.to_s
+      end
+
+      watch_flags = LibInotify::IN_CLOSE_WRITE | LibInotify::IN_CREATE | LibInotify::IN_MODIFY
+
       target_inputs.each do |input|
         if File.exists? input
-          @@watchers << Inotify.watch input do |event|
-            unless event.name.nil?
-              @queued_changes << event.name.to_s
-            end
-          end
+          @@watcher.watch input, watch_flags
         else
           # It's a file that doesn't exist. To detect it
-          # being created, we watch the directory
-
-          # FIXME this creates duplicated watchers if we are missing two
-          # files in the same directory
+          # being created, we watch the parent directory
+          # if we are not already watching it.
           path = (Path[input].parent).to_s
-          @@watchers << Inotify.watch(path) do |event|
-            if target_inputs.includes? event.name
-              # It's a file we care about, add it to the queue
-              @queued_changes << event.name.to_s
-            end
+          if !@@watcher.watching.includes?(path)
+            @@watcher.watch path, watch_flags
           end
         end
       end
