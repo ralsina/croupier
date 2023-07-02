@@ -1,5 +1,15 @@
 # Changelog
 
+## Version 0.3.2
+
+* Add support for running only some tasks in auto_run
+* Implemented `TaskManager.inputs` to get the inputs for
+  a given list of targets.
+* Implemented `TaskManager.stop_watch` and watcher cleanup
+* Uncommented skipping run if queued changes are empty in `auto_run`
+* Added support for calling `watch` only for the dependencies of
+  specific targets
+
 ## Version 0.3.1
 
 * Added auto_run / auto_stop that control a "watchdog" fiber that

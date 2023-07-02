@@ -7,7 +7,7 @@ require "log"
 require "yaml"
 
 module Croupier
-  VERSION = "0.3.1"
+  VERSION = "0.3.2"
 
   # A Task is an object that may generate output
   #
@@ -227,6 +227,8 @@ module Croupier
       @all_inputs.clear
       @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
       @graph_sorted = [] of String
+      @queued_changes.clear
+      stop_watch
     end
 
     # Tasks as a dependency graph sorted topologically
@@ -284,6 +286,20 @@ module Croupier
         @all_inputs.concat task.@inputs
       end
       @all_inputs
+    end
+
+    # The set of all inputs for the given tasks
+    def inputs(targets : Array(String))
+      result = Set(String).new
+      targets.each do |target|
+        raise "Unknown target #{target}" unless tasks.has_key? target
+      end
+
+      dependencies(targets).each do |task|
+        result.concat tasks[task].@inputs
+      end
+
+      result
     end
 
     # Get a task list of what tasks need to be done to produce `outputs`
@@ -464,15 +480,19 @@ module Croupier
       @autorun_control = Channel(Bool).new
     end
 
-    def auto_run
-      raise "No inputs to watch, can't auto_run" if all_inputs.empty?
-      watch
+    def auto_run(targets : Array(String) = [] of String)
+      targets = tasks.keys if targets.empty?
+      # Only want dependencies that are not tasks
+      inputs = inputs(targets)
+      raise "No inputs to watch, can't auto_run" if inputs.empty?
+      watch(targets)
       spawn do
         loop do
           select
           when @autorun_control.receive
             Log.info { "Stopping automatic run" }
             @autorun_control.close
+            stop_watch
             break
           else
             begin
@@ -482,10 +502,10 @@ module Croupier
               # we can't see the side effects without sleeping in
               # the tests.
               sleep 0.1.seconds
-              # next if @queued_changes.empty?
+              next if @queued_changes.empty?
               Log.info { "Detected changes in #{@queued_changes}" }
               self.modified += @queued_changes
-              run_tasks
+              run_tasks(targets: targets)
               # Only clean queued changes after a successful run
               @queued_changes.clear
             rescue ex
@@ -500,15 +520,26 @@ module Croupier
       end
     end
 
+    # Internal array of watchers
+    @@watchers = Array(Inotify::Watcher).new
+
+    # Stop all inotify watches
+    def stop_watch
+      @@watchers.each(&.close)
+      @@watchers.clear
+    end
+
     # Watch for changes in inputs.
     # If an input has been changed BEFORE calling this method,
     # it will NOT be detected as a change.
     #
     # Changes are added to queued_changes
-    def watch
-      all_inputs.each do |input|
+    def watch(targets : Array(String) = [] of String)
+      targets = tasks.keys if targets.empty?
+      target_inputs = inputs(targets)
+      target_inputs.each do |input|
         if File.exists? input
-          Inotify.watch input do |event|
+          @@watchers << Inotify.watch input do |event|
             unless event.name.nil?
               @queued_changes << event.name.to_s
             end
@@ -516,8 +547,12 @@ module Croupier
         else
           # It's a file that doesn't exist. To detect it
           # being created, we watch the directory
-          Inotify.watch((Path[input].parent).to_s) do |event|
-            if all_inputs.includes? event.name
+
+          # FIXME this creates duplicated watchers if we are missing two
+          # files in the same directory
+          path = (Path[input].parent).to_s
+          @@watchers << Inotify.watch(path) do |event|
+            if target_inputs.includes? event.name
               # It's a file we care about, add it to the queue
               @queued_changes << event.name.to_s
             end
