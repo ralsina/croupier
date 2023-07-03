@@ -430,7 +430,6 @@ module Croupier
         t = tasks.fetch(output, nil)
         next if t.nil? || finished.includes?(t)
         next unless run_all || t.stale? || t.@always_run
-
         Log.debug { "Running task for #{output}" }
         begin
           t.run unless dry_run
@@ -525,10 +524,13 @@ module Croupier
               # stop order and break the loop without running, so
               # we can't see the side effects without sleeping in
               # the tests.
-              sleep 0.1.seconds
+              sleep 0.01.seconds
               next if @queued_changes.empty?
               Log.info { "Detected changes in #{@queued_changes}" }
-              self.modified += @queued_changes
+              # Mark all targets as stale
+              targets.each { |t| tasks[t].stale = true }
+              @modified += @queued_changes
+              Log.debug { "Modified: #{@modified}" }
               run_tasks(targets: targets)
               # Only clean queued changes after a successful run
               @queued_changes.clear
@@ -560,13 +562,16 @@ module Croupier
 
       @@watcher.on_event do |event|
         # It's a file we care about, add it to the queue
-        Log.debug { "Detected change in #{event.path}" }
-        Log.trace { "Event: #{event}" }
         path = event.name || event.path
+        Log.debug { "Detected change in #{path}" }
+        Log.trace { "Event: #{event}" }
         @queued_changes << path.to_s if target_inputs.includes? path.to_s
       end
 
-      watch_flags = LibInotify::IN_CLOSE_WRITE | LibInotify::IN_CREATE | LibInotify::IN_MODIFY
+      watch_flags = LibInotify::IN_DELETE |
+                    LibInotify::IN_CREATE |
+                    LibInotify::IN_MODIFY |
+                    LibInotify::IN_CLOSE
 
       target_inputs.each do |input|
         if File.exists? input
