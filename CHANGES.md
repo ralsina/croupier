@@ -1,5 +1,10 @@
 # Changelog
 
+## Version 0.3.4
+
+* Fixed bug saving .croupier, was missing all inputs
+* Added tests for `TaskManager.save_run`
+
 ## Version 0.3.3
 
 * Implemented keep-going flag
