@@ -284,6 +284,22 @@ describe "Task" do
       end
     end
 
+    it "should fail if a task raises an exception" do
+      with_scenario("empty") do
+        b = TaskProc.new {
+          raise "foo"
+        }
+        t = Task.new(
+          "output2",
+          [] of String,
+          b,
+          no_save: true)
+        expect_raises(Exception, "Task 052cd9c::output2 failed: foo") do
+          t.run
+        end
+      end
+    end
+
     it "should record hash for outputs in the TaskManager" do
       with_scenario("empty") do
         t = Task.new(

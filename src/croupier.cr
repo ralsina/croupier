@@ -7,7 +7,7 @@ require "log"
 require "yaml"
 
 module Croupier
-  VERSION = "0.3.2"
+  VERSION = "0.3.3"
 
   # A Task is an object that may generate output
   #
@@ -107,7 +107,11 @@ module Croupier
       call_results = Array(String | Nil).new
       @procs.each do |proc|
         Fiber.yield
-        result = proc.call
+        begin
+          result = proc.call
+        rescue ex
+          raise "Task #{self} failed: #{ex}"
+        end
         if result.nil?
           call_results << nil
         elsif result.is_a?(String)
