@@ -1,5 +1,9 @@
 # Changelog
 
+## Version 0.3.3
+
+* Implemented keep-going flag
+
 ## Version 0.3.2
 
 * Add support for running only some tasks in auto_run

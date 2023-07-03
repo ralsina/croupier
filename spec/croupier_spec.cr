@@ -284,6 +284,16 @@ describe "Task" do
       end
     end
 
+    it "should fail if the proc raises an exception" do
+      with_scenario("empty") do
+        b = TaskProc.new { raise "foo" }
+        t = Task.new("output2", proc: b)
+        expect_raises(Exception, "Task 052cd9c::output2 failed: foo") do
+          t.run
+        end
+      end
+    end
+
     it "should record hash for outputs in the TaskManager" do
       with_scenario("empty") do
         t = Task.new(
@@ -461,7 +471,7 @@ describe "TaskManager" do
 
   # Run the same tests for parallel and serial execution of tasks
   [false, true].each do |parallel|
-    describe "run_task, parallel = #{parallel}" do
+    describe "run_tasks, parallel = #{parallel}" do
       it "should run all stale tasks when run_all is false" do
         with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
           TaskManager.tasks["output5"].stale = false
@@ -535,6 +545,43 @@ describe "TaskManager" do
           p = TaskProc.new { File.open("output1", "w") << ""; File.open("output2", "w") << ""; "" }
           Task.new(["output1", "output2"], proc: p, no_save: true)
           TaskManager.run_tasks(parallel: parallel)
+        end
+      end
+
+      it "should fail if a proc raises an exception" do
+        with_scenario("empty") do
+          b = TaskProc.new { raise "foo" }
+          Task.new(["output2"], proc: b)
+          expect_raises(Exception, "Task 052cd9c::output2 failed: foo") do
+            TaskManager.run_tasks(parallel: parallel)
+          end
+        end
+      end
+
+      # This is very hard to assert on parallel execution
+      unless parallel
+        it "should abort when a proc raises an exception" do
+          with_scenario("empty") do
+            b = TaskProc.new { raise "foo" }
+            Task.new(["output2"], proc: b)
+            Task.new(["output1"])
+            expect_raises(Exception, "Task 052cd9c::output2 failed: foo") do
+              TaskManager.run_tasks
+            end
+            # It should never have executed the second task
+            File.exists?("output1").should be_false
+          end
+        end
+      end
+
+      it "should not abort when a proc raises an exception with keep_going flag" do
+        with_scenario("empty") do
+          Task.new(["output2"], proc: TaskProc.new { raise "foo" })
+          Task.new(["output1"], proc: TaskProc.new { "foo" })
+          # Even though a proc raises an exception, it's caught
+          TaskManager.run_tasks(parallel: parallel, keep_going: true)
+          # It should never have executed the second task
+          File.exists?("output1").should be_true
         end
       end
 
