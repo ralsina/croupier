@@ -8,10 +8,9 @@
 * Add a faster stale input check using file dates instead of hashes (like make)
 * Add directory dependencies (depend on all files in the tree)
 * Add wildcard dependencies (depend on all files / tasks matching a pattern)
-* Implement failed state for tasks
-* Implement -k -i make options (keep going / ignore errors)
-* Decide what to do in auto_run when no task has inputs
 
+* ~~Decide what to do in auto_run when no task has inputs~~
+* ~~Implement -k make option (keep going)~~
 * ~~Implement a "watchdog" mode~~
 * ~~Rationalize id/name/output thing~~
 * ~~Make it fast again :-)~~ [Sort of]
@@ -51,3 +50,7 @@
   If the file is created by another previous task t1, then this one
   will be merged into it, which means it doesn't need to have the
   input declared, and it will always run after t1, which looks ok.
+
+* Implement failed state for tasks
+
+  Not really needed.
