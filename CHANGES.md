@@ -2,7 +2,7 @@
 
 ## Version 0.3.3
 
-* Implement keep-going flag
+* Implemented keep-going flag
 
 ## Version 0.3.2
 

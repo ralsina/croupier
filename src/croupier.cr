@@ -384,33 +384,49 @@ module Croupier
     #
     # If `run_all` is true, run non-stale tasks too
     # If `dry_run` is true, only log what would be done, but don't do it
-    def run_tasks(run_all : Bool = false, dry_run : Bool = false, parallel : Bool = false)
+    # If `parallel` is true, run tasks in parallel
+    # If `keep_going` is true, keep going even if a task fails
+    def run_tasks(
+      run_all : Bool = false,
+      dry_run : Bool = false,
+      parallel : Bool = false,
+      keep_going : Bool = false
+    )
       mark_stale_inputs
       _, tasks = sorted_task_graph
       check_dependencies
-      run_tasks(tasks, run_all, dry_run, parallel)
+      run_tasks(tasks, run_all, dry_run, parallel, keep_going)
     end
 
     # Run the tasks needed to create or update the requested targets
-    # run_all will run all tasks, not just the ones that are stale
-    # dry_run will only log what would be done, but not actually do it
+    #
+    # If `run_all` is true, run non-stale tasks too
+    # If `dry_run` is true, only log what would be done, but don't do it
+    # If `parallel` is true, run tasks in parallel
+    # If `keep_going` is true, keep going even if a task fails
     def run_tasks(
       targets : Array(String),
       run_all : Bool = false,
       dry_run : Bool = false,
-      parallel : Bool = false
+      parallel : Bool = false,
+      keep_going : Bool = false
     )
       mark_stale_inputs
       tasks = dependencies(targets)
       if parallel
-        _run_tasks_parallel(tasks, run_all, dry_run)
+        _run_tasks_parallel(tasks, run_all, dry_run, keep_going)
       else
-        _run_tasks(tasks, run_all, dry_run)
+        _run_tasks(tasks, run_all, dry_run, keep_going)
       end
     end
 
-    # Helper to run tasks
-    def _run_tasks(outputs, run_all : Bool = false, dry_run : Bool = false)
+    # Internal helper to run tasks serially
+    def _run_tasks(
+      outputs,
+      run_all : Bool = false,
+      dry_run : Bool = false,
+      keep_going : Bool = false
+    )
       finished = Set(Task).new
       outputs.each do |output|
         next unless tasks.has_key?(output)
@@ -419,13 +435,18 @@ module Croupier
         next unless run_all || t.stale? || t.@always_run
 
         Log.debug { "Running task for #{output}" }
-        t.run unless dry_run
+        begin
+          t.run unless dry_run
+        rescue ex
+          Log.error { "Error running task for #{output}: #{ex}" }
+          raise ex unless keep_going
+        end
         finished << t
       end
       save_run
     end
 
-    # Run all stale tasks as concurrently as possible.
+    # Internal helper to run tasks concurrently
     #
     # Whenever a task is ready, launch it in a separate fiber
     # This is only concurrency, not parallelism, but on tests
@@ -435,7 +456,8 @@ module Croupier
     def _run_tasks_parallel(
       targets : Array(String) = [] of String,
       run_all : Bool = false,
-      dry_run : Bool = false
+      dry_run : Bool = false,
+      keep_going : Bool = false # FIXME: implement
     )
       mark_stale_inputs
 
