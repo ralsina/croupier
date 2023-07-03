@@ -152,9 +152,53 @@ dependencies are unchanged.
 If we modify `index.txt` or `fileA` then one or both tasks
 will run, as needed.
 
+## Auto Mode
+
+Besides `run_tasks`, there is another way to run your tasks,
+`auto_run`. It will run tasks as needed, when their input
+files change. This allows for some sorts of "continuous build"
+which is useful for things like web development.
+
+You start the auto mode with `TaskManager.auto_run` and stop
+it with `TaskManager.auto_stop`. It runs in a separate fiber
+so your main fiber needs to do something else and yield. For
+details on that, see [Crystal's docs.](https://crystal-lang.org/reference/1.8/guides/concurrency.html)
+
+This feature is still under development and may change, but here
+is an example of how it works, taken from the specs:
+
+```crystal
+# We create a proc that has a visible side effect
+x = 0
+counter = TaskProc.new { x += 1; x.to_s }
+# This task depends on a file called "i" and produces "t1"
+Task.new(output: "t1", inputs: ["i"], proc: counter)
+# Launch in auto mode
+TaskManager.auto_run
+
+# We have to yield and/or do stuff in the main fiber
+# so the auto_run fibers can run
+Fiber.yield
+
+# Trigger a build by creating the dependency
+File.open("i", "w") << "foo"
+Fiber.yield
+
+# Stop the auto_run
+TaskManager.auto_stop
+
+# It should only have ran once
+x.should eq 1
+File.exists?("t1").should eq true
+```
+
 ## Development
 
 Let's try to keep test coverage good :-)
+
+* To run tests: `make test` or `crystal spec`
+* To check coverage: `make coverage`
+* To run mutation testing: `make mutation`
 
 Other than that, anything is fair game. In the TODO.md file there is a
 section for things that were considered and decided to be a bad idea,
