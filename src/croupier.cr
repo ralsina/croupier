@@ -464,11 +464,12 @@ module Croupier
       targets = tasks.keys if targets.empty?
       _tasks = dependencies(targets)
       finished_tasks = Set(Task).new
+      failed_tasks = Set(Task).new
       errors = [] of String
 
       loop do
         stale_tasks = (_tasks.map { |t| tasks[t] }).select(&.stale?).reject { |t|
-          finished_tasks.includes?(t)
+          finished_tasks.includes?(t) || failed_tasks.includes?(t)
         }
 
         break if stale_tasks.empty?
@@ -482,6 +483,7 @@ module Croupier
             begin
               t.run unless dry_run
             rescue ex
+              failed_tasks << t
               errors << ex.message.to_s
             ensure
               # Task is done, do not run again
@@ -492,7 +494,7 @@ module Croupier
         end
         sleep(0.001)
       end
-      raise errors.join("\n") unless errors.empty?
+      raise errors.join("\n") unless errors.empty? unless keep_going
       # FIXME It's losing outputs for some reason
       save_run
     end

@@ -574,8 +574,6 @@ describe "TaskManager" do
         end
       end
 
-      # Because of the concurrency this often passes when it shouldn't
-      # in parallel mode, so the test is useless in that case.
       it "should not abort when a proc raises an exception with keep_going flag" do
         with_scenario("empty") do
           Task.new(["output2"], proc: TaskProc.new { raise "foo" })
