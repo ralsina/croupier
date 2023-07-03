@@ -544,7 +544,7 @@ module Croupier
       end
     end
 
-    # Internal array of watchers
+    # Filesystem watcher
     @@watcher = Inotify::Watcher.new
 
     # Watch for changes in inputs.
@@ -560,7 +560,10 @@ module Croupier
 
       @@watcher.on_event do |event|
         # It's a file we care about, add it to the queue
-        @queued_changes << event.name.to_s if target_inputs.includes? event.name.to_s
+        Log.debug { "Detected change in #{event.path}" }
+        Log.trace { "Event: #{event}" }
+        path = event.name || event.path
+        @queued_changes << path.to_s if target_inputs.includes? path.to_s
       end
 
       watch_flags = LibInotify::IN_CLOSE_WRITE | LibInotify::IN_CREATE | LibInotify::IN_MODIFY

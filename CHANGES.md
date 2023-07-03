@@ -4,6 +4,7 @@
 
 * Fixed bug saving .croupier, was missing all inputs
 * Added tests for `TaskManager.save_run`
+* Fixed bug in inotify watcher path lookup
 
 ## Version 0.3.3
 
