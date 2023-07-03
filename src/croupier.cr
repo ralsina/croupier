@@ -7,7 +7,7 @@ require "log"
 require "yaml"
 
 module Croupier
-  VERSION = "0.3.3"
+  VERSION = "0.3.4"
 
   # A Task is an object that may generate output
   #
@@ -345,7 +345,7 @@ module Croupier
       else
         last_run = {} of String => String
       end
-      (this_run = scan_inputs).each do |file, sha1|
+      (@this_run = scan_inputs).each do |file, sha1|
         if last_run.fetch(file, "") != sha1
           modified << file
         end
@@ -363,7 +363,6 @@ module Croupier
     end
 
     # We ran all tasks, store the current state
-    # FIXME add tests for this
     def save_run
       File.open(".croupier", "w") do |file|
         file << YAML.dump(this_run.merge next_run)
@@ -392,7 +391,6 @@ module Croupier
       parallel : Bool = false,
       keep_going : Bool = false
     )
-      mark_stale_inputs
       _, tasks = sorted_task_graph
       check_dependencies
       run_tasks(tasks, run_all, dry_run, parallel, keep_going)
@@ -411,7 +409,6 @@ module Croupier
       parallel : Bool = false,
       keep_going : Bool = false
     )
-      mark_stale_inputs
       tasks = dependencies(targets)
       if parallel
         _run_tasks_parallel(tasks, run_all, dry_run, keep_going)
@@ -427,11 +424,11 @@ module Croupier
       dry_run : Bool = false,
       keep_going : Bool = false
     )
+      mark_stale_inputs
       finished = Set(Task).new
       outputs.each do |output|
-        next unless tasks.has_key?(output)
-        t = tasks[output]
-        next if finished.includes?(t)
+        t = tasks.fetch(output, nil)
+        next if t.nil? || finished.includes?(t)
         next unless run_all || t.stale? || t.@always_run
 
         Log.debug { "Running task for #{output}" }

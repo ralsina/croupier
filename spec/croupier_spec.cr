@@ -896,6 +896,31 @@ describe "TaskManager" do
     end
   end
 
+  describe "save_run" do
+    it "should save this_run and next_run merged" do
+      with_scenario("empty") do
+        TaskManager.this_run = {"foo" => "bar"}
+        TaskManager.next_run = {"bat" => "quux"}
+        TaskManager.save_run
+        File.read(".croupier").should eq %(---\nfoo: bar\nbat: quux\n)
+      end
+    end
+
+    it "should save all inputs and outputs on a full run" do
+      with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
+        TaskManager.run_tasks
+        File.read(".croupier").should eq "---\n" +
+                                         "input: 0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33\n" +
+                                         "input2: 62cdb7020ff920e5aa642c3d4066950dd1f01f4d\n" +
+                                         "output3: da39a3ee5e6b4b0d3255bfef95601890afd80709\n" +
+                                         "output4: da39a3ee5e6b4b0d3255bfef95601890afd80709\n" +
+                                         "output5: da39a3ee5e6b4b0d3255bfef95601890afd80709\n" +
+                                         "output1: 356a192b7913b04c54574d18c28d46e6395428ab\n" +
+                                         "output2: 0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33\n"
+      end
+    end
+  end
+
   describe "dependencies" do
     it "should report all tasks required to produce an output" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
