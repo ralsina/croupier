@@ -429,9 +429,8 @@ module Croupier
     )
       finished = Set(Task).new
       outputs.each do |output|
-        next unless tasks.has_key?(output)
-        t = tasks[output]
-        next if finished.includes?(t)
+        t = tasks.fetch(output, nil)
+        next if t.nil? || finished.includes?(t)
         next unless run_all || t.stale? || t.@always_run
 
         Log.debug { "Running task for #{output}" }
