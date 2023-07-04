@@ -878,6 +878,29 @@ describe "TaskManager" do
       end
     end
 
+    it "should run on every modification of inputs" do
+      with_scenario("basic") do
+        TaskManager.auto_run(targets: ["output3"])
+        # At this point output3 doesn't exist
+        File.exists?("output3").should be_false
+        # This triggers building output3
+        File.open("input", "w") << "bar1"
+        # The timing here is tricky, we need to wait longer
+        # than the watch interval, but not too long because
+        # that makes the test slow
+        sleep 0.02.seconds
+        File.exists?("output3").should be_true
+        # We delete things, and then trigger another build
+        File.delete("output3")
+        File.delete("input")
+        File.open("input", "w") << "bar2"
+        Fiber.yield
+        sleep 0.02.seconds
+        TaskManager.auto_stop
+        File.exists?("output3").should be_true
+      end
+    end
+
     it "should not be triggered by deps for not specified targets" do
       with_scenario("basic") do
         TaskManager.auto_run(targets: ["output5"])
