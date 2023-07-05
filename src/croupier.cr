@@ -39,14 +39,20 @@ module Croupier
 
     # Create a task with zero or more outputs.
     #
-    # `output` is an array of files that the task generates
-    # `inputs` is an array of files or task ids that the task depends on
+    # `output` is an array of files or k/v store keys that the task generates
+    # `inputs` is an array of files, task ids or k/v store keys that the
+    # task depends on.
     # `proc` is a proc that is executed when the task is run
     # `no_save` is a boolean that tells croupier that the task will save the files itself
     # `id` is a unique identifier for the task. If the task has no outputs,
     # it *must* have an id. If not given, it's calculated as a hash of outputs.
     # `always_run` is a boolean that tells croupier that the task is always
     #   stale regardless of its dependencies' state
+    #
+    # k/v store keys are of the form `kv://key`, and are used to store
+    # intermediate data in a key/value store. They are not saved to disk.
+    #
+    # To access k/v data in your proc, you can use `TaskManager.store.get(key)`.
     #
     # Important: tasks will be registered in TaskManager. If the new task
     # conflicts in id/outputs with others, it will be merged, and the new

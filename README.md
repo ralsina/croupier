@@ -17,14 +17,15 @@ can be used for [dataflow programming](https://en.wikipedia.org/wiki/Dataflow_pr
 You use Croupier to define tasks. Tasks have:
 
 * An id
-* Zero or more input files
-* Zero or more output files
+* Zero or more input files or k/v store keys
+* Zero or more output files or k/v store keys
 * A `Proc` that consumes the inputs and returns a string
 * After the `Proc` returns data which is saved to the output(s)
   unless the task has the `no_save` flag set to `true`, in which
   case it's expected to have already saved it.
 
   **Note:** the return value for procs depends on several factors, see below.
+  **Note:** A reference to a k/v key is of the form `kv://mykey`
 
 And here is the fun part:
 
