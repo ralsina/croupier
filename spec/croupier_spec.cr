@@ -9,7 +9,7 @@ def with_scenario(
 )
   # Setup logging, helps coverage
   logs = IO::Memory.new
-  Log.setup(:debug, Log::IOBackend.new(io: logs))
+  Log.setup(:trace, Log::IOBackend.new(io: logs))
 
   # Library of procs
   x = 0
@@ -175,6 +175,10 @@ describe "Task" do
         TaskManager.tasks["output2"].should eq t1
       end
     end
+
+    it "should allow creating tasks using @store as i/o" do
+      Task.new(outputs: ["kv://o1", "kv://o2"], inputs: ["kv://i1"])
+    end
   end
 
   describe "merge" do
@@ -309,6 +313,20 @@ describe "Task" do
           "609df08764e873e6f090a0064b38b2c5422cdf87"
       end
     end
+
+    it "should run if inputs are k/v store" do
+      with_scenario("empty") do
+        proc = TaskProc.new {
+          x = TaskManager.@store.get("i1").to_s
+          ["sarasa", x]
+        }
+        t = Task.new(outputs: ["kv://o1", "kv://o2"], inputs: ["kv://i1"], proc: proc)
+        TaskManager.@store.set("i1", "foo")
+        t.run
+        TaskManager.@store.get("o1").should eq "sarasa"
+        TaskManager.@store.get("o2").should eq "foo"
+      end
+    end
   end
 
   describe "stale?" do
@@ -392,6 +410,27 @@ describe "Task" do
         t.stale = true # Force recalculation of stale state
         t.stale.should be_true
         File.delete?("output1")
+        t.stale?.should be_true
+      end
+    end
+
+    it "should always consider tasks with kv inputs as stale" do
+      with_scenario("empty") do
+        t = Task.new(id: "t", inputs: ["kv://foo"])
+        t.stale?.should be_true
+        t.run
+        t.stale = true
+        t.stale?.should be_true
+      end
+    end
+
+    it "should always consider tasks with kv outputs as stale" do
+      with_scenario("empty") do
+        p = TaskProc.new { "bar" }
+        t = Task.new(id: "t", inputs: ["foo"], outputs: ["kv://bar"], proc: p)
+        t.stale?.should be_true
+        t.run
+        t.stale = true
         t.stale?.should be_true
       end
     end
@@ -963,6 +1002,14 @@ describe "TaskManager" do
           TaskManager.dependencies("output99")
         end
       end
+    end
+  end
+
+  describe "store" do
+    it "should save and recover values" do
+      TaskManager.@store.get("foo").should be_nil
+      TaskManager.@store.set("foo", "bar")
+      TaskManager.@store["foo"].should eq "bar"
     end
   end
 end

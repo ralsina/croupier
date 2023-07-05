@@ -3,11 +3,12 @@ require "./topo_sort"
 require "crystalline"
 require "digest/sha1"
 require "inotify"
+require "kiwi/memory_store"
 require "log"
 require "yaml"
 
 module Croupier
-  VERSION = "0.3.4"
+  VERSION = "0.3.5"
 
   # A Task is an object that may generate output
   #
@@ -38,14 +39,20 @@ module Croupier
 
     # Create a task with zero or more outputs.
     #
-    # `output` is an array of files that the task generates
-    # `inputs` is an array of files or task ids that the task depends on
+    # `output` is an array of files or k/v store keys that the task generates
+    # `inputs` is an array of files, task ids or k/v store keys that the
+    # task depends on.
     # `proc` is a proc that is executed when the task is run
     # `no_save` is a boolean that tells croupier that the task will save the files itself
     # `id` is a unique identifier for the task. If the task has no outputs,
     # it *must* have an id. If not given, it's calculated as a hash of outputs.
     # `always_run` is a boolean that tells croupier that the task is always
     #   stale regardless of its dependencies' state
+    #
+    # k/v store keys are of the form `kv://key`, and are used to store
+    # intermediate data in a key/value store. They are not saved to disk.
+    #
+    # To access k/v data in your proc, you can use `TaskManager.store.get(key)`.
     #
     # Important: tasks will be registered in TaskManager. If the new task
     # conflicts in id/outputs with others, it will be merged, and the new
@@ -125,6 +132,8 @@ module Croupier
         # The task saved the data so we should not do it
         # but we need to update hashes
         @outputs.reject(&.empty?).each do |output|
+          # If the output is a kv:// url, we don't need to check if it exists
+          next if output.lchop?("kv://")
           if !File.exists?(output)
             raise "Task #{self} did not generate #{output}"
           end
@@ -135,11 +144,16 @@ module Croupier
         begin
           @outputs.zip(call_results) do |output, call_result|
             raise "Task #{self} did not return any data for output #{output}" if call_result.nil?
-            Dir.mkdir_p(File.dirname output)
-            File.open(output, "w") do |io|
-              io << call_result
+            if k = output.lchop?("kv://")
+              # If the output is a kv:// url, we save it in the k/v store
+              TaskManager.@store.set(k, call_result)
+            else
+              Dir.mkdir_p(File.dirname output)
+              File.open(output, "w") do |io|
+                io << call_result
+              end
+              TaskManager.next_run[output] = Digest::SHA1.hexdigest(call_result)
             end
-            TaskManager.next_run[output] = Digest::SHA1.hexdigest(call_result)
           end
         rescue IndexError
           raise "Task #{self} did not return the correct number of outputs"
@@ -159,7 +173,12 @@ module Croupier
       return true if @always_run || @inputs.empty?
       # Tasks don't get stale twice
       return false unless @stale
-      @outputs.any? { |output| !File.exists?(output) } ||
+      # An input is from the k/v store
+      @inputs.any?(&.lchop?("kv://")) ||
+        # An output is from the k/v store
+        @outputs.any?(&.lchop?("kv://")) ||
+        # An output file is missing
+        @outputs.any? { |output| !File.exists?(output) } ||
         # Any input file is modified
         @inputs.any? { |input| TaskManager.modified.includes? input } ||
         # Any input file is created by a stale task
@@ -219,7 +238,11 @@ module Croupier
     # SAH1 of input files as of ending this run
     property next_run = {} of String => String
 
+    # Files with changes detected in auto_run
     @queued_changes : Set(String) = Set(String).new
+
+    # Key/Value store
+    @store = Kiwi::MemoryStore.new
 
     # Remove all tasks and everything else (good for tests)
     def cleanup
@@ -373,7 +396,9 @@ module Croupier
     # They should all be either task outputs or existing files
     def check_dependencies
       bad_inputs = all_inputs.select { |input|
-        !tasks.has_key?(input) && !File.exists?(input)
+        !input.lchop?("kv://") &&
+          !tasks.has_key?(input) &&
+          !File.exists?(input)
       }
       raise "Can't run: Unknown inputs #{bad_inputs.join(", ")}" \
          unless bad_inputs.empty?

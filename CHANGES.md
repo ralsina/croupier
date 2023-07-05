@@ -1,5 +1,9 @@
 # Changelog
 
+## Version 0.3.5
+
+* Implement k/v data as input/output for tasks
+
 ## Version 0.3.4
 
 * Fixed bug saving .croupier, was missing all inputs
