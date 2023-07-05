@@ -1,4 +1,5 @@
 require "./spec_helper"
+require "file_utils"
 include Croupier
 
 def with_scenario(
@@ -29,7 +30,7 @@ def with_scenario(
     # Clean up
     File.delete?(".croupier")
     Dir.glob("*").each do |f|
-      File.delete?(f) unless keep.includes?(f) || f == "tasks.yml"
+      FileUtils.rm_rf(f) unless keep.includes?(f) || f == "tasks.yml"
     end
     TaskManager.cleanup
 
@@ -1007,9 +1008,32 @@ describe "TaskManager" do
 
   describe "store" do
     it "should save and recover values" do
-      TaskManager.@store.get("foo").should be_nil
-      TaskManager.@store.set("foo", "bar")
-      TaskManager.@store["foo"].should eq "bar"
+      with_scenario("empty") do
+        TaskManager.@store.get("foo").should be_nil
+        TaskManager.@store.set("foo", "bar")
+        TaskManager.@store["foo"].should eq "bar"
+      end
+    end
+
+    it "should be an empty MemoryStore by default" do
+      with_scenario("empty") do
+        # This would raise an exception if it weren´t one
+        TaskManager.@store_path.nil?.should be_true
+        TaskManager.@store.as(Kiwi::MemoryStore).@mem.empty?.should be_true
+      end
+    end
+
+    it "should be persistant after calling use_persistent_store" do
+      with_scenario("empty") do
+        TaskManager.@store_path.nil?.should be_true
+        TaskManager.@store.as(Kiwi::MemoryStore).@mem.empty?.should be_true
+        TaskManager.@store["foo"] = "bar"
+        TaskManager.use_persistent_store("store")
+        # This would raise an exception if it weren´t a FileStore
+        TaskManager.@store.as(Kiwi::FileStore)
+        # Data should be migrated
+        TaskManager.@store["foo"].should eq "bar"
+      end
     end
   end
 end

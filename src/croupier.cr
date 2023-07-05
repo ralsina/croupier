@@ -3,6 +3,7 @@ require "./topo_sort"
 require "crystalline"
 require "digest/sha1"
 require "inotify"
+require "kiwi/file_store"
 require "kiwi/memory_store"
 require "log"
 require "yaml"
@@ -242,7 +243,23 @@ module Croupier
     @queued_changes : Set(String) = Set(String).new
 
     # Key/Value store
-    @store = Kiwi::MemoryStore.new
+    @store : Kiwi::Store = Kiwi::MemoryStore.new
+    @store_path : String | Nil = nil
+
+    # Use a persistent k/v store in this path instead of
+    # the default memory store
+    def use_persistent_store(path : String)
+      return if path == @store_path
+      raise "Can't change persistent k/v store path" unless @store_path.nil?
+      new_store = Kiwi::FileStore.new(path)
+      if @store_path.nil?
+        # Convert from MemoryStore to FileStore
+        old_store = @store.as(Kiwi::MemoryStore)
+        old_store.@mem.each { |k, v| new_store[k] = v }
+        @store = new_store
+      end
+      Log.info { "Storing k/v data in #{path}" }
+    end
 
     # Remove all tasks and everything else (good for tests)
     def cleanup
@@ -255,6 +272,8 @@ module Croupier
       @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
       @graph_sorted = [] of String
       @queued_changes.clear
+      @store_path = nil
+      @store = Kiwi::MemoryStore.new
     end
 
     # Tasks as a dependency graph sorted topologically
