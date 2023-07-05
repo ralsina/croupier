@@ -3,6 +3,7 @@ require "./topo_sort"
 require "crystalline"
 require "digest/sha1"
 require "inotify"
+require "kiwi/memory_store"
 require "log"
 require "yaml"
 
@@ -219,7 +220,11 @@ module Croupier
     # SAH1 of input files as of ending this run
     property next_run = {} of String => String
 
+    # Files with changes detected in auto_run
     @queued_changes : Set(String) = Set(String).new
+
+    # Key/Value store
+    @store = Kiwi::MemoryStore.new
 
     # Remove all tasks and everything else (good for tests)
     def cleanup

@@ -175,6 +175,10 @@ describe "Task" do
         TaskManager.tasks["output2"].should eq t1
       end
     end
+
+    it "should allow creating tasks using @store as i/o" do
+      Task.new(outputs: ["kv://o1", "kv://o2"], inputs: ["kv://i1"])
+    end
   end
 
   describe "merge" do
@@ -307,6 +311,20 @@ describe "Task" do
         # this is the sha1sum of "sarasa"
         TaskManager.next_run["output2"].should eq \
           "609df08764e873e6f090a0064b38b2c5422cdf87"
+      end
+    end
+
+    it "should use the k/v store when requested" do
+      with_scenario("empty") do
+        proc = TaskProc.new {
+          x = TaskManager.@store.get("i1").to_s
+          ["sarasa", x]
+        }
+        Task.new(outputs: ["kv://o1", "kv://o2"], inputs: ["kv://i1"], proc: proc)
+        TaskManager.@store.set("i1", "foo")
+        TaskManager.run_tasks
+        TaskManager.@store.get("o1").should eq "sarasa"
+        TaskManager.@store.get("o2").should eq "foo"
       end
     end
   end
@@ -963,6 +981,14 @@ describe "TaskManager" do
           TaskManager.dependencies("output99")
         end
       end
+    end
+  end
+
+  describe "store" do
+    it "should save and recover values" do
+      TaskManager.@store.get("foo").should be_nil
+      TaskManager.@store.set("foo", "bar")
+      TaskManager.@store["foo"].should eq "bar"
     end
   end
 end

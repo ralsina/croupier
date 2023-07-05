@@ -14,8 +14,8 @@ dependencies:
   inotify:
     github: petoem/inotify.cr
   kiwi:
-    github: crystal-community/kiwi
-    version: ~> 0.1.0
+    github: ralsina/kiwi
+    branch: master
 
 # Not the same crystalline as above :-)
 crystalline:
