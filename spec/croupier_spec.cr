@@ -314,15 +314,15 @@ describe "Task" do
       end
     end
 
-    it "should use the k/v store when requested" do
+    it "should run if inputs are k/v store" do
       with_scenario("empty") do
         proc = TaskProc.new {
           x = TaskManager.@store.get("i1").to_s
           ["sarasa", x]
         }
-        Task.new(outputs: ["kv://o1", "kv://o2"], inputs: ["kv://i1"], proc: proc)
+        t = Task.new(outputs: ["kv://o1", "kv://o2"], inputs: ["kv://i1"], proc: proc)
         TaskManager.@store.set("i1", "foo")
-        TaskManager.run_tasks
+        t.run
         TaskManager.@store.get("o1").should eq "sarasa"
         TaskManager.@store.get("o2").should eq "foo"
       end

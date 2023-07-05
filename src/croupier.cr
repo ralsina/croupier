@@ -126,6 +126,8 @@ module Croupier
         # The task saved the data so we should not do it
         # but we need to update hashes
         @outputs.reject(&.empty?).each do |output|
+          # If the output is a kv:// url, we don't need to check if it exists
+          next if output.lchop?("kv://")
           if !File.exists?(output)
             raise "Task #{self} did not generate #{output}"
           end
@@ -136,11 +138,16 @@ module Croupier
         begin
           @outputs.zip(call_results) do |output, call_result|
             raise "Task #{self} did not return any data for output #{output}" if call_result.nil?
-            Dir.mkdir_p(File.dirname output)
-            File.open(output, "w") do |io|
-              io << call_result
+            if k = output.lchop?("kv://")
+              # If the output is a kv:// url, we save it in the k/v store
+              TaskManager.@store.set(k, call_result)
+            else
+              Dir.mkdir_p(File.dirname output)
+              File.open(output, "w") do |io|
+                io << call_result
+              end
+              TaskManager.next_run[output] = Digest::SHA1.hexdigest(call_result)
             end
-            TaskManager.next_run[output] = Digest::SHA1.hexdigest(call_result)
           end
         rescue IndexError
           raise "Task #{self} did not return the correct number of outputs"
@@ -378,7 +385,9 @@ module Croupier
     # They should all be either task outputs or existing files
     def check_dependencies
       bad_inputs = all_inputs.select { |input|
-        !tasks.has_key?(input) && !File.exists?(input)
+        !input.lchop?("kv://") &&
+          !tasks.has_key?(input) &&
+          !File.exists?(input)
       }
       raise "Can't run: Unknown inputs #{bad_inputs.join(", ")}" \
          unless bad_inputs.empty?
