@@ -3,6 +3,7 @@
 ## Version 0.3.5
 
 * Implement k/v data as input/output for tasks
+* Implement *persistent* k/v store
 
 ## Version 0.3.4
 
