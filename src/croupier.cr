@@ -167,7 +167,12 @@ module Croupier
       return true if @always_run || @inputs.empty?
       # Tasks don't get stale twice
       return false unless @stale
-      @outputs.any? { |output| !File.exists?(output) } ||
+      # An input is from the k/v store
+      @inputs.any?(&.lchop?("kv://")) ||
+        # An output is from the k/v store
+        @outputs.any?(&.lchop?("kv://")) ||
+        # An output file is missing
+        @outputs.any? { |output| !File.exists?(output) } ||
         # Any input file is modified
         @inputs.any? { |input| TaskManager.modified.includes? input } ||
         # Any input file is created by a stale task

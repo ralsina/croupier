@@ -413,6 +413,27 @@ describe "Task" do
         t.stale?.should be_true
       end
     end
+
+    it "should always consider tasks with kv inputs as stale" do
+      with_scenario("empty") do
+        t = Task.new(id: "t", inputs: ["kv://foo"])
+        t.stale?.should be_true
+        t.run
+        t.stale = true
+        t.stale?.should be_true
+      end
+    end
+
+    it "should always consider tasks with kv outputs as stale" do
+      with_scenario("empty") do
+        p = TaskProc.new { "bar" }
+        t = Task.new(id: "t", outputs: ["kv://bar"], proc: p)
+        t.stale?.should be_true
+        t.run
+        t.stale = true
+        t.stale?.should be_true
+      end
+    end
   end
 
   describe "ready?" do
