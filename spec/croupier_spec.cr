@@ -359,8 +359,8 @@ describe "Task" do
       end
     end
 
-    it "should mark some tasks stale when there is an updated .croupier" do
-      with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
+    it "should only mark some tasks stale when there is an updated .croupier" do
+      with_scenario("basic") do
         # Set things up as they should look after running
         File.write("input", "foo")
         File.write("input2", "bar")
@@ -384,7 +384,7 @@ describe "Task" do
       end
     end
 
-    it "should mark tasks depending indirectly on a modified file as stale" do
+    it "should mark tasks depending (in)directly on a modified file as stale" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         # Make sure all outputs exists and no files are modified
         tasks = TaskManager.tasks
