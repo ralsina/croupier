@@ -9,7 +9,7 @@ def with_scenario(
 )
   # Setup logging, helps coverage
   logs = IO::Memory.new
-  Log.setup(:debug, Log::IOBackend.new(io: logs))
+  Log.setup(:trace, Log::IOBackend.new(io: logs))
 
   # Library of procs
   x = 0
@@ -427,7 +427,7 @@ describe "Task" do
     it "should always consider tasks with kv outputs as stale" do
       with_scenario("empty") do
         p = TaskProc.new { "bar" }
-        t = Task.new(id: "t", outputs: ["kv://bar"], proc: p)
+        t = Task.new(id: "t", inputs: ["foo"], outputs: ["kv://bar"], proc: p)
         t.stale?.should be_true
         t.run
         t.stale = true
