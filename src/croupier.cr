@@ -502,8 +502,6 @@ module Croupier
     # Whenever a task is ready, launch it in a separate fiber
     # This is only concurrency, not parallelism, but on tests
     # it seems to be faster than running tasks sequentially.
-    #
-    # However, it's a bit buggy (the .croupier file is not correct)
     def _run_tasks_parallel(
       targets : Array(String) = [] of String,
       run_all : Bool = false,
@@ -546,7 +544,6 @@ module Croupier
         sleep(0.001)
       end
       raise errors.join("\n") unless errors.empty? unless keep_going
-      # FIXME It's losing outputs for some reason
       save_run
     end
 
