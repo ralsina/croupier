@@ -34,6 +34,16 @@
 
 ## Things that look like a bad idea, and why
 
+* Use a pool of Fibers to run parallel tasks
+
+  The current implementation just launches as many fibers
+  as it can. Experimental tests in commit
+  f3b3042c0cc3038360deac11269e07ffec0145a3 showed that limiting
+  the number of fibers is **much** slower (~8x slower).
+
+  Since fibers are cheap, and the OS scheduler is good, it seems
+  like just launching as much as possible is optimal.
+
 * Maybe migrate to crotest or microtest (Nicer)
 
   While there are a number of test frameworks, the default spec one
