@@ -16,8 +16,6 @@ dependencies:
   kiwi:
     github: ralsina/kiwi
     branch: master
-  pool:
-    github: j8r/pool.cr
 
 # Not the same crystalline as above :-)
 crystalline:

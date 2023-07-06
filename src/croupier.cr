@@ -508,16 +508,15 @@ module Croupier
       targets : Array(String) = [] of String,
       run_all : Bool = false,
       dry_run : Bool = false,
-      keep_going : Bool = false, # FIXME: implement
-      pool_size = 8
+      keep_going : Bool = false # FIXME: implement
     )
       mark_stale_inputs
+
       targets = tasks.keys if targets.empty?
       _tasks = dependencies(targets)
       finished_tasks = Set(Task).new
       failed_tasks = Set(Task).new
       errors = [] of String
-      runners = (1..pool_size).to_a
 
       loop do
         stale_tasks = (_tasks.map { |t| tasks[t] }).select(&.stale?).reject { |t|
@@ -531,8 +530,6 @@ module Croupier
         # want to run it twice.
         batch = stale_tasks.select(&.ready?).uniq!
         batch.each do |t|
-          next if runners.empty?
-          token = runners.pop
           spawn do
             begin
               t.run unless dry_run
@@ -543,7 +540,6 @@ module Croupier
               # Task is done, do not run again
               t.stale = false
               finished_tasks << t
-              runners << token
             end
           end
         end
