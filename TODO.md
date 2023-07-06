@@ -6,6 +6,7 @@
 * Use state machines for tasks (see veelenga/aasm.cr)
 * Add directory dependencies (depend on all files in the tree)
 * Add wildcard dependencies (depend on all files / tasks matching a pattern)
+* Mark tasks as stale if the OUTPUT is modified since last run
 
 * ~~Add a faster stale input check using file dates instead of hashes (like make)~~
 * ~~Support a persistant k/v store~~
