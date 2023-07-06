@@ -4,6 +4,9 @@
 
 * Implement k/v data as input/output for tasks
 * Implement *persistent* k/v store
+* Implement `fast_mode` for TaskManager, where it checks file
+  timestamps instead of contents to decide if they should
+  trigger tasks.
 
 ## Version 0.3.4
 
