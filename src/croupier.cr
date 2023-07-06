@@ -238,6 +238,8 @@ module Croupier
     property this_run = {} of String => String
     # SAH1 of input files as of ending this run
     property next_run = {} of String => String
+    # If true, only compare file dates
+    property fast_mode = false # ameba:disable Style/QueryBoolMethods
 
     # Files with changes detected in auto_run
     @queued_changes : Set(String) = Set(String).new
@@ -274,6 +276,7 @@ module Croupier
       @queued_changes.clear
       @store_path = nil
       @store = Kiwi::MemoryStore.new
+      @fast_mode = false
     end
 
     # Tasks as a dependency graph sorted topologically
@@ -381,15 +384,23 @@ module Croupier
     # Read state of last run, then scan inputs and compare
     def mark_stale_inputs
       if File.exists? ".croupier"
+        last_run_date = File.info(".croupier").modification_time
         last_run = File.open(".croupier") do |file|
           YAML.parse(file).as_h.map { |k, v| [k.to_s, v.to_s] }.to_h
         end
       else
+        last_run_date = Time.utc # Now
         last_run = {} of String => String
       end
-      (@this_run = scan_inputs).each do |file, sha1|
-        if last_run.fetch(file, "") != sha1
-          modified << file
+      if @fast_mode
+        all_inputs.each do |file|
+          if info = File.info?(file)
+            @modified << file if last_run_date < info.modification_time
+          end
+        end
+      else
+        (@this_run = scan_inputs).each do |file, sha1|
+          @modified << file if last_run.fetch(file, "") != sha1
         end
       end
     end

@@ -359,31 +359,6 @@ describe "Task" do
       end
     end
 
-    it "should only mark some tasks stale when there is an updated .croupier" do
-      with_scenario("basic") do
-        # Set things up as they should look after running
-        File.write("input", "foo")
-        File.write("input2", "bar")
-        File.write("output1", "")
-        File.write("output2", "foo")
-        File.write("output3", "")
-        File.write("output4", "")
-        File.write("output5", "")
-        File.write(".croupier", YAML.dump({
-          "input"   => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
-          "input2"  => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
-          "output1" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
-          "output2" => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
-          "output3" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
-          "output4" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
-          "output5" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
-        }))
-        TaskManager.tasks.size.should eq 5
-        # output1 and output2 have no inputs, so they are always stale
-        TaskManager.tasks.values.select(&.stale?).flat_map(&.@outputs).should eq ["output1", "output2"]
-      end
-    end
-
     it "should mark tasks depending (in)directly on a modified file as stale" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         # Make sure all outputs exists and no files are modified
@@ -769,6 +744,62 @@ describe "TaskManager" do
 
         TaskManager.mark_stale_inputs
         TaskManager.modified.should eq Set{"input"}
+      end
+    end
+
+    it "should not mark any inputs as modified with a correct .croupier" do
+      with_scenario("basic") do
+        # Set things up as they should look after running
+        File.write("input", "foo")
+        File.write("input2", "bar")
+        File.write("output1", "")
+        File.write("output2", "foo")
+        File.write("output3", "")
+        File.write("output4", "")
+        File.write("output5", "")
+        File.write(".croupier", YAML.dump({
+          "input"   => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
+          "input2"  => "62cdb7020ff920e5aa642c3d4066950dd1f01f4d",
+          "output1" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+          "output2" => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
+          "output3" => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+          "output4" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+          "output5" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+        }))
+        TaskManager.tasks.size.should eq 5
+        TaskManager.mark_stale_inputs
+        # Since .croupier describes all inputs, none should be
+        # considered modified
+        TaskManager.modified.empty?.should be_true
+      end
+    end
+
+    it "should mark as modified all inputs newer than .croupier when in fast mode" do
+      with_scenario("basic") do
+        TaskManager.fast_mode = true
+        # Set things up as they should look after running
+        File.write("input", "foo")
+        File.write("input2", "bar")
+        File.write("output1", "")
+        File.write("output2", "foo")
+        File.write("output4", "")
+        File.write("output5", "")
+        File.write(".croupier", YAML.dump({
+          "input"   => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
+          "input2"  => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+          "output1" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+          "output2" => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
+          "output3" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+          "output4" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+          "output5" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+        }))
+        sleep 0.01.seconds
+        File.write("output3", "")
+        TaskManager.mark_stale_inputs
+        TaskManager.tasks.size.should eq 5
+        # output3 is newer than .croupier so is considered modified
+        # in fast_mode
+        TaskManager.modified.should eq Set{"output3"}
       end
     end
   end
