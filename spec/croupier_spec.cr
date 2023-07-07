@@ -318,14 +318,14 @@ describe "Task" do
     it "should run if inputs are k/v store" do
       with_scenario("empty") do
         proc = TaskProc.new {
-          x = TaskManager.@store.get("i1").to_s
+          x = TaskManager.get("i1").to_s
           ["sarasa", x]
         }
         t = Task.new(outputs: ["kv://o1", "kv://o2"], inputs: ["kv://i1"], proc: proc)
-        TaskManager.@store.set("i1", "foo")
+        TaskManager.set("i1", "foo")
         t.run
-        TaskManager.@store.get("o1").should eq "sarasa"
-        TaskManager.@store.get("o2").should eq "foo"
+        TaskManager.get("o1").should eq "sarasa"
+        TaskManager.get("o2").should eq "foo"
       end
     end
   end
@@ -988,6 +988,33 @@ describe "TaskManager" do
         File.exists?("output3").should be_false
       end
     end
+
+    it "should not try to watch k/v keys" do
+      with_scenario("empty") do
+        Task.new(inputs: ["kv://foo"], output: "bar")
+        # This crashes if it tries to watch the wrong path
+        TaskManager.auto_run
+        TaskManager.auto_stop
+      end
+    end
+
+    it "should rerun tasks if a kv:// input changes" do
+      with_scenario("empty") do
+        x = 0
+        TaskManager.set("foo", "bar1")
+        Task.new(inputs: ["kv://foo"], output: "kv://bar", proc: TaskProc.new { (x = x + 1).to_s })
+        TaskManager.auto_run
+        x.should eq 0
+        TaskManager.set("foo", "bar2")
+        sleep 0.02.seconds
+        x.should eq 1
+        TaskManager.set("foo", "bar3")
+        sleep 0.02.seconds
+        TaskManager.auto_stop
+        # We modified foo 2 times, so it should have ran 2 times
+        x.should eq 2
+      end
+    end
   end
 
   describe "save_run" do
@@ -1040,30 +1067,30 @@ describe "TaskManager" do
   describe "store" do
     it "should save and recover values" do
       with_scenario("empty") do
-        TaskManager.@store.get("foo").should be_nil
-        TaskManager.@store.set("foo", "bar")
-        TaskManager.@store["foo"].should eq "bar"
+        TaskManager.get("foo").should be_nil
+        TaskManager.set("foo", "bar")
+        TaskManager.get("foo").should eq "bar"
       end
     end
 
     it "should be an empty MemoryStore by default" do
       with_scenario("empty") do
         # This would raise an exception if it weren´t one
-        TaskManager.@store_path.nil?.should be_true
-        TaskManager.@store.as(Kiwi::MemoryStore).@mem.empty?.should be_true
+        TaskManager.@_store_path.nil?.should be_true
+        TaskManager.@_store.as(Kiwi::MemoryStore).@mem.empty?.should be_true
       end
     end
 
     it "should be persistant after calling use_persistent_store" do
       with_scenario("empty") do
-        TaskManager.@store_path.nil?.should be_true
-        TaskManager.@store.as(Kiwi::MemoryStore).@mem.empty?.should be_true
-        TaskManager.@store["foo"] = "bar"
+        TaskManager.@_store_path.nil?.should be_true
+        TaskManager.@_store.as(Kiwi::MemoryStore).@mem.empty?.should be_true
+        TaskManager.set("foo", "bar")
         TaskManager.use_persistent_store("store")
         # This would raise an exception if it weren´t a FileStore
-        TaskManager.@store.as(Kiwi::FileStore)
+        TaskManager.@_store.as(Kiwi::FileStore)
         # Data should be migrated
-        TaskManager.@store["foo"].should eq "bar"
+        TaskManager.get("foo").should eq "bar"
       end
     end
   end
