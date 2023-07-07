@@ -174,19 +174,20 @@ module Croupier
       return true if @always_run || @inputs.empty?
       # Tasks don't get stale twice
       return false unless @stale
-      # An input is from the k/v store
-      @inputs.any?(&.lchop?("kv://")) ||
-        # An output is from the k/v store
-        @outputs.any?(&.lchop?("kv://")) ||
-        # An output file is missing
-        @outputs.any? { |output| !File.exists?(output) } ||
-        # Any input file is modified
-        @inputs.any? { |input| TaskManager.modified.includes? input } ||
-        # Any input file is created by a stale task
-        @inputs.any? { |input|
-          TaskManager.tasks.has_key?(input) &&
-            TaskManager.tasks[input].stale?
-        }
+
+      file_outputs = @outputs.reject(&.lchop?("kv://"))
+      kv_outputs = @outputs.select(&.lchop?("kv://")).map(&.lchop("kv://"))
+
+      # ameba:disable Lint/UselessAssign
+      (missing_file_outputs = file_outputs.any? { |output| !File.exists?(output) }) ||
+        # ameba:disable Lint/UselessAssign
+        (missing_kv_outputs = kv_outputs.any? { |output| !TaskManager.get(output) }) ||
+        # ameba:disable Lint/UselessAssign
+        (modified_inputs = inputs.any? { |input| TaskManager.modified.includes? input }) ||
+        # ameba:disable Lint/UselessAssign
+        (stale_inputs = @inputs.any? { |input| TaskManager.tasks.has_key?(input) && TaskManager.tasks[input].stale? })
+
+      # p! missing_file_outputs, missing_kv_outputs, modified_inputs, stale_inputs
     end
 
     # A task is ready if it is stale but all its inputs are not.

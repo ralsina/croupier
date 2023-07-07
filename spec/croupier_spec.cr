@@ -374,7 +374,7 @@ describe "Task" do
         TaskManager.modified << "input"
 
         # Only tasks depending on "input" or that have no inputs should be stale
-        tasks.values.count(&.stale?).should eq 4
+        # tasks.values.count(&.stale?).should eq 4
         tasks.keys.select { |k| tasks[k].stale? }.should eq ["output1", "output2", "output3", "output4"]
       end
     end
@@ -390,23 +390,26 @@ describe "Task" do
       end
     end
 
-    it "should always consider tasks with kv inputs as stale" do
+    it "should not consider tasks with kv inputs as stale unless modified" do
       with_scenario("empty") do
         t = Task.new(id: "t", inputs: ["kv://foo"])
-        t.stale?.should be_true
         t.run
         t.stale = true
+        t.stale?.should be_false
+        TaskManager.modified << "kv://foo"
         t.stale?.should be_true
       end
     end
 
-    it "should always consider tasks with kv outputs as stale" do
+    it "should consider tasks with missing kv outputs as stale" do
       with_scenario("empty") do
         p = TaskProc.new { "bar" }
-        t = Task.new(id: "t", inputs: ["foo"], outputs: ["kv://bar"], proc: p)
-        t.stale?.should be_true
+        t = Task.new(id: "t", inputs: ["kv://foo"], outputs: ["kv://bar"], proc: p)
         t.run
         t.stale = true
+        TaskManager.get("bar").should eq "bar"
+        t.stale?.should be_false
+        TaskManager.@_store.delete("bar")
         t.stale?.should be_true
       end
     end
