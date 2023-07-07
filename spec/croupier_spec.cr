@@ -988,6 +988,13 @@ describe "TaskManager" do
         File.exists?("output3").should be_false
       end
     end
+
+    it "should not try to watch k/v keys" do
+      with_scenario("empty") do
+        Task.new(inputs: ["kv://foo"], output: "bar")
+        TaskManager.auto_run
+      end
+    end
   end
 
   describe "save_run" do

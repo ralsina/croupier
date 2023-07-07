@@ -626,6 +626,8 @@ module Croupier
                     LibInotify::IN_CLOSE_WRITE
 
       target_inputs.each do |input|
+        # Don't watch for changes in k/v store
+        next if input.lchop?("kv://")
         if File.exists? input
           @@watcher.watch input, watch_flags
         else
