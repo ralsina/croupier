@@ -1004,14 +1004,14 @@ describe "TaskManager" do
         TaskManager.set("foo", "bar1")
         Task.new(inputs: ["kv://foo"], output: "kv://bar", proc: TaskProc.new { (x = x + 1).to_s })
         TaskManager.auto_run
+        x.should eq 0
         TaskManager.set("foo", "bar2")
-        # FIXME keys should be added to modified when changed
-        TaskManager.@modified << "kv://foo"
-        sleep 0.1.seconds
+        sleep 0.02.seconds
+        x.should eq 1
         TaskManager.set("foo", "bar3")
-        TaskManager.@modified << "kv://foo"
-        sleep 0.1.seconds
+        sleep 0.02.seconds
         TaskManager.auto_stop
+        # We modified foo 2 times, so it should have ran 2 times
         x.should eq 2
       end
     end
