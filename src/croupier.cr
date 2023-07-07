@@ -147,7 +147,7 @@ module Croupier
             raise "Task #{self} did not return any data for output #{output}" if call_result.nil?
             if k = output.lchop?("kv://")
               # If the output is a kv:// url, we save it in the k/v store
-              TaskManager.@store.set(k, call_result)
+              TaskManager.set(k, call_result)
             else
               Dir.mkdir_p(File.dirname output)
               File.open(output, "w") do |io|
@@ -245,20 +245,29 @@ module Croupier
     @queued_changes : Set(String) = Set(String).new
 
     # Key/Value store
-    @store : Kiwi::Store = Kiwi::MemoryStore.new
-    @store_path : String | Nil = nil
+    @_store : Kiwi::Store = Kiwi::MemoryStore.new
+    @_store_path : String | Nil = nil
+
+    def set(key, value)
+      @_store.set(key, value)
+      @modified << "kv://#{key}"
+    end
+
+    def get(key)
+      @_store.get(key)
+    end
 
     # Use a persistent k/v store in this path instead of
     # the default memory store
     def use_persistent_store(path : String)
-      return if path == @store_path
-      raise "Can't change persistent k/v store path" unless @store_path.nil?
+      return if path == @_store_path
+      raise "Can't change persistent k/v store path" unless @_store_path.nil?
       new_store = Kiwi::FileStore.new(path)
-      if @store_path.nil?
+      if @_store_path.nil?
         # Convert from MemoryStore to FileStore
-        old_store = @store.as(Kiwi::MemoryStore)
+        old_store = @_store.as(Kiwi::MemoryStore)
         old_store.@mem.each { |k, v| new_store[k] = v }
-        @store = new_store
+        @_store = new_store
       end
       Log.info { "Storing k/v data in #{path}" }
     end
@@ -274,8 +283,8 @@ module Croupier
       @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
       @graph_sorted = [] of String
       @queued_changes.clear
-      @store_path = nil
-      @store = Kiwi::MemoryStore.new
+      @_store_path = nil
+      @_store = Kiwi::MemoryStore.new
       @fast_mode = false
     end
 
@@ -577,14 +586,15 @@ module Croupier
               # we can't see the side effects without sleeping in
               # the tests.
               sleep 0.01.seconds
-              next if @queued_changes.empty?
+              next if @queued_changes.empty? && @modified.empty?
               Log.info { "Detected changes in #{@queued_changes}" }
               # Mark all targets as stale
               targets.each { |t| tasks[t].stale = true }
-              @modified = @queued_changes
+              @modified += @queued_changes
               Log.debug { "Modified: #{@modified}" }
               run_tasks(targets: targets)
               # Only clean queued changes after a successful run
+              @modified.clear
               @queued_changes.clear
             rescue ex
               # Sometimes we can't run because not all dependencies
@@ -626,6 +636,8 @@ module Croupier
                     LibInotify::IN_CLOSE_WRITE
 
       target_inputs.each do |input|
+        # Don't watch for changes in k/v store
+        next if input.lchop?("kv://")
         if File.exists? input
           @@watcher.watch input, watch_flags
         else
