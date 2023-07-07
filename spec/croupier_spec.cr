@@ -992,7 +992,22 @@ describe "TaskManager" do
     it "should not try to watch k/v keys" do
       with_scenario("empty") do
         Task.new(inputs: ["kv://foo"], output: "bar")
+        # This crashes if it tries to watch the wrong path
         TaskManager.auto_run
+        TaskManager.auto_stop
+      end
+    end
+
+    it "should rerun tasks if a kv:// input changes" do
+      with_scenario("empty") do
+        x = 0
+        TaskManager.@store.set("foo", "bar1")
+        Task.new(inputs: ["kv://foo"], output: "kv://bar", proc: TaskProc.new { (x + 1).to_s })
+        TaskManager.auto_run
+        TaskManager.@store.set("foo", "bar2")
+        Fiber.yield
+        TaskManager.auto_stop
+        x.should eq 2
       end
     end
   end
