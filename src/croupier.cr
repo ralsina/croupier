@@ -581,7 +581,7 @@ module Croupier
               Log.info { "Detected changes in #{@queued_changes}" }
               # Mark all targets as stale
               targets.each { |t| tasks[t].stale = true }
-              @modified += @queued_changes
+              @modified = @queued_changes
               Log.debug { "Modified: #{@modified}" }
               run_tasks(targets: targets)
               # Only clean queued changes after a successful run
@@ -623,7 +623,7 @@ module Croupier
       watch_flags = LibInotify::IN_DELETE |
                     LibInotify::IN_CREATE |
                     LibInotify::IN_MODIFY |
-                    LibInotify::IN_CLOSE
+                    LibInotify::IN_CLOSE_WRITE
 
       target_inputs.each do |input|
         if File.exists? input
