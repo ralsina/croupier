@@ -194,7 +194,7 @@ module Croupier
           "#{outputs} is stale because of missing_kv_outputs"
         } if missing_kv_outputs
         Log.trace {
-          "#{outputs} is stale because of modified_inputs"
+          "#{outputs} is stale because of modified_inputs #{inputs.select { |input| TaskManager.modified.includes? input }}"
         } if modified_inputs
         Log.trace {
           "#{outputs} is stale because of stale_inputs"
