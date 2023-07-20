@@ -2,6 +2,7 @@
 
 ## Version 0.3.5
 
+* Add trace level debug about why tasks run
 * Implement k/v data as input/output for tasks
 * Implement *persistent* k/v store
 * Implement `fast_mode` for TaskManager, where it checks file
