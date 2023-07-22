@@ -1,5 +1,9 @@
 # Changelog
 
+## Main branch
+
+* Add `mergeable` flag for tasks (default true)
+
 ## Version 0.4.0
 
 * Add trace level debug about why tasks run

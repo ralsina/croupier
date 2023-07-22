@@ -32,6 +32,7 @@ module Croupier
     property? no_save : Bool = false
     @[YAML::Field(ignore: true)]
     property procs : Array(TaskProc) = [] of TaskProc
+    property? mergeable : Bool = true
 
     # Under what keys should this task be registered with TaskManager
     def keys
@@ -49,6 +50,9 @@ module Croupier
     # it *must* have an id. If not given, it's calculated as a hash of outputs.
     # `always_run` is a boolean that tells croupier that the task is always
     #   stale regardless of its dependencies' state
+    # `mergeable` is a boolean. If true, the task can be merged
+    #   with others that share an output. Tasks with different
+    #   `mergeable` values can NOT be merged together.
     #
     # k/v store keys are of the form `kv://key`, and are used to store
     # intermediate data in a key/value store. They are not saved to disk.
@@ -66,7 +70,8 @@ module Croupier
       proc : TaskProc | Nil = nil,
       no_save : Bool = false,
       id : String | Nil = nil,
-      always_run : Bool = false
+      always_run : Bool = false,
+      mergeable : Bool = true
     )
       if !(inputs.to_set & outputs.to_set).empty?
         raise "Cycle detected"
@@ -78,6 +83,7 @@ module Croupier
       @id = id ? id : Digest::SHA1.hexdigest(@outputs.join(","))[..6]
       @inputs = inputs
       @no_save = no_save
+      @mergeable = mergeable
 
       # Register with the task manager.
       # We should merge every task we have output/id collision with
@@ -87,6 +93,10 @@ module Croupier
         TaskManager.tasks.fetch(k, nil)
       }).select(Task).uniq!
       to_merge << self
+      # Refuse to merge if this task or any of the colliding ones
+      # are not mergeable
+      raise "Can't merge task #{self} with #{to_merge[..-2]}" \
+         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
     end

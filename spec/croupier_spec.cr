@@ -82,6 +82,7 @@ describe "Task" do
           "always_run" => false,
           "no_save"    => false,
           "stale"      => true,
+          "mergeable"  => true,
         }
         YAML.parse(TaskManager.tasks["output1"].to_yaml).should eq expected
       end
@@ -164,6 +165,24 @@ describe "Task" do
 
         # t1 has all 3 procs
         t1.@procs.should eq [d1, d2, d3]
+      end
+    end
+
+    it "should not merge tasks marked as not mergeable" do
+      with_scenario("empty") do
+        Task.new(["o1"], ["i1"] of String)
+        expect_raises(Exception, "Can't merge task") do
+          Task.new(["o1"], ["i2"] of String, mergeable: false)
+        end
+      end
+    end
+
+    it "should not merge into tasks marked as not mergeable" do
+      with_scenario("empty") do
+        Task.new(["o1"], ["i1"] of String, mergeable: false)
+        expect_raises(Exception, "Can't merge task") do
+          Task.new(["o1"], ["i2"] of String)
+        end
       end
     end
 
