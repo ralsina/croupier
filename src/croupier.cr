@@ -108,7 +108,8 @@ module Croupier
       proc : TaskProc | Nil = nil,
       no_save : Bool = false,
       id : String | Nil = nil,
-      always_run : Bool = false
+      always_run : Bool = false,
+      mergeable : Bool = true
     )
       initialize(
         outputs: output ? [output] : [] of String,
@@ -116,8 +117,9 @@ module Croupier
         proc: proc,
         no_save: no_save,
         id: id,
-        always_run: always_run
-      )
+        always_run: always_run,
+        mergeable: mergeable
+        )
     end
 
     # Executes the proc for the task
