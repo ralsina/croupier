@@ -119,7 +119,7 @@ module Croupier
         id: id,
         always_run: always_run,
         mergeable: mergeable
-        )
+      )
     end
 
     # Executes the proc for the task
@@ -412,6 +412,21 @@ module Croupier
         if tasks.has_key? output
           result << output
           result.concat _dependencies(tasks[output].@inputs)
+        end
+      end
+      result
+    end
+
+    def depends_on(input : String)
+      depends_on [input]
+    end
+
+    def depends_on(inputs : Array(String))
+      result = Set(String).new
+      TaskManager.tasks.values.each do |t|
+        if (t.@inputs & inputs).size > 0
+          result.concat t.outputs
+          result.concat depends_on(t.outputs)
         end
       end
       result
