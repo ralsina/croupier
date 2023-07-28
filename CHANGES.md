@@ -1,8 +1,9 @@
 # Changelog
 
-## Main branch
+## Version 0.4.1
 
 * Add `mergeable` flag for tasks (default true)
+* Added `TaskManager.depends_on` function
 
 ## Version 0.4.0
 
