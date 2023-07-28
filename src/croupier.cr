@@ -9,7 +9,7 @@ require "log"
 require "yaml"
 
 module Croupier
-  VERSION = "0.4.0"
+  VERSION = "0.4.1"
 
   # A Task is an object that may generate output
   #
