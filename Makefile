@@ -8,7 +8,7 @@ mutation: bin/crytic
 	bin/crytic test
 coverage/index.html: bin/run_tests
 	rm -rf coverage/
-	kcov --clean --include-path=./src coverage ./bin/run_tests
+	kcov --clean --include-path=./src $(PWD)/coverage ./bin/run_tests
 	xdg-open coverage/index.html
 bin/run_tests: src/*.cr spec/*.cr
 	shards install
