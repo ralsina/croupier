@@ -22,6 +22,6 @@ crystalline:
   main: src/run_tests.cr
 
     # Commented for now because it fails to build
-    #development_dependencies:
-    #crytic:
-    #github: hanneskaeufler/crytic
+development_dependencies:
+  crytic:
+    github: hanneskaeufler/crytic
