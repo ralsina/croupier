@@ -25,7 +25,7 @@ module Croupier
     include YAML::Serializable::Strict
 
     property id : String = ""
-    property inputs : Array(String) = [] of String
+    property inputs : Set(String) = Set(String).new
     property outputs : Array(String) = [] of String
     property stale : Bool = true # ameba:disable Style/QueryBoolMethods
     property? always_run : Bool = false
@@ -81,7 +81,7 @@ module Croupier
       @outputs = outputs.uniq
       raise "Task has no outputs and no id" if id.nil? && @outputs.empty?
       @id = id ? id : Digest::SHA1.hexdigest(@outputs.join(","))[..6]
-      @inputs = inputs
+      @inputs = Set.new inputs
       @no_save = no_save
       @mergeable = mergeable
 
@@ -248,7 +248,6 @@ module Croupier
       # the same file in multiple procs
       @outputs += other.@outputs
       @inputs += other.@inputs
-      @inputs.uniq!
       @procs += other.@procs
       self
     end
@@ -411,7 +410,7 @@ module Croupier
       outputs.each do |output|
         if tasks.has_key? output
           result << output
-          result.concat _dependencies(tasks[output].@inputs)
+          result.concat _dependencies(tasks[output].@inputs.to_a)
         end
       end
       result
@@ -424,7 +423,7 @@ module Croupier
     def depends_on(inputs : Array(String))
       result = Set(String).new
       TaskManager.tasks.values.each do |t|
-        if (t.@inputs & inputs).size > 0
+        if (t.@inputs & Set.new(inputs)).size > 0
           result.concat t.outputs
           result.concat depends_on(t.outputs)
         end
