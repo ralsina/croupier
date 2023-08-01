@@ -424,12 +424,30 @@ describe "Task" do
       with_scenario("empty") do
         p = TaskProc.new { "bar" }
         t = Task.new(id: "t", inputs: ["kv://foo"], outputs: ["kv://bar"], proc: p)
+        t.stale = true
+        # foo and bar are NOT marked modified but bar is not there
+        t.stale?.should be_true
         t.run
         t.stale = true
-        TaskManager.get("bar").should eq "bar"
+        # Now the task has run, bar is there, not stale anymore
         t.stale?.should be_false
+        # Remove it, stale again
         TaskManager.@_store.delete("bar")
         t.stale?.should be_true
+      end
+    end
+
+    it "should not consider tasks with existing kv outputs and not modified as stale" do
+      with_scenario("empty") do
+        TaskManager.use_persistent_store("store")
+        TaskManager.@_store.set("foo", "foo")
+        TaskManager.@_store.set("bar", "bar")
+        # This task has input and output in the persistent store
+        # and they are not modified
+        p = TaskProc.new { "bar" }
+        t = Task.new(id: "t", inputs: ["kv://foo"], outputs: ["kv://bar"], proc: p)
+        t.stale = true
+        t.stale?.should be_false
       end
     end
   end
