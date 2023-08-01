@@ -11,15 +11,14 @@ require "yaml"
 module Croupier
   VERSION = "0.4.1"
 
+  alias TaskProc = -> String? | Array(String)
+
   # A Task is an object that may generate output
   #
   # It has a `Proc` which is executed when the task is run
   # It can have zero or more inputs
   # It has zero or more outputs
   # Tasks are connected by dependencies, where one task's output is another's input
-
-  alias TaskProc = -> String? | Array(String)
-
   class Task
     include YAML::Serializable
     include YAML::Serializable::Strict
@@ -253,6 +252,7 @@ module Croupier
     end
   end
 
+  # TaskManager is a singleton that keeps track of all tasks
   class TaskManagerType
     # Registry of all tasks
     property tasks = {} of String => Croupier::Task
