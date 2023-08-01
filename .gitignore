@@ -11,3 +11,4 @@
 /coverage/
 /spec/testcases/**/input*
 /spec/testcases/**/output*
+/spec/testcases/**/store
