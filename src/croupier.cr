@@ -583,8 +583,11 @@ module Croupier
         # want to run it twice.
         batch = stale_tasks.select(&.ready?).uniq!
 
-        # FIXME: should error out if there are no ready tasks
-
+        if batch.size == 0
+          # No tasks are ready
+          raise "Can't run tasks: Waiting for #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}"
+        end
+        channel = Channel(Nil).new
         batch.each do |t|
           spawn do
             begin
@@ -596,10 +599,12 @@ module Croupier
               # Task is done, do not run again
               t.stale = false
               finished_tasks << t
+              channel.send nil
             end
           end
         end
-        sleep(0.001)
+        # Wait for the whole batch to finish
+        [..batch.size].each { channel.receive }
       end
       raise errors.join("\n") unless errors.empty? unless keep_going
       save_run
