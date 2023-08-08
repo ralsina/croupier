@@ -608,7 +608,7 @@ module Croupier
           end
         end
         # Wait for the whole batch to finish
-        [..batch.size].each { channel.receive }
+        batch.size.times { channel.receive }
       end
       raise errors.join("\n") unless errors.empty? unless keep_going
       save_run
