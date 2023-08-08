@@ -452,6 +452,15 @@ describe "Task" do
     end
   end
 
+  describe "waiting_for" do
+    it "should say a task is waiting if a dependency that doesn't exist" do
+      with_scenario("basic") do
+        t = TaskManager.tasks["output4"]
+        t.waiting_for.should eq ["output3"]
+      end
+    end
+  end
+
   describe "ready?" do
     it "should consider all tasks without task dependencies as ready" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
@@ -537,6 +546,16 @@ describe "TaskManager" do
             else
               File.exists?(k).should be_true
             end
+          end
+        end
+      end
+
+      it "should fail if the next task to run is not ready" do
+        with_scenario("empty") do
+          Task.new(output: "t1", inputs: ["kv://foo"], proc: TaskProc.new { "" })
+          expect_raises(Exception) do
+            TaskManager.tasks["t1"].ready?.should be_false
+            TaskManager.run_tasks
           end
         end
       end
@@ -1050,7 +1069,8 @@ describe "TaskManager" do
       with_scenario("empty") do
         x = 0
         TaskManager.set("foo", "bar1")
-        Task.new(inputs: ["kv://foo"], output: "kv://bar", proc: TaskProc.new { (x = x + 1).to_s })
+        Task.new(inputs: ["kv://foo"], output: "kv://bar",
+          proc: TaskProc.new { (x = x + 1).to_s })
         TaskManager.auto_run
         x.should eq 0
         TaskManager.set("foo", "bar2")
