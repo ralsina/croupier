@@ -1069,7 +1069,8 @@ describe "TaskManager" do
       with_scenario("empty") do
         x = 0
         TaskManager.set("foo", "bar1")
-        Task.new(inputs: ["kv://foo"], output: "kv://bar", proc: TaskProc.new { (x = x + 1).to_s })
+        Task.new(inputs: ["kv://foo"], output: "kv://bar",
+          proc: TaskProc.new { (x = x + 1).to_s })
         TaskManager.auto_run
         x.should eq 0
         TaskManager.set("foo", "bar2")

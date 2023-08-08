@@ -540,7 +540,7 @@ module Croupier
         next if t.nil? || finished.includes?(t)
         next unless run_all || t.stale? || t.@always_run
         Log.debug { "Running task for #{output}" }
-        raise "Can't run task for #{output}: Waiting for #{t.waiting_for}" unless t.ready?
+        raise "Can't run task for #{output}: Waiting for #{t.waiting_for}" unless t.ready? || dry_run
         begin
           t.run unless dry_run
         rescue ex
