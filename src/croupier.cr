@@ -540,6 +540,7 @@ module Croupier
         next if t.nil? || finished.includes?(t)
         next unless run_all || t.stale? || t.@always_run
         Log.debug { "Running task for #{output}" }
+        raise "Can't run task for #{output}: Waiting for #{t.waiting_for}" unless t.ready?
         begin
           t.run unless dry_run
         rescue ex
@@ -581,6 +582,9 @@ module Croupier
         # task graph because of multiple outputs. We don't
         # want to run it twice.
         batch = stale_tasks.select(&.ready?).uniq!
+
+        # FIXME: should error out if there are no ready tasks
+
         batch.each do |t|
           spawn do
             begin

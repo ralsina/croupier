@@ -550,6 +550,16 @@ describe "TaskManager" do
         end
       end
 
+      it "should fail if the next task to run is not ready" do
+        with_scenario("empty") do
+          Task.new(output: "t1", inputs: ["kv://foo"], proc: TaskProc.new { "" })
+          expect_raises(Exception) do
+            TaskManager.tasks["t1"].ready?.should be_false
+            TaskManager.run_tasks
+          end
+        end
+      end
+
       it "should run no tasks when dry_run is true" do
         with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
           TaskManager.run_tasks(parallel: parallel, run_all: true, dry_run: true)
