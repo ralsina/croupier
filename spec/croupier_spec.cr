@@ -452,6 +452,15 @@ describe "Task" do
     end
   end
 
+  describe "waiting_for" do
+    it "should say a task is waiting if a dependency that doesn't exist" do
+      with_scenario("basic") do
+        t = TaskManager.tasks["output4"]
+        t.waiting_for.should eq ["output3"]
+      end
+    end
+  end
+
   describe "ready?" do
     it "should consider all tasks without task dependencies as ready" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do

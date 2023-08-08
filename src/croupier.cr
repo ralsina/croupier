@@ -215,20 +215,24 @@ module Croupier
       result
     end
 
-    # A task is ready if it is stale but all its inputs are not.
     # For inputs that are tasks, we check if they are stale
     # For inputs that are not tasks, they should exist as files
+    # If any inputs don't fit those criteria, they are being
+    # waited for.
+    def waiting_for
+      @inputs.reject { |input|
+        if TaskManager.tasks.has_key? input
+          !TaskManager.tasks[input].stale?
+        else
+          File.exists? input
+        end
+      }
+    end
+
+    # A task is ready if it is stale and not waiting for anything
     def ready?
-      (
-        (stale? || always_run?) &&
-          @inputs.all? { |input|
-            if TaskManager.tasks.has_key? input
-              !TaskManager.tasks[input].stale?
-            else
-              File.exists? input
-            end
-          }
-      )
+      (stale? || always_run?) &&
+        waiting_for.empty?
     end
 
     def to_s(io)
