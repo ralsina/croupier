@@ -220,13 +220,17 @@ module Croupier
     # If any inputs don't fit those criteria, they are being
     # waited for.
     def waiting_for
-      @inputs.reject { |input|
+      @inputs.reject do |input|
         if TaskManager.tasks.has_key? input
           !TaskManager.tasks[input].stale?
         else
-          File.exists? input
+          if input.lchop? "kv://"
+            !TaskManager.@_store.get(input.lchop("kv://")).nil?
+          else
+            File.exists? input
+          end
         end
-      }
+      end
     end
 
     # A task is ready if it is stale and not waiting for anything
@@ -540,6 +544,7 @@ module Croupier
         next if t.nil? || finished.includes?(t)
         next unless run_all || t.stale? || t.@always_run
         Log.debug { "Running task for #{output}" }
+        raise "Can't run task for #{output}: Waiting for #{t.waiting_for}" unless t.ready? || dry_run
         begin
           t.run unless dry_run
         rescue ex
@@ -581,6 +586,12 @@ module Croupier
         # task graph because of multiple outputs. We don't
         # want to run it twice.
         batch = stale_tasks.select(&.ready?).uniq!
+
+        if batch.size == 0
+          # No tasks are ready
+          raise "Can't run tasks: Waiting for #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}"
+        end
+        channel = Channel(Nil).new
         batch.each do |t|
           spawn do
             begin
@@ -592,10 +603,12 @@ module Croupier
               # Task is done, do not run again
               t.stale = false
               finished_tasks << t
+              channel.send nil
             end
           end
         end
-        sleep(0.001)
+        # Wait for the whole batch to finish
+        [..batch.size].each { channel.receive }
       end
       raise errors.join("\n") unless errors.empty? unless keep_going
       save_run
