@@ -220,13 +220,17 @@ module Croupier
     # If any inputs don't fit those criteria, they are being
     # waited for.
     def waiting_for
-      @inputs.reject { |input|
+      @inputs.reject do |input|
         if TaskManager.tasks.has_key? input
           !TaskManager.tasks[input].stale?
         else
-          File.exists? input
+          if input.lchop? "kv://"
+            !TaskManager.@_store.get(input.lchop("kv://")).nil?
+          else
+            File.exists? input
+          end
         end
-      }
+      end
     end
 
     # A task is ready if it is stale and not waiting for anything
