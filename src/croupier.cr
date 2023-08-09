@@ -595,6 +595,7 @@ module Croupier
         batch.each do |t|
           spawn do
             begin
+              Fiber.yield
               t.run unless dry_run
             rescue ex
               failed_tasks << t
