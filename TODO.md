@@ -4,7 +4,7 @@
 
 * Fix parallel `run_all` flag
 * Implement parallel `keep_going` flag or reject it
-* Instrument the concurrent runner using 
+* Instrument the concurrent runner using
   [Fiber Metrics](https://github.com/didactic-drunk/fiber_metrics.cr)
 * Add directory dependencies (depend on all files in the tree)
 * Add wildcard dependencies (depend on all files / tasks matching a pattern)
