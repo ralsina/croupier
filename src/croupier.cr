@@ -565,20 +565,26 @@ module Croupier
       targets : Array(String) = [] of String,
       run_all : Bool = false,
       dry_run : Bool = false,
-      keep_going : Bool = false # FIXME: implement
+      keep_going : Bool = false
     )
       mark_stale_inputs
 
       targets = tasks.keys if targets.empty?
-      _tasks = dependencies(targets)
+      _tasks = dependencies(targets).map { |t| tasks[t] }
       finished_tasks = Set(Task).new
       failed_tasks = Set(Task).new
       errors = [] of String
 
       loop do
-        stale_tasks = (_tasks.map { |t| tasks[t] }).select(&.stale?).reject { |t|
-          finished_tasks.includes?(t) || failed_tasks.includes?(t)
-        }
+        if run_all
+          stale_tasks = _tasks.reject { |t|
+            finished_tasks.includes?(t) || failed_tasks.includes?(t)
+          }
+        else
+          stale_tasks = _tasks.select(&.stale?).reject { |t|
+            finished_tasks.includes?(t) || failed_tasks.includes?(t)
+          }
+        end
 
         break if stale_tasks.empty?
 

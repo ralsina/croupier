@@ -2,8 +2,6 @@
 
 ## Things it may make sense to add
 
-* Fix parallel `run_all` flag
-* Implement parallel `keep_going` flag or reject it
 * Instrument the concurrent runner using
   [Fiber Metrics](https://github.com/didactic-drunk/fiber_metrics.cr)
 * Add directory dependencies (depend on all files in the tree)
@@ -11,6 +9,7 @@
 * Mark tasks as stale if the OUTPUT is modified since last run
 * Check for using RomainFranceschini/cgl instead of crystalline which seems buggy
 
+* ~~Fix parallel `run_all` flag~~
 * ~~Add a faster stale input check using file dates instead of hashes (like make)~~
 * ~~Support a persistant k/v store~~
 * ~~Once it works fine with files, generalize to a k/v store using [kiwi](https://github.com/crystal-community/kiwi)~~
