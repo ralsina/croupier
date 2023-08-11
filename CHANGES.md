@@ -1,5 +1,12 @@
 # Changelog
 
+## New in main
+
+* Yield on spawn to make concurrency more useful
+* More efficient input handling
+* Fix deadlocking bug in parallel runner
+* Warn or error when tasks are next in line but not ready
+
 ## Version 0.4.1
 
 * Add `mergeable` flag for tasks (default true)

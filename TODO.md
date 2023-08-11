@@ -2,8 +2,10 @@
 
 ## Things it may make sense to add
 
+* Fix parallel `run_all` flag
+* Implement parallel `keep_going` flag or reject it
+* 
 * Instrument the concurrent runner using [Fiber Metrics](https://github.com/didactic-drunk/fiber_metrics.cr)
-* Use state machines for tasks (see veelenga/aasm.cr)
 * Add directory dependencies (depend on all files in the tree)
 * Add wildcard dependencies (depend on all files / tasks matching a pattern)
 * Mark tasks as stale if the OUTPUT is modified since last run
@@ -34,6 +36,12 @@
 * ~~Automate running crytic every now and then~~
 
 ## Things that look like a bad idea, and why
+
+* Use state machines for tasks (see veelenga/aasm.cr)
+
+  In fact this is probably a good idea BUT the current implementation
+  is fairly simple and seems to be mostly correct, so there is not much
+  to be gained from the switch.
 
 * Use a pool of Fibers to run parallel tasks
 
