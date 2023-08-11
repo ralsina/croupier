@@ -234,8 +234,8 @@ module Croupier
     end
 
     # A task is ready if it is stale and not waiting for anything
-    def ready?
-      (stale? || always_run?) &&
+    def ready?(run_all = false)
+      (stale? || always_run? || run_all) &&
         waiting_for.empty?
     end
 
@@ -591,7 +591,7 @@ module Croupier
         # The uniq is because a task may be repeated in the
         # task graph because of multiple outputs. We don't
         # want to run it twice.
-        batch = stale_tasks.select(&.ready?).uniq!
+        batch = stale_tasks.select(&.ready?(run_all)).uniq!
 
         if batch.size == 0
           # No tasks are ready
