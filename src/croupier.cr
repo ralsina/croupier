@@ -273,7 +273,8 @@ module Croupier
     # SAH1 of input files as of ending this run
     property next_run = {} of String => String
     # If true, only compare file dates
-    property fast_mode = false # ameba:disable Style/QueryBoolMethods
+    property? fast_mode : Bool = false
+    property? auto_mode : Bool = false
 
     # Files with changes detected in auto_run
     @queued_changes : Set(String) = Set(String).new
@@ -320,6 +321,7 @@ module Croupier
       @_store_path = nil
       @_store = Kiwi::MemoryStore.new
       @fast_mode = false
+      @auto_mode = false
     end
 
     # Tasks as a dependency graph sorted topologically
@@ -630,6 +632,7 @@ module Croupier
     end
 
     def auto_run(targets : Array(String) = [] of String)
+      @auto_mode = true
       targets = tasks.keys if targets.empty?
       # Only want dependencies that are not tasks
       inputs = inputs(targets)
