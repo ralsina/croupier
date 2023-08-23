@@ -1,7 +1,8 @@
 # Changelog
 
-## New in main
+## New in 0.5.0
 
+* New `TaskManager.auto_mode?` property
 * Yield on spawn to make concurrency more useful
 * More efficient input handling
 * Fix deadlocking bug in parallel runner
