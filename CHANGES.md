@@ -1,5 +1,9 @@
 # Changelog
 
+## New in main
+
+* Add progress callback
+
 ## New in 0.5.0
 
 * New `TaskManager.auto_mode?` property

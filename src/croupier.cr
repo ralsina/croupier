@@ -12,6 +12,7 @@ module Croupier
   VERSION = "0.4.1"
 
   alias TaskProc = -> String? | Array(String)
+  alias CallbackProc = Proc(String, Nil)
 
   # A Task is an object that may generate output
   #
@@ -172,6 +173,7 @@ module Croupier
         end
       end
       @stale = false # Done, not stale anymore
+      TaskManager.progress_callback.call(id)
     end
 
     # Tasks are stale if:
@@ -274,7 +276,10 @@ module Croupier
     property next_run = {} of String => String
     # If true, only compare file dates
     property? fast_mode : Bool = false
+    # If true, it's running in auto mode
     property? auto_mode : Bool = false
+    # If set, it's called after every task finishes
+    property progress_callback : Proc(String, Nil) = ->(_id : String) {}
 
     # Files with changes detected in auto_run
     @queued_changes : Set(String) = Set(String).new
