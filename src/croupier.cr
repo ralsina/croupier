@@ -67,6 +67,18 @@ module Croupier
     def initialize(
       outputs : Array(String) = [] of String,
       inputs : Array(String) = [] of String,
+      no_save : Bool = false,
+      id : String | Nil = nil,
+      always_run : Bool = false,
+      mergeable : Bool = true,
+      &block : TaskProc
+    )
+      initialize(outputs, inputs, block, no_save, id, always_run, mergeable)
+    end
+
+    def initialize(
+      outputs : Array(String) = [] of String,
+      inputs : Array(String) = [] of String,
       proc : TaskProc | Nil = nil,
       no_save : Bool = false,
       id : String | Nil = nil,
@@ -99,6 +111,18 @@ module Croupier
          if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
+    end
+
+    def initialize(
+      output : String | Nil = nil,
+      inputs : Array(String) = [] of String,
+      no_save : Bool = false,
+      id : String | Nil = nil,
+      always_run : Bool = false,
+      mergeable : Bool = true,
+      &block : TaskProc
+    )
+      initialize(output, inputs, block, no_save, id, always_run, mergeable)
     end
 
     # Create a task with zero or one outputs. Overload for convenience.

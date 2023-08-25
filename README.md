@@ -117,27 +117,21 @@ This is the example described above, in actual code:
 ```crystal
 require "croupier"
 
-b1 = Croupier::TaskProc.new{
+Croupier::Task.new(
+  output: "fileA",
+  inputs: ["input.txt"],
+) {
   puts "task1 running"
   File.read("input.txt").downcase
 }
 
 Croupier::Task.new(
-  output: "fileA",
-  inputs: ["input.txt"],
-  proc: b1
-)
-
-b2 = Croupier::TaskProc.new{
-  puts "task2 running"
-  File.read("fileA").upcase
-}
-
-Croupier::Task.new(
   output: "fileB",
   inputs: ["fileA"],
-  proc: b2
-)
+) do
+  puts "task2 running"
+  File.read("fileA").upcase
+end
 
 Croupier::Task.run_tasks
 ```

@@ -422,8 +422,7 @@ describe "Task" do
 
     it "should consider tasks with missing kv outputs as stale" do
       with_scenario("empty") do
-        p = TaskProc.new { "bar" }
-        t = Task.new(id: "t", inputs: ["kv://foo"], outputs: ["kv://bar"], proc: p)
+        t = Task.new(id: "t", inputs: ["kv://foo"], outputs: ["kv://bar"]) { "bar" }
         t.stale = true
         # foo and bar are NOT marked modified but bar is not there
         t.stale?.should be_true

@@ -3,6 +3,14 @@
 ## New in main
 
 * Add progress callback
+* Add support for passing blocks to Tasks:
+
+```crystal
+Croupier::Task.new output: "fileA", inputs: ["input.txt"] do
+  puts "task1 running"
+  File.read("input.txt").downcase
+end
+```
 
 ## New in 0.5.0
 
