@@ -10,7 +10,7 @@ license: MIT
 
 dependencies:
   crystalline:
-    github: ralsina/crystalline
+    github: jtomschroeder/crystalline
   inotify:
     github: petoem/inotify.cr
   kiwi:

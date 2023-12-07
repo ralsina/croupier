@@ -16,7 +16,7 @@ bin/run_tests: src/*.cr spec/*.cr
 bin/crytic:
 	shards install
 clean:
-	rm -rf lib/ bin/ coverage/
+	rm -rf lib/ bin/ coverage/ shard.lock
 	git clean -f
 
 .PHONY: clean coverage mutation test all
