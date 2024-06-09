@@ -9,7 +9,7 @@ require "log"
 require "yaml"
 
 module Croupier
-  VERSION = "0.5.0"
+  VERSION = "0.5.1"
 
   alias TaskProc = -> String? | Array(String)
   alias CallbackProc = Proc(String, Nil)
