@@ -16,6 +16,7 @@ bin/run_tests: src/*.cr spec/*.cr
 bin/crytic:
 	shards install
 lint:
+	crystal tool format src/*.cr spec/*.cr
 	bin/ameba --all --fix
 clean:
 	rm -rf lib/ bin/ coverage/ shard.lock
