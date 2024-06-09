@@ -15,6 +15,8 @@ bin/run_tests: src/*.cr spec/*.cr
 	crystal build -o bin/run_tests src/run_tests.cr
 bin/crytic:
 	shards install
+lint:
+	bin/ameba --all --fix
 clean:
 	rm -rf lib/ bin/ coverage/ shard.lock
 	git clean -f

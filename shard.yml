@@ -25,3 +25,5 @@ crystalline:
 development_dependencies:
   crytic:
     github: hanneskaeufler/crytic
+  ameba:
+    github: crystal-ameba/ameba
