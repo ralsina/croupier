@@ -4,10 +4,10 @@
 
 * Instrument the concurrent runner using
   [Fiber Metrics](https://github.com/didactic-drunk/fiber_metrics.cr)
-* Add directory dependencies (depend on all files in the tree)
 * Add wildcard dependencies (depend on all files / tasks matching a pattern)
 * Mark tasks as stale if the OUTPUT is modified since last run
 
+* ~~Add directory dependencies (depend on all files in the tree)~~
 * ~~Fix parallel `run_all` flag~~
 * ~~Add a faster stale input check using file dates instead of hashes (like make)~~
 * ~~Support a persistant k/v store~~

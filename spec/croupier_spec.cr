@@ -774,6 +774,19 @@ describe "TaskManager" do
         TaskManager.scan_inputs.size.should eq 0
       end
     end
+
+    it "should hash directories" do
+      with_scenario("empty") do
+        Dir.mkdir("dir")
+        Task.new(
+          inputs: ["dir"],
+          always_run: true,
+          proc: nil,
+          id: "t1"
+        )
+        TaskManager.scan_inputs.should eq({"dir" => "da39a3ee5e6b4b0d3255bfef95601890afd80709"})
+      end
+    end
   end
 
   describe "mark_stale_inputs" do

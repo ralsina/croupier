@@ -9,7 +9,7 @@ require "log"
 require "yaml"
 
 module Croupier
-  VERSION = "0.4.1"
+  VERSION = "0.5.0"
 
   alias TaskProc = -> String? | Array(String)
   alias CallbackProc = Proc(String, Nil)
@@ -42,7 +42,7 @@ module Croupier
     # Create a task with zero or more outputs.
     #
     # `output` is an array of files or k/v store keys that the task generates
-    # `inputs` is an array of files, task ids or k/v store keys that the
+    # `inputs` is an array of filesystem paths, task ids or k/v store keys that the
     # task depends on.
     # `proc` is a proc that is executed when the task is run
     # `no_save` is a boolean that tells croupier that the task will save the files itself
@@ -496,9 +496,19 @@ module Croupier
 
     # Scan all inputs and return a hash with their sha1
     def scan_inputs
-      all_inputs.reduce({} of String => String) do |hash, file|
-        if File.exists? file
-          hash[file] = Digest::SHA1.hexdigest(File.read(file))
+      all_inputs.reduce({} of String => String) do |hash, path|
+        if File.file? path
+          hash[path] = Digest::SHA1.hexdigest(File.read(path))
+        else
+          if File.directory? path
+            digest = Digest::SHA1.digest do |ctx|
+              # Hash *everything* in the directory (this will be slow)
+              Dir.glob("#{path}/**/*").each do |f|
+                ctx.update File.read(path) if File.file? f
+              end
+            end
+            hash[path] = digest.hexstring
+          end
         end
         hash
       end

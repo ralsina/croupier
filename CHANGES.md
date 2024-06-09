@@ -2,6 +2,7 @@
 
 ## New in main
 
+* Add support for tasks depending on directories
 * Add progress callback
 * Add support for passing blocks to Tasks:
 
