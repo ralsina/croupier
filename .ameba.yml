@@ -1,0 +1,14 @@
+Naming/BlockParameterName:
+  Description: Disallows non-descriptive block parameter names
+  MinNameLength: 1
+  AllowNamesEndingInNumbers: true
+  ForbiddenNames: []
+  Enabled: true
+  Severity: Convention
+
+Documentation/DocumentationAdmonition:
+  Excluded:
+    - src/**/**
+    - spec/**/**
+  Enabled: true
+

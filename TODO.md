@@ -7,7 +7,6 @@
 * Add directory dependencies (depend on all files in the tree)
 * Add wildcard dependencies (depend on all files / tasks matching a pattern)
 * Mark tasks as stale if the OUTPUT is modified since last run
-* Check for using RomainFranceschini/cgl instead of crystalline which seems buggy
 
 * ~~Fix parallel `run_all` flag~~
 * ~~Add a faster stale input check using file dates instead of hashes (like make)~~
@@ -74,3 +73,9 @@
 * Implement failed state for tasks
 
   Not really needed.
+
+* Using RomainFranceschini/cgl instead of crystalline which seems buggy
+  
+  What can I say, it works, and the gains look marginal since cgl doesn't
+  implement algorithms, which is the part I would like to avoid doing
+  myself. Without that, crystalline is basically a glorified hash thing.
