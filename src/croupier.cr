@@ -108,7 +108,7 @@ module Croupier
       # Refuse to merge if this task or any of the colliding ones
       # are not mergeable
       raise "Can't merge task #{self} with #{to_merge[..-2].map(&.to_s)}" \
-        if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
+         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
     end
@@ -302,6 +302,8 @@ module Croupier
     property? fast_mode : Bool = false
     # If true, it's running in auto mode
     property? auto_mode : Bool = false
+    # If true, directories depend on a list of files, not its contents
+    property? fast_dirs : Bool = false
     # If set, it's called after every task finishes
     property progress_callback : Proc(String, Nil) = ->(_id : String) {}
 
@@ -502,9 +504,13 @@ module Croupier
         else
           if File.directory? path
             digest = Digest::SHA1.digest do |ctx|
-              # Hash *everything* in the directory (this will be slow)
-              Dir.glob("#{path}/**/*").each do |f|
-                ctx.update File.read(path) if File.file? f
+              # Hash the directory tree
+              ctx.update(Dir.glob("#{path}/**/*").join("\n"))
+              if !@fast_dirs
+                # Hash *everything* in the directory (this will be slow)
+                Dir.glob("#{path}/**/*").each do |f|
+                  ctx.update File.read(f) if File.file? f
+                end
               end
             end
             hash[path] = digest.hexstring
@@ -530,7 +536,7 @@ module Croupier
           !File.exists?(input)
       }
       raise "Can't run: Unknown inputs #{bad_inputs.join(", ")}" \
-        unless bad_inputs.empty?
+         unless bad_inputs.empty?
     end
 
     # Run all stale tasks in dependency order

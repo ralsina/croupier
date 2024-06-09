@@ -785,6 +785,33 @@ describe "TaskManager" do
           id: "t1"
         )
         TaskManager.scan_inputs.should eq({"dir" => "da39a3ee5e6b4b0d3255bfef95601890afd80709"})
+        File.write("dir/input", "foo")
+        TaskManager.scan_inputs.should eq({"dir" => "7e0dbd57e84798fe1a40bb453dcf51f2569a3a2e"})
+        # This mode doesn't ignore file contents
+        File.write("dir/input", "bar")
+        TaskManager.scan_inputs.should eq({"dir" => "63734eec74b627be2865c006e11b270747b4df2c"})
+        Dir.mkdir("dir/dir1")
+        TaskManager.scan_inputs.should eq({"dir" => "05cfe846d65930c8a0be1da2b8aa16ee21d0cbdd"})
+      end
+    end
+    it "should hash directories in fast_dirs mode" do
+      with_scenario("empty") do
+        TaskManager.fast_dirs = true
+        Dir.mkdir("dir")
+        Task.new(
+          inputs: ["dir"],
+          always_run: true,
+          proc: nil,
+          id: "t1"
+        )
+        TaskManager.scan_inputs.should eq({"dir" => "da39a3ee5e6b4b0d3255bfef95601890afd80709"})
+        File.write("dir/input", "foo")
+        TaskManager.scan_inputs.should eq({"dir" => "18e96066fa04ae6c67b5cdcfb02c7c5646ae2402"})
+        # This mode ignores file contents
+        File.write("dir/input", "bar")
+        TaskManager.scan_inputs.should eq({"dir" => "18e96066fa04ae6c67b5cdcfb02c7c5646ae2402"})
+        Dir.mkdir("dir/dir1")
+        TaskManager.scan_inputs.should eq({"dir" => "f6fa5320de20f424aaab984f56d470386ca9cb96"})
       end
     end
   end

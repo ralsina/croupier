@@ -3,6 +3,7 @@
 ## New in main
 
 * Add support for tasks depending on directories
+* New `fast_dirs` mode in TaskManager for cheaper directory checks 
 * Add progress callback
 * Add support for passing blocks to Tasks:
 
