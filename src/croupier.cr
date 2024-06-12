@@ -505,7 +505,7 @@ module Croupier
           if File.directory? path
             digest = Digest::SHA1.digest do |ctx|
               # Hash the directory tree
-              ctx.update(Dir.glob("#{path}/**/*").sort().join("\n"))
+              ctx.update(Dir.glob("#{path}/**/*").sort.join("\n"))
               if !@fast_dirs
                 # Hash *everything* in the directory (this will be slow)
                 Dir.glob("#{path}/**/*").each do |f|
@@ -729,6 +729,7 @@ module Croupier
     # it will NOT be detected as a change.
     #
     # Changes are added to queued_changes
+
     def watch(targets : Array(String) = [] of String)
       @@watcher.close
       @@watcher = Inotify::Watcher.new
@@ -741,20 +742,29 @@ module Croupier
         Log.debug { "Detected change in #{path}" }
         Log.trace { "Event: #{event}" }
         # If path matches a watched path, add it to the queue
-        @queued_changes << path if target_inputs.includes? path
-        # If we are watching a folder in path, add the folder to the queue
-        is_prefix = target_inputs.any? { |input| path.starts_with? "#{input}/" }
-        @queued_changes << path if is_prefix
+        if target_inputs.includes? path
+          @queued_changes << path
+          Log.debug { "Queued change in #{path}" }
+        elsif target_inputs.any? { |input|
+                if path.starts_with? "#{input}/"
+                  # If we are watching a folder in path, add the folder to the queue
+                  @queued_changes << input
+                  Log.debug { "Queued change in #{input}" }
+                end
+              }
+        else
+          Log.trace { "Ignoring event" }
+        end
       end
 
-      watch_flags = LibInotify::IN_DELETE   |
-                    LibInotify::IN_CREATE   |
-                    LibInotify::IN_MODIFY   |
+      watch_flags = LibInotify::IN_DELETE |
+                    LibInotify::IN_CREATE |
+                    LibInotify::IN_MODIFY |
                     LibInotify::IN_MOVED_TO |
                     LibInotify::IN_CLOSE_WRITE
-                    # NOT watching IN_DELETE_SELF, IN_MOVE_SELF because
-                    # when those are triggered we have no input file to
-                    # process.
+      # NOT watching IN_DELETE_SELF, IN_MOVE_SELF because
+      # when those are triggered we have no input file to
+      # process.
 
       target_inputs.each do |input|
         # Don't watch for changes in k/v store
