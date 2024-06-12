@@ -1,5 +1,9 @@
 # Changelog
 
+## New in main
+
+* Auto mode works for watched directories
+
 ## New in 0.5.1
 
 * Add support for tasks depending on directories

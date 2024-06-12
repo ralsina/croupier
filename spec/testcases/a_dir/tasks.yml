@@ -1,0 +1,12 @@
+---
+output3:
+  id: 0a1aac149aec98f492c33b9d16ed614f59a68ad2
+  name: name
+  inputs:
+  - a_dir
+  outputs:
+  - output3
+  always_run: false
+  no_save: false
+  stale: true
+  procs: "counter"

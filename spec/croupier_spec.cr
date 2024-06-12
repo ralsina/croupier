@@ -1122,6 +1122,31 @@ describe "TaskManager" do
         x.should eq 2
       end
     end
+
+    it "should run tasks if a watched folder is created" do
+      with_scenario("a_dir") do
+        File.exists?("output3").should be_false
+        TaskManager.auto_run
+        sleep 0.02.seconds
+        Dir.mkdir("a_dir")
+        sleep 0.02.seconds
+        File.exists?("output3").should be_true
+        TaskManager.auto_stop
+      end
+    end
+
+    it "should run tasks if a file is created inside a watched folder" do
+      with_scenario("a_dir") do
+        Dir.mkdir("a_dir")
+        TaskManager.auto_run
+        sleep 0.02.seconds
+        File.exists?("output3").should be_false
+        File.open("a_dir/input", "w") << "bar"
+        sleep 0.02.seconds
+        File.exists?("output3").should be_true
+        TaskManager.auto_stop
+      end
+    end
   end
 
   describe "save_run" do

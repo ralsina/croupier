@@ -108,7 +108,7 @@ module Croupier
       # Refuse to merge if this task or any of the colliding ones
       # are not mergeable
       raise "Can't merge task #{self} with #{to_merge[..-2].map(&.to_s)}" \
-         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
+        if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
     end
@@ -505,7 +505,7 @@ module Croupier
           if File.directory? path
             digest = Digest::SHA1.digest do |ctx|
               # Hash the directory tree
-              ctx.update(Dir.glob("#{path}/**/*").join("\n"))
+              ctx.update(Dir.glob("#{path}/**/*").sort().join("\n"))
               if !@fast_dirs
                 # Hash *everything* in the directory (this will be slow)
                 Dir.glob("#{path}/**/*").each do |f|
@@ -536,7 +536,7 @@ module Croupier
           !File.exists?(input)
       }
       raise "Can't run: Unknown inputs #{bad_inputs.join(", ")}" \
-         unless bad_inputs.empty?
+        unless bad_inputs.empty?
     end
 
     # Run all stale tasks in dependency order
@@ -737,16 +737,24 @@ module Croupier
 
       @@watcher.on_event do |event|
         # It's a file we care about, add it to the queue
-        path = event.name || event.path
+        path = Path["#{event.path}/#{event.name}"].normalize.to_s
         Log.debug { "Detected change in #{path}" }
         Log.trace { "Event: #{event}" }
-        @queued_changes << path.to_s if target_inputs.includes? path.to_s
+        # If path matches a watched path, add it to the queue
+        @queued_changes << path if target_inputs.includes? path
+        # If we are watching a folder in path, add the folder to the queue
+        is_prefix = target_inputs.any? { |input| path.starts_with? "#{input}/" }
+        @queued_changes << path if is_prefix
       end
 
-      watch_flags = LibInotify::IN_DELETE |
-                    LibInotify::IN_CREATE |
-                    LibInotify::IN_MODIFY |
+      watch_flags = LibInotify::IN_DELETE   |
+                    LibInotify::IN_CREATE   |
+                    LibInotify::IN_MODIFY   |
+                    LibInotify::IN_MOVED_TO |
                     LibInotify::IN_CLOSE_WRITE
+                    # NOT watching IN_DELETE_SELF, IN_MOVE_SELF because
+                    # when those are triggered we have no input file to
+                    # process.
 
       target_inputs.each do |input|
         # Don't watch for changes in k/v store
