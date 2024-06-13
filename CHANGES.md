@@ -1,13 +1,13 @@
 # Changelog
 
-## New in main
+## New in 0.5.2
 
 * Auto mode works for watched directories
 
 ## New in 0.5.1
 
 * Add support for tasks depending on directories
-* New `fast_dirs` mode in TaskManager for cheaper directory checks 
+* New `fast_dirs` mode in TaskManager for cheaper directory checks
 * Add progress callback
 * Add support for passing blocks to Tasks:
 

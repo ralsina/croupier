@@ -9,7 +9,7 @@ require "log"
 require "yaml"
 
 module Croupier
-  VERSION = "0.5.1"
+  VERSION = "0.5.2"
 
   alias TaskProc = -> String? | Array(String)
   alias CallbackProc = Proc(String, Nil)
@@ -108,7 +108,7 @@ module Croupier
       # Refuse to merge if this task or any of the colliding ones
       # are not mergeable
       raise "Can't merge task #{self} with #{to_merge[..-2].map(&.to_s)}" \
-        if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
+         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
     end
@@ -536,7 +536,7 @@ module Croupier
           !File.exists?(input)
       }
       raise "Can't run: Unknown inputs #{bad_inputs.join(", ")}" \
-        unless bad_inputs.empty?
+         unless bad_inputs.empty?
     end
 
     # Run all stale tasks in dependency order
