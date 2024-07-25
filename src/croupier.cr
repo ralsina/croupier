@@ -6,6 +6,7 @@ require "inotify"
 require "kiwi/file_store"
 require "kiwi/memory_store"
 require "log"
+require "wait_group"
 require "yaml"
 
 module Croupier
@@ -315,6 +316,7 @@ module Croupier
     @_store_path : String | Nil = nil
 
     def set(key, value)
+      Log.debug { "Setting k/v data for #{key}" }
       @_store.set(key, value)
       @modified << "kv://#{key}"
     end
@@ -644,7 +646,8 @@ module Croupier
           # No tasks are ready
           raise "Can't run tasks: Waiting for #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}"
         end
-        channel = Channel(Nil).new
+        wg = WaitGroup.new(batch.size)
+
         batch.each do |t|
           spawn do
             begin
@@ -657,12 +660,12 @@ module Croupier
               # Task is done, do not run again
               t.stale = false
               finished_tasks << t
-              channel.send nil
+              wg.done
             end
           end
         end
         # Wait for the whole batch to finish
-        batch.size.times { channel.receive }
+        wg.wait
       end
       raise errors.join("\n") unless errors.empty? unless keep_going
       save_run
