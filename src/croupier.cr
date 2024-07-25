@@ -109,7 +109,7 @@ module Croupier
       # Refuse to merge if this task or any of the colliding ones
       # are not mergeable
       raise "Can't merge task #{self} with #{to_merge[..-2].map(&.to_s)}" \
-        if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
+         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
     end
@@ -538,7 +538,7 @@ module Croupier
           !File.exists?(input)
       }
       raise "Can't run: Unknown inputs #{bad_inputs.join(", ")}" \
-        unless bad_inputs.empty?
+         unless bad_inputs.empty?
     end
 
     # Run all stale tasks in dependency order
@@ -640,28 +640,33 @@ module Croupier
         # The uniq is because a task may be repeated in the
         # task graph because of multiple outputs. We don't
         # want to run it twice.
-        batch = stale_tasks.select(&.ready?(run_all)).uniq!
+        batch = stale_tasks.select(&.ready?(run_all)).uniq!.shuffle
 
         if batch.size == 0
           # No tasks are ready
           raise "Can't run tasks: Waiting for #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}"
         end
+
+        chunk_size = batch.size // 4
+        chunks = [batch[0...chunk_size], batch[chunk_size...chunk_size * 2], batch[chunk_size * 2...chunk_size * 3], batch[chunk_size * 3..]]
+
         wg = WaitGroup.new(batch.size)
         Log.debug { "Starting batch of #{batch.size} tasks" }
-        batch.each do |t|
+        chunks.each do |chunk|
           spawn do
-            begin
-              Fiber.yield
-              t.run unless dry_run
-              Fiber.yield
-            rescue ex
-              failed_tasks << t
-              errors << ex.message.to_s
-            ensure
-              # Task is done, do not run again
-              t.stale = false
-              finished_tasks << t
-              wg.done
+            chunk.each do |t|
+              begin
+                t.run unless dry_run
+              rescue ex
+                failed_tasks << t
+                errors << ex.message.to_s
+              ensure
+                # Task is done, do not run again
+                t.stale = false
+                finished_tasks << t
+                wg.done
+                Fiber.yield
+              end
             end
           end
         end
