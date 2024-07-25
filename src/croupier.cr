@@ -647,12 +647,13 @@ module Croupier
           raise "Can't run tasks: Waiting for #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}"
         end
         wg = WaitGroup.new(batch.size)
-
+        Log.debug { "Starting batch of #{batch.size} tasks" }
         batch.each do |t|
           spawn do
             begin
               Fiber.yield
               t.run unless dry_run
+              Fiber.yield
             rescue ex
               failed_tasks << t
               errors << ex.message.to_s
