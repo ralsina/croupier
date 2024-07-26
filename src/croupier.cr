@@ -12,6 +12,9 @@ require "yaml"
 module Croupier
   VERSION = "0.5.2"
 
+  # Log with "croupier" as the source
+  Log = ::Log.for("croupier")
+
   alias TaskProc = -> String? | Array(String)
   alias CallbackProc = Proc(String, Nil)
 
@@ -109,7 +112,7 @@ module Croupier
       # Refuse to merge if this task or any of the colliding ones
       # are not mergeable
       raise "Can't merge task #{self} with #{to_merge[..-2].map(&.to_s)}" \
-         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
+        if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
     end
@@ -538,7 +541,7 @@ module Croupier
           !File.exists?(input)
       }
       raise "Can't run: Unknown inputs #{bad_inputs.join(", ")}" \
-         unless bad_inputs.empty?
+        unless bad_inputs.empty?
     end
 
     # Run all stale tasks in dependency order
@@ -648,7 +651,12 @@ module Croupier
         end
 
         chunk_size = batch.size // 4
-        chunks = [batch[0...chunk_size], batch[chunk_size...chunk_size * 2], batch[chunk_size * 2...chunk_size * 3], batch[chunk_size * 3..]]
+        chunks = [
+          batch[0...chunk_size],
+          batch[chunk_size...chunk_size * 2],
+          batch[chunk_size * 2...chunk_size * 3],
+          batch[chunk_size * 3..],
+        ]
 
         wg = WaitGroup.new(batch.size)
         Log.debug { "Starting batch of #{batch.size} tasks" }
