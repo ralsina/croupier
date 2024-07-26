@@ -8,7 +8,6 @@ require "kiwi/file_store"
 require "kiwi/memory_store"
 require "log"
 require "wait_group"
-require "yaml"
 
 module Croupier
   VERSION = "0.5.2"
@@ -16,7 +15,6 @@ module Croupier
   # Log with "croupier" as the source
   Log = ::Log.for("croupier")
 
-  alias TaskProc = -> String? | Array(String)
   alias CallbackProc = Proc(String, Nil)
 
   # TaskManager is a singleton that keeps track of all tasks
