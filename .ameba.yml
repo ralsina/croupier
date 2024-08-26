@@ -11,4 +11,3 @@ Documentation/DocumentationAdmonition:
     - src/**/**
     - spec/**/**
   Enabled: true
-

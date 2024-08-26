@@ -7,7 +7,8 @@
 * Add wildcard dependencies (depend on all files / tasks matching a pattern)
 * Mark tasks as stale if the OUTPUT is modified since last run
 
-* ~~Allow a "shallow" mode for directory dependencies, which hashes just a list of contents~~
+* ~~Allow a "shallow" mode for directory dependencies, which hashes
+  just a list of contents~~
   ~~and not the contents of the files themselves.~~
 * ~~Add directory dependencies (depend on all files in the tree)~~
 * ~~Fix parallel `run_all` flag~~
@@ -77,7 +78,7 @@
   Not really needed.
 
 * Using RomainFranceschini/cgl instead of crystalline which seems buggy
-  
+
   What can I say, it works, and the gains look marginal since cgl doesn't
   implement algorithms, which is the part I would like to avoid doing
   myself. Without that, crystalline is basically a glorified hash thing.
