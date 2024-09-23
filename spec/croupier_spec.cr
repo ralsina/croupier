@@ -378,6 +378,25 @@ describe "Task" do
       end
     end
 
+    pending "should invalidate tasks which indirectly depend on modified files" do
+      with_scenario("empty") do
+        Task.new(id: "t1", inputs: ["input"], outputs: ["output1"]) {
+          File.read("input").downcase
+        }
+        Task.new(id: "t2", inputs: ["output1"], outputs: ["output2"]) {
+          File.read("output1").upcase
+        }
+        File.write("input", "Foo")
+        TaskManager.run_tasks
+        File.read("output1").should eq "foo"
+        File.read("output2").should eq "FOO"
+        File.write("input", "Bar")
+        TaskManager.run_tasks
+        File.read("output1").should eq "bar"
+        File.read("output2").should eq "BAR"
+      end
+    end
+
     it "should mark tasks depending (in)directly on a modified file as stale" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         # Make sure all outputs exists and no files are modified
