@@ -318,16 +318,18 @@ module Croupier
     )
       mark_stale_inputs
       finished = Set(Task).new
-      outputs.each do |output|
-        t = tasks.fetch(output, nil)
+      outputs.compact_map { |o|
+        tasks.fetch(o, nil)
+      }.reject { |t|
+        !(t.stale? || run_all || t.@always_run)
+      }.each do |t|
         next if t.nil? || finished.includes?(t)
-        next unless run_all || t.stale? || t.@always_run
-        Log.debug { "Running task for #{output}" }
-        raise "Can't run task for #{output}: Waiting for #{t.waiting_for}" unless t.ready?(run_all) || dry_run
+        Log.debug { "Running task for #{t.outputs}" }
+        raise "Can't run task for #{t.outputs}: Waiting for #{t.waiting_for}" unless t.waiting_for.empty? || dry_run
         begin
           t.run unless dry_run
         rescue ex
-          Log.error { "Error running task for #{output}: #{ex}" }
+          Log.error { "Error running task for #{t.outputs}: #{ex}" }
           raise ex unless keep_going
         end
         finished << t

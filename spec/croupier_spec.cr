@@ -378,19 +378,29 @@ describe "Task" do
       end
     end
 
-    pending "should invalidate tasks which indirectly depend on modified files" do
+    it "should invalidate tasks which indirectly depend on modified files" do
       with_scenario("empty") do
-        Task.new(id: "t1", inputs: ["input"], outputs: ["output1"]) {
+        t1 = Task.new(id: "t1", inputs: ["input"], outputs: ["output1"]) {
           File.read("input").downcase
         }
-        Task.new(id: "t2", inputs: ["output1"], outputs: ["output2"]) {
+        t2 = Task.new(id: "t2", inputs: ["output1"], outputs: ["output2"]) {
           File.read("output1").upcase
         }
+
         File.write("input", "Foo")
         TaskManager.run_tasks
         File.read("output1").should eq "foo"
         File.read("output2").should eq "FOO"
+        t1.stale?.should be_false
+        t2.stale?.should be_false
         File.write("input", "Bar")
+        TaskManager.mark_stale_inputs
+        # Set to true to force recalculation
+        t1.stale = true
+        t2.stale = true
+        t1.stale?.should be_true
+        t2.stale?.should be_true
+
         TaskManager.run_tasks
         File.read("output1").should eq "bar"
         File.read("output2").should eq "BAR"
