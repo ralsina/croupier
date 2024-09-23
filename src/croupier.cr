@@ -10,7 +10,7 @@ require "log"
 require "wait_group"
 
 module Croupier
-  VERSION = "0.5.2"
+  VERSION = {{ `shards version #{__DIR__}`.chomp.stringify }}
 
   # Log with "croupier" as the source
   Log = ::Log.for("croupier")
