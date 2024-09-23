@@ -133,13 +133,13 @@ Croupier::Task.new(
   File.read("fileA").upcase
 end
 
-Croupier::Task.run_tasks
+Croupier::TaskManager.run_tasks
 ```
 
-If we create a `index.txt` file with some text in it and run this
-program, it will print it's running `task1` and `task2` and
-produce `fileA` with that same text in upper case, and `fileB`
-with the text in lowercase.
+If we create a `input.txt` file with some text in it and run this
+program, it will print `task1 running` and `task2 running` and
+produce `fileA` with that same text in lowercase, and `fileB`
+with the text in uppercase.
 
 The second time we run it, it will *do nothing* because all tasks
 dependencies are unchanged.
