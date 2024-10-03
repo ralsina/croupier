@@ -388,7 +388,7 @@ module Croupier
         ]
 
         wg = WaitGroup.new(batch.size)
-        Log.debug { "Starting batch of #{batch.size} tasks" }
+        Log.debug { "Starting batch of #{batch.size} tasks in 4 chunks of #{chunk_size} tasks" }
         chunks.each do |chunk|
           spawn do
             chunk.each do |t|

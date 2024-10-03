@@ -174,7 +174,13 @@ module Croupier
               # If the output is a kv:// url, we save it in the k/v store
               TaskManager.set(k, call_result)
             else
-              Dir.mkdir_p(File.dirname output)
+              begin
+                Dir.mkdir_p(File.dirname output)
+              rescue ex : Exception
+                # This fails because the directory already exists.
+                # If there is a real problem creating it (such as permissions)
+                # then the File.open below will fail and we'll catch it there.
+              end
               File.open(output, "w") do |io|
                 io << call_result
               end
