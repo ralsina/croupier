@@ -1,5 +1,13 @@
 # Changelog
 
+## New in 0.5.4
+
+* Handle race condition creating folders, makes parallel more reliable
+
+## New in 0.5.3
+
+* Fix #12 where tasks didn't keep their stale status after dependencies ran first
+
 ## New in 0.5.2
 
 * Auto mode works for watched directories
