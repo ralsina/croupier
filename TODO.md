@@ -6,9 +6,9 @@
   [Fiber Metrics](https://github.com/didactic-drunk/fiber_metrics.cr)
 * Add wildcard dependencies (depend on all files / tasks matching a pattern)
 * Mark tasks as stale if the OUTPUT is modified since last run
+* Investigate using Earl and proper agents/pools/etc
 
-* ~~Allow a "shallow" mode for directory dependencies, which hashes
-  just a list of contents~~
+* ~~Allow a "shallow" mode for directory dependencies, which hashes just a list of contents~~
   ~~and not the contents of the files themselves.~~
 * ~~Add directory dependencies (depend on all files in the tree)~~
 * ~~Fix parallel `run_all` flag~~
@@ -53,6 +53,9 @@
 
   Since fibers are cheap, and the OS scheduler is good, it seems
   like just launching as much as possible is optimal.
+
+  On the other hand, the parallel task runner DOES use
+  something akin to a pool of fibers.
 
 * Maybe migrate to crotest or microtest (Nicer)
 
