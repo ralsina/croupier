@@ -389,10 +389,15 @@ module Croupier
 
         wg = WaitGroup.new(batch.size)
         Log.debug { "Starting batch of #{batch.size} tasks in 4 chunks of #{chunk_size} tasks" }
-        chunks.each do |chunk|
+        # This uses each `chunk` as a queue and runs all 4 queues in parallel.
+        # It's not the *best* way to do it because if a chunk has larger tasks
+        # than the others, it will take longer to finish. But it's good enough
+        # for now.
+        chunks.each_with_index do |chunk, i|
           spawn do
             chunk.each do |t|
               begin
+                Fiber.yield
                 t.run unless dry_run
               rescue ex
                 failed_tasks << t
