@@ -36,7 +36,7 @@ module Croupier
     # If true, directories depend on a list of files, not its contents
     property? fast_dirs : Bool = false
     # If set, it's called after every task finishes
-    property progress_callback : Proc(String, Nil) = ->(_id : String) {}
+    property progress_callback : Proc(String, Nil) = ->(_id : String) { }
 
     # Files with changes detected in auto_run
     @queued_changes : Set(String) = Set(String).new
@@ -268,7 +268,7 @@ module Croupier
           !File.exists?(input)
       }
       raise "Can't run: Unknown inputs #{bad_inputs.join(", ")}" \
-         unless bad_inputs.empty?
+        unless bad_inputs.empty?
     end
 
     # Run all stale tasks in dependency order
@@ -281,7 +281,7 @@ module Croupier
       run_all : Bool = false,
       dry_run : Bool = false,
       parallel : Bool = false,
-      keep_going : Bool = false
+      keep_going : Bool = false,
     )
       _, tasks = sorted_task_graph
       check_dependencies
@@ -299,7 +299,7 @@ module Croupier
       run_all : Bool = false,
       dry_run : Bool = false,
       parallel : Bool = false,
-      keep_going : Bool = false
+      keep_going : Bool = false,
     )
       tasks = dependencies(targets)
       if parallel
@@ -314,7 +314,7 @@ module Croupier
       outputs,
       run_all : Bool = false,
       dry_run : Bool = false,
-      keep_going : Bool = false
+      keep_going : Bool = false,
     )
       mark_stale_inputs
       finished = Set(Task).new
@@ -346,7 +346,7 @@ module Croupier
       targets : Array(String) = [] of String,
       run_all : Bool = false,
       dry_run : Bool = false,
-      keep_going : Bool = false
+      keep_going : Bool = false,
     )
       mark_stale_inputs
 
