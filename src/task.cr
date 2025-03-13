@@ -22,6 +22,7 @@ module Croupier
     @[YAML::Field(ignore: true)]
     property procs : Array(TaskProc) = [] of TaskProc
     property? mergeable : Bool = true
+    property mutex : String? = nil
 
     # Under what keys should this task be registered with TaskManager
     def keys
@@ -60,9 +61,11 @@ module Croupier
       id : String | Nil = nil,
       always_run : Bool = false,
       mergeable : Bool = true,
+      mutex : String? = nil,
       &block : TaskProc
     )
       initialize(outputs, inputs, block, no_save, id, always_run, mergeable)
+      TaskManager.add_mutex(mutex, self) if mutex
     end
 
     def initialize(
@@ -72,7 +75,7 @@ module Croupier
       no_save : Bool = false,
       id : String | Nil = nil,
       always_run : Bool = false,
-      mergeable : Bool = true,
+      mergeable : Bool = true
     )
       if !(inputs.to_set & outputs.to_set).empty?
         raise "Cycle detected"
@@ -97,7 +100,7 @@ module Croupier
       # Refuse to merge if this task or any of the colliding ones
       # are not mergeable
       raise "Can't merge task #{self} with #{to_merge[..-2].map(&.to_s)}" \
-        if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
+         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
     end
@@ -122,7 +125,7 @@ module Croupier
       no_save : Bool = false,
       id : String | Nil = nil,
       always_run : Bool = false,
-      mergeable : Bool = true,
+      mergeable : Bool = true
     )
       initialize(
         outputs: output ? [output] : [] of String,
@@ -141,9 +144,12 @@ module Croupier
       @procs.each do |proc|
         Fiber.yield
         begin
+          TaskManager.lock_mutex(mutex.as(String)) unless mutex.nil?
           result = proc.call
         rescue ex
           raise "Task #{self} failed: #{ex}"
+        ensure
+          TaskManager.unlock_mutex(mutex.as(String)) unless mutex.nil?
         end
         if result.nil?
           call_results << nil
