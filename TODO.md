@@ -8,8 +8,8 @@
 * Mark tasks as stale if the OUTPUT is modified since last run
 * Investigate using Earl and proper agents/pools/etc
 
-* ~~Allow a "shallow" mode for directory dependencies, which hashes just a list of contents~~
-  ~~and not the contents of the files themselves.~~
+* ~~Allow a "shallow" mode for directory dependencies, which hashes just a list
+  of contents and not the contents of the files themselves.~~
 * ~~Add directory dependencies (depend on all files in the tree)~~
 * ~~Fix parallel `run_all` flag~~
 * ~~Add a faster stale input check using file dates instead of hashes (like make)~~
