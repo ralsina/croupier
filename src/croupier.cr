@@ -36,7 +36,7 @@ module Croupier
     # If true, directories depend on a list of files, not its contents
     property? fast_dirs : Bool = false
     # If set, it's called after every task finishes
-    property progress_callback : Proc(String, Nil) = ->(_id : String) {}
+property progress_callback : Proc(String, Nil) = ->(_id : String) { }
     # A hash of mutexes required by tasks
     property mutexes = {} of String => Mutex
 
@@ -99,6 +99,15 @@ module Croupier
       @_store = Kiwi::MemoryStore.new
       @fast_mode = false
       @auto_mode = false
+      if watcher = @@watcher
+        begin
+          watcher.close
+        rescue ex : Inotify::Error
+          # Ignore "Bad file descriptor" errors during cleanup
+          # This can happen when the watcher is already closed or invalid
+        end
+        @@watcher = nil
+      end
     end
 
     # Tasks as a dependency graph sorted topologically
@@ -295,7 +304,7 @@ module Croupier
       run_all : Bool = false,
       dry_run : Bool = false,
       parallel : Bool = false,
-      keep_going : Bool = false
+      keep_going : Bool = false,
     )
       _, tasks = sorted_task_graph
       check_dependencies
@@ -313,7 +322,7 @@ module Croupier
       run_all : Bool = false,
       dry_run : Bool = false,
       parallel : Bool = false,
-      keep_going : Bool = false
+      keep_going : Bool = false,
     )
       tasks = dependencies(targets)
       if parallel
@@ -328,7 +337,7 @@ module Croupier
       outputs,
       run_all : Bool = false,
       dry_run : Bool = false,
-      keep_going : Bool = false
+      keep_going : Bool = false,
     )
       mark_stale_inputs
       finished = Set(Task).new
@@ -360,7 +369,7 @@ module Croupier
       targets : Array(String) = [] of String,
       run_all : Bool = false,
       dry_run : Bool = false,
-      keep_going : Bool = false
+      keep_going : Bool = false,
     )
       mark_stale_inputs
 
@@ -454,7 +463,9 @@ module Croupier
           when @autorun_control.receive
             Log.info { "Stopping automatic run" }
             @autorun_control.close
-            @@watcher.close # Stop watchers
+            if watcher = @@watcher
+              watcher.close # Stop watchers
+            end
             break
           else
             begin
@@ -487,7 +498,7 @@ module Croupier
     end
 
     # Filesystem watcher
-    @@watcher = Inotify::Watcher.new
+    @@watcher : Inotify::Watcher | Nil = nil
 
     # Watch for changes in inputs.
     # If an input has been changed BEFORE calling this method,
@@ -496,53 +507,57 @@ module Croupier
     # Changes are added to queued_changes
 
     def watch(targets : Array(String) = [] of String)
-      @@watcher.close
+      if current_watcher = @@watcher
+        current_watcher.close
+      end
       @@watcher = Inotify::Watcher.new
       targets = tasks.keys if targets.empty?
       target_inputs = inputs(targets)
 
-      @@watcher.on_event do |event|
-        # It's a file we care about, add it to the queue
-        path = Path["#{event.path}/#{event.name}"].normalize.to_s
-        Log.debug { "Detected change in #{path}" }
-        Log.trace { "Event: #{event}" }
-        # If path matches a watched path, add it to the queue
-        if target_inputs.includes? path
-          @queued_changes << path
-          Log.debug { "Queued change in #{path}" }
-        elsif target_inputs.any? { |input|
-                if path.starts_with? "#{input}/"
-                  # If we are watching a folder in path, add the folder to the queue
-                  @queued_changes << input
-                  Log.debug { "Queued change in #{input}" }
-                end
-              }
-        else
-          Log.trace { "Ignoring event" }
+      if watcher = @@watcher
+        watcher.on_event do |event|
+          # It's a file we care about, add it to the queue
+          path = Path["#{event.path}/#{event.name}"].normalize.to_s
+          Log.debug { "Detected change in #{path}" }
+          Log.trace { "Event: #{event}" }
+          # If path matches a watched path, add it to the queue
+          if target_inputs.includes? path
+            @queued_changes << path
+            Log.debug { "Queued change in #{path}" }
+          elsif target_inputs.any? { |input|
+                  if path.starts_with? "#{input}/"
+                    # If we are watching a folder in path, add the folder to the queue
+                    @queued_changes << input
+                    Log.debug { "Queued change in #{input}" }
+                  end
+                }
+          else
+            Log.trace { "Ignoring event" }
+          end
         end
-      end
 
-      watch_flags = LibInotify::IN_DELETE |
-                    LibInotify::IN_CREATE |
-                    LibInotify::IN_MODIFY |
-                    LibInotify::IN_MOVED_TO |
-                    LibInotify::IN_CLOSE_WRITE
-      # NOT watching IN_DELETE_SELF, IN_MOVE_SELF because
-      # when those are triggered we have no input file to
-      # process.
+        watch_flags = LibInotify::IN_DELETE |
+                      LibInotify::IN_CREATE |
+                      LibInotify::IN_MODIFY |
+                      LibInotify::IN_MOVED_TO |
+                      LibInotify::IN_CLOSE_WRITE
+        # NOT watching IN_DELETE_SELF, IN_MOVE_SELF because
+        # when those are triggered we have no input file to
+        # process.
 
-      target_inputs.each do |input|
-        # Don't watch for changes in k/v store
-        next if input.lchop?("kv://")
-        if File.exists? input
-          @@watcher.watch input, watch_flags
-        else
-          # It's a file that doesn't exist. To detect it
-          # being created, we watch the parent directory
-          # if we are not already watching it.
-          path = (Path[input].parent).to_s
-          if !@@watcher.watching.includes?(path)
-            @@watcher.watch path, watch_flags
+        target_inputs.each do |input|
+          # Don't watch for changes in k/v store
+          next if input.lchop?("kv://")
+          if File.exists? input
+            watcher.watch input, watch_flags
+          else
+            # It's a file that doesn't exist. To detect it
+            # being created, we watch the parent directory
+            # if we are not already watching it.
+            path = (Path[input].parent).to_s
+            if !watcher.watching.includes?(path)
+              watcher.watch path, watch_flags
+            end
           end
         end
       end

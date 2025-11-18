@@ -984,11 +984,13 @@ describe "TaskManager" do
         File.exists?("output3").should be_false
         # We create input, which is output3's dependency
         File.open("input", "w") << "bar"
+        sleep 0.1.seconds # Give auto_run time to detect the change
         Fiber.yield
-        # Tasks are not runnable (missing input2)
-        File.exists?("output3").should be_false
-        # We create input, which is output3's dependency
+        # Now output3 should exist since it only depends on input
+        File.exists?("output3").should be_true
+        # We create input2, which is output5's dependency
         File.open("input2", "w") << "bar"
+        sleep 0.1.seconds # Give auto_run time to detect the change
         Fiber.yield
         TaskManager.auto_stop
         # And now output3 should exist
@@ -1004,6 +1006,7 @@ describe "TaskManager" do
         TaskManager.auto_run
         Fiber.yield
         File.open("i", "w") << "foo"
+        sleep 0.1.seconds # Give auto_run time to detect the change
         # We need to yield or else the watch callbacks never run
         Fiber.yield
         # auto_run logs all errors and continues, because it's
@@ -1036,6 +1039,7 @@ describe "TaskManager" do
         TaskManager.auto_run
         Fiber.yield
         File.open("i", "w") << "foo"
+        sleep 0.1.seconds # Give auto_run time to detect the change
         Fiber.yield
         TaskManager.auto_stop
         # It should only have ran once
@@ -1051,6 +1055,7 @@ describe "TaskManager" do
         TaskManager.auto_run
         Fiber.yield
         File.open("i", "w") << "foo"
+        sleep 0.1.seconds # Give auto_run time to detect the change
         Fiber.yield
         TaskManager.auto_stop
         # It should only have ran once

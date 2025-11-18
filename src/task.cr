@@ -75,7 +75,7 @@ module Croupier
       no_save : Bool = false,
       id : String | Nil = nil,
       always_run : Bool = false,
-      mergeable : Bool = true
+      mergeable : Bool = true,
     )
       if !(inputs.to_set & outputs.to_set).empty?
         raise "Cycle detected"
@@ -125,7 +125,7 @@ module Croupier
       no_save : Bool = false,
       id : String | Nil = nil,
       always_run : Bool = false,
-      mergeable : Bool = true
+      mergeable : Bool = true,
     )
       initialize(
         outputs: output ? [output] : [] of String,

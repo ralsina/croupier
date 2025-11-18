@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(crystal spec:*)",
+      "Bash(bin/ameba:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
