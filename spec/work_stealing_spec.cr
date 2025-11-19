@@ -1,6 +1,5 @@
 require "./spec_helper"
 require "file_utils"
-require "yaml"
 include Croupier
 
 def with_scenario(
@@ -9,13 +8,20 @@ def with_scenario(
   to_create = {} of String => String,
   procs = {} of String => TaskProc, &
 )
+  # Setup logging, helps coverage
+  logs = IO::Memory.new
+  Log.setup(:trace, Log::IOBackend.new(io: logs))
+
+  # Library of procs - matching the original croupier_spec
   x = 0
   _procs = {
-    "output1" => TaskProc.new {
+    "dummy"   => TaskProc.new { "" },
+    "counter" => TaskProc.new {
       x += 1
       x.to_s
     },
     "output2" => TaskProc.new {
+      x += 1
       File.write("output2", "foo")
     },
   }.merge procs
