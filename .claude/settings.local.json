@@ -2,7 +2,16 @@
   "permissions": {
     "allow": [
       "Bash(crystal spec:*)",
-      "Bash(bin/ameba:*)"
+      "Bash(bin/ameba:*)",
+      "Bash(git checkout:*)",
+      "Bash(timeout:*)",
+      "Bash(git stash:*)",
+      "Bash(CRYSTAL_ENV=MT timeout 15s crystal spec:*)",
+      "Bash(CRYSTAL_LOG_LEVEL=debug timeout 15s crystal spec:*)",
+      "Bash(make:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(shards build:*)"
     ],
     "deny": [],
     "ask": []
