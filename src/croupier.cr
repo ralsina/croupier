@@ -36,7 +36,7 @@ module Croupier
     # If true, directories depend on a list of files, not its contents
     property? fast_dirs : Bool = false
     # If set, it's called after every task finishes
-property progress_callback : Proc(String, Nil) = ->(_id : String) { }
+    property progress_callback : Proc(String, Nil) = ->(_id : String) { }
     # A hash of mutexes required by tasks
     property mutexes = {} of String => Mutex
 
@@ -99,15 +99,14 @@ property progress_callback : Proc(String, Nil) = ->(_id : String) { }
       @_store = Kiwi::MemoryStore.new
       @fast_mode = false
       @auto_mode = false
-      if watcher = @@watcher
-        begin
-          watcher.close
-        rescue ex : Inotify::Error
-          # Ignore "Bad file descriptor" errors during cleanup
-          # This can happen when the watcher is already closed or invalid
-        end
-        @@watcher = nil
+      return unless watcher = @@watcher
+      begin
+        watcher.close
+      rescue ex : Inotify::Error
+        # Ignore "Bad file descriptor" errors during cleanup
+        # This can happen when the watcher is already closed or invalid
       end
+      @@watcher = nil
     end
 
     # Tasks as a dependency graph sorted topologically
@@ -291,7 +290,7 @@ property progress_callback : Proc(String, Nil) = ->(_id : String) { }
           !File.exists?(input)
       }
       raise "Can't run: Unknown inputs #{bad_inputs.join(", ")}" \
-         unless bad_inputs.empty?
+        unless bad_inputs.empty?
     end
 
     # Run all stale tasks in dependency order
@@ -374,7 +373,8 @@ property progress_callback : Proc(String, Nil) = ->(_id : String) { }
       mark_stale_inputs
 
       targets = tasks.keys if targets.empty?
-      _tasks = dependencies(targets).map { |t| tasks[t] }
+      deps = dependencies(targets)
+      _tasks = deps.map { |t| tasks[t] }
       finished_tasks = Set(Task).new
       failed_tasks = Set(Task).new
       errors = [] of String
@@ -402,35 +402,34 @@ property progress_callback : Proc(String, Nil) = ->(_id : String) { }
           raise "Can't run tasks: Waiting for #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}"
         end
 
-        chunk_size = batch.size // 4
-        chunks = [
-          batch[0...chunk_size],
-          batch[chunk_size...chunk_size * 2],
-          batch[chunk_size * 2...chunk_size * 3],
-          batch[chunk_size * 3..],
-        ]
+        # Use work-stealing approach for better load balancing
+        num_workers = Math.min(System.cpu_count, batch.size)
+        task_queue = Channel(Task).new(batch.size)
+
+        # Add all tasks to the shared queue
+        batch.each { |task| task_queue.send(task) }
 
         wg = WaitGroup.new(batch.size)
-        Log.debug { "Starting batch of #{batch.size} tasks in 4 chunks of #{chunk_size} tasks" }
-        # This uses each `chunk` as a queue and runs all 4 queues in parallel.
-        # It's not the *best* way to do it because if a chunk has larger tasks
-        # than the others, it will take longer to finish. But it's good enough
-        # for now.
-        chunks.each_with_index do |chunk, i|
+        Log.debug { "Starting work-stealing execution of #{batch.size} tasks with #{num_workers} workers" }
+
+        # Create worker fibers that pull tasks from the queue
+        num_workers.times do
           spawn do
-            chunk.each do |t|
+            loop do
+              task = task_queue.receive?
+              break unless task # Queue is empty, exit worker
+
               begin
-                Fiber.yield
-                t.run unless dry_run
+                task.run unless dry_run
               rescue ex
-                failed_tasks << t
+                failed_tasks << task
                 errors << ex.message.to_s
+                Log.error { "Task #{task.outputs} failed: #{ex.message}" }
               ensure
                 # Task is done, do not run again
-                t.stale = false
-                finished_tasks << t
+                task.stale = false
+                finished_tasks << task
                 wg.done
-                Fiber.yield
               end
             end
           end
@@ -456,6 +455,11 @@ property progress_callback : Proc(String, Nil) = ->(_id : String) { }
       # Only want dependencies that are not tasks
       inputs = inputs(targets)
       raise "No inputs to watch, can't auto_run" if inputs.empty?
+
+      # Auto_run always runs serially to avoid inotify thread safety issues
+      # File watching and parallel execution don't mix well due to
+      # shared state and nonblocking inotify library limitations
+      Log.info { "Auto_run mode: forcing serial execution (parallel disabled)" }
       watch(targets)
       spawn do
         loop do
@@ -481,7 +485,7 @@ property progress_callback : Proc(String, Nil) = ->(_id : String) { }
               targets.each { |t| tasks[t].stale = true }
               @modified += @queued_changes
               Log.debug { "Modified: #{@modified}" }
-              run_tasks(targets: targets)
+              run_tasks(targets: targets, parallel: false)
               # Only clean queued changes after a successful run
               @modified.clear
               @queued_changes.clear
@@ -510,54 +514,54 @@ property progress_callback : Proc(String, Nil) = ->(_id : String) { }
       if current_watcher = @@watcher
         current_watcher.close
       end
+
       @@watcher = Inotify::Watcher.new
       targets = tasks.keys if targets.empty?
       target_inputs = inputs(targets)
 
-      if watcher = @@watcher
-        watcher.on_event do |event|
-          # It's a file we care about, add it to the queue
-          path = Path["#{event.path}/#{event.name}"].normalize.to_s
-          Log.debug { "Detected change in #{path}" }
-          Log.trace { "Event: #{event}" }
-          # If path matches a watched path, add it to the queue
-          if target_inputs.includes? path
-            @queued_changes << path
-            Log.debug { "Queued change in #{path}" }
-          elsif target_inputs.any? { |input|
-                  if path.starts_with? "#{input}/"
-                    # If we are watching a folder in path, add the folder to the queue
-                    @queued_changes << input
-                    Log.debug { "Queued change in #{input}" }
-                  end
-                }
-          else
-            Log.trace { "Ignoring event" }
-          end
+      return unless watcher = @@watcher
+      watcher.on_event do |event|
+        # It's a file we care about, add it to the queue
+        path = Path["#{event.path}/#{event.name}"].normalize.to_s
+        Log.debug { "Detected change in #{path}" }
+        Log.trace { "Event: #{event}" }
+        # If path matches a watched path, add it to the queue
+        if target_inputs.includes? path
+          @queued_changes << path
+          Log.debug { "Queued change in #{path}" }
+        elsif target_inputs.any? { |input|
+                if path.starts_with? "#{input}/"
+                  # If we are watching a folder in path, add the folder to the queue
+                  @queued_changes << input
+                  Log.debug { "Queued change in #{input}" }
+                end
+              }
+        else
+          Log.trace { "Ignoring event" }
         end
+      end
 
-        watch_flags = LibInotify::IN_DELETE |
-                      LibInotify::IN_CREATE |
-                      LibInotify::IN_MODIFY |
-                      LibInotify::IN_MOVED_TO |
-                      LibInotify::IN_CLOSE_WRITE
-        # NOT watching IN_DELETE_SELF, IN_MOVE_SELF because
-        # when those are triggered we have no input file to
-        # process.
+      watch_flags = LibInotify::IN_DELETE |
+                    LibInotify::IN_CREATE |
+                    LibInotify::IN_MODIFY |
+                    LibInotify::IN_MOVED_TO |
+                    LibInotify::IN_CLOSE_WRITE
+      # NOT watching IN_DELETE_SELF, IN_MOVE_SELF because
+      # when those are triggered we have no input file to
+      # process.
 
-        target_inputs.each do |input|
-          # Don't watch for changes in k/v store
-          next if input.lchop?("kv://")
-          if File.exists? input
-            watcher.watch input, watch_flags
-          else
-            # It's a file that doesn't exist. To detect it
-            # being created, we watch the parent directory
-            # if we are not already watching it.
-            path = (Path[input].parent).to_s
-            if !watcher.watching.includes?(path)
-              watcher.watch path, watch_flags
-            end
+      target_inputs.each do |input|
+        # Don't watch for changes in k/v store
+        next if input.lchop?("kv://")
+        if File.exists? input
+          watcher.watch input, watch_flags
+        else
+          # It's a file that doesn't exist. To detect it
+          # being created, we watch the parent directory
+          # if we are not already watching it.
+          path = (Path[input].parent).to_s
+          if !watcher.watching.includes?(path)
+            watcher.watch path, watch_flags
           end
         end
       end

@@ -16,7 +16,7 @@ module Croupier
     property id : String = ""
     property inputs : Set(String) = Set(String).new
     property outputs : Array(String) = [] of String
-    property stale : Bool = true # ameba:disable Style/QueryBoolMethods
+    property stale : Bool = true
     property? always_run : Bool = false
     property? no_save : Bool = false
     @[YAML::Field(ignore: true)]
@@ -100,7 +100,7 @@ module Croupier
       # Refuse to merge if this task or any of the colliding ones
       # are not mergeable
       raise "Can't merge task #{self} with #{to_merge[..-2].map(&.to_s)}" \
-         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
+        if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
     end

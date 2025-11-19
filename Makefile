@@ -3,6 +3,12 @@ all: test coverage
 test:
 	shards install
 	crystal spec -v --error-trace
+
+test-parallel:
+	@echo "NOTE: Multi-threading (-Dpreview_mt) has inotify compatibility issues"
+	@echo "Running parallel tests without multi-threading"
+	shards install
+	crystal spec -v --error-trace
 coverage: coverage/index.html
 mutation: bin/crytic
 	bin/crytic test
@@ -22,4 +28,4 @@ clean:
 	rm -rf lib/ bin/ coverage/ shard.lock
 	git clean -f
 
-.PHONY: clean coverage mutation test all
+.PHONY: clean coverage mutation test test-parallel all
