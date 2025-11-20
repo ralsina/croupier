@@ -13,7 +13,6 @@ dependencies:
     github: jtomschroeder/crystalline
   inotify:
     github: petoem/inotify.cr
-    branch: nonblock
   kiwi:
     github: ralsina/kiwi
     branch: master
