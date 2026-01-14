@@ -228,6 +228,9 @@ module Croupier
 
     # Read state of last run, then scan inputs and compare
     def mark_stale_inputs
+      # Clear modified set before recomputing
+      @modified.clear
+
       if File.exists? ".croupier"
         last_run_date = File.info(".croupier").modification_time
         last_run = File.open(".croupier") do |file|
@@ -279,6 +282,83 @@ module Croupier
       File.open(".croupier", "w") do |file|
         file << YAML.dump(this_run.merge next_run)
       end
+    end
+
+    # Propagate staleness through the task graph in a single forward pass.
+    # This replaces the expensive recursive staleness checking with an
+    # O(V+E) algorithm that's critical for tasks with many inputs.
+    def propagate_staleness
+      # Reset all task staleness to nil (unknown) first
+      tasks.values.each(&.stale=(nil))
+
+      # Build reverse dependency graph (who depends on me)
+      reverse_deps = Hash(String, Set(String)).new do |h, k|
+        h[k] = Set(String).new
+      end
+
+      tasks.each do |output, task|
+        task.inputs.each do |input|
+          if tasks.has_key?(input)
+            reverse_deps[input] << output
+          end
+        end
+      end
+
+      # Find definitively stale tasks (roots of staleness)
+      # These are tasks that are stale for their own reasons:
+      # 1. always_run tasks
+      # 2. Tasks with no inputs
+      # 3. Tasks with missing outputs
+      # 4. Tasks with modified inputs
+      stale_tasks = Set(String).new
+
+      tasks.each do |output, task|
+        if task.always_run? || task.inputs.empty?
+          stale_tasks << output
+          next
+        end
+
+        file_outputs = task.outputs.reject(&.lchop?("kv://"))
+        kv_outputs = task.outputs.select(&.lchop?("kv://")).map(&.lchop("kv://"))
+
+        # Check if outputs are missing
+        missing_outputs = file_outputs.any? { |o| !File.exists?(o) } ||
+                          kv_outputs.any? { |o| !TaskManager.get(o) }
+        if missing_outputs
+          stale_tasks << output
+          next
+        end
+
+        # Check if inputs are modified
+        modified_inputs = task.inputs.any? { |i| modified.includes?(i) }
+        if modified_inputs
+          stale_tasks << output
+          next
+        end
+      end
+
+      # Propagate staleness through the graph
+      # If a task is stale, all tasks that depend on it are also stale
+      # We use a worklist algorithm for efficiency
+      worklist = stale_tasks.to_a
+
+      while !worklist.empty?
+        stale_output = worklist.shift
+
+        reverse_deps[stale_output].each do |dependent|
+          unless stale_tasks.includes?(dependent)
+            stale_tasks << dependent
+            worklist << dependent
+          end
+        end
+      end
+
+      # Mark non-stale tasks as fresh
+      tasks.each do |output, task|
+        task.stale = stale_tasks.includes?(output)
+      end
+
+      Log.debug { "Propagated staleness: #{stale_tasks.size} stale, #{tasks.size - stale_tasks.size} fresh" }
     end
 
     # Check if all inputs are correct:
@@ -339,6 +419,7 @@ module Croupier
       keep_going : Bool = false,
     )
       mark_stale_inputs
+      propagate_staleness
       finished = Set(Task).new
       outputs.compact_map { |o|
         tasks.fetch(o, nil)
@@ -371,6 +452,7 @@ module Croupier
       keep_going : Bool = false,
     )
       mark_stale_inputs
+      propagate_staleness
 
       targets = tasks.keys if targets.empty?
       deps = dependencies(targets)

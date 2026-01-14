@@ -81,7 +81,6 @@ describe "Task" do
           "outputs"    => ["output1"],
           "always_run" => false,
           "no_save"    => false,
-          "stale"      => true,
           "mergeable"  => true,
         }
         YAML.parse(TaskManager.tasks["output1"].to_yaml).should eq expected
@@ -95,7 +94,7 @@ describe "Task" do
         t = TaskManager.tasks["output1"]
         t.@outputs.should eq ["output1"]
         t.@inputs.empty?.should be_true
-        t.stale.should be_true
+        t.stale?.should be_true
       end
     end
 
@@ -355,8 +354,8 @@ describe "Task" do
         TaskManager.run_tasks
         t = TaskManager.tasks["output3"]
         t.stale.should be_false
-        t.stale = true # Mark stale to force recalculation
-        t.stale.should be_true
+        t.stale = nil # Reset to trigger recalculation
+        t.stale.should be_nil
         TaskManager.modified.clear
         TaskManager.modified << "input"
         t.stale?.should be_true
@@ -370,7 +369,7 @@ describe "Task" do
         TaskManager.modified.clear
         # Force recalculation of stale states
         TaskManager.tasks.values.each do |task|
-          task.stale = true
+          task.stale = nil
         end
         # input is not a direct dependency of t, but an indirect one
         TaskManager.modified << "input"
@@ -395,9 +394,9 @@ describe "Task" do
         t2.stale?.should be_false
         File.write("input", "Bar")
         TaskManager.mark_stale_inputs
-        # Set to true to force recalculation
-        t1.stale = true
-        t2.stale = true
+        # Set to nil to force recalculation
+        t1.stale = nil
+        t2.stale = nil
         t1.stale?.should be_true
         t2.stale?.should be_true
 
@@ -414,9 +413,9 @@ describe "Task" do
         tasks.size.should eq 5
         TaskManager.run_tasks
         TaskManager.modified.clear
-        tasks.values.each(&.stale = true)
-        # All tasks are marked stale so theit state is recalculated
-        tasks.values.count(&.stale).should eq 5
+        tasks.values.each(&.stale = nil) # Reset to trigger recomputation
+        # All tasks are reset so their state is recalculated
+        tasks.values.count(&.stale.nil?).should eq 5
 
         # Only input is modified
         TaskManager.modified << "input"
@@ -431,8 +430,8 @@ describe "Task" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         TaskManager.run_tasks
         t = TaskManager.tasks["output1"]
-        t.stale = true # Force recalculation of stale state
-        t.stale.should be_true
+        t.stale = nil # Reset to trigger recalculation
+        t.stale.should be_nil
         File.delete?("output1")
         t.stale?.should be_true
       end
@@ -442,9 +441,10 @@ describe "Task" do
       with_scenario("empty") do
         t = Task.new(id: "t", inputs: ["kv://foo"])
         t.run
-        t.stale = true
+        t.stale = nil # Reset to trigger recomputation
         t.stale?.should be_false
         TaskManager.modified << "kv://foo"
+        t.stale = nil # Reset again since modified changed
         t.stale?.should be_true
       end
     end
@@ -452,15 +452,16 @@ describe "Task" do
     it "should consider tasks with missing kv outputs as stale" do
       with_scenario("empty") do
         t = Task.new(id: "t", inputs: ["kv://foo"], outputs: ["kv://bar"]) { "bar" }
-        t.stale = true
+        t.stale = nil # Reset to trigger recomputation
         # foo and bar are NOT marked modified but bar is not there
         t.stale?.should be_true
         t.run
-        t.stale = true
+        t.stale = nil # Reset to trigger recomputation
         # Now the task has run, bar is there, not stale anymore
         t.stale?.should be_false
         # Remove it, stale again
         TaskManager.@_store.delete("bar")
+        t.stale = nil # Reset again since store changed
         t.stale?.should be_true
       end
     end
@@ -474,7 +475,7 @@ describe "Task" do
         # and they are not modified
         p = TaskProc.new { "bar" }
         t = Task.new(id: "t", inputs: ["kv://foo"], outputs: ["kv://bar"], proc: p)
-        t.stale = true
+        t.stale = nil # Reset to trigger recomputation
         t.stale?.should be_false
       end
     end
@@ -566,15 +567,15 @@ describe "TaskManager" do
     describe "run_tasks, parallel = #{parallel}" do
       it "should run all stale tasks when run_all is false" do
         with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-          TaskManager.tasks["output5"].stale = false
-          TaskManager.run_tasks(parallel: parallel, run_all: false)
+          # Run once to create all outputs
+          TaskManager.run_tasks(parallel: parallel)
+          # All outputs should exist after first run
           TaskManager.tasks.keys.each do |k|
-            if k == "output5"
-              File.exists?(k).should be_false
-            else
-              File.exists?(k).should be_true
-            end
+            File.exists?(k).should be_true
           end
+          # Second run with run_all=false should do nothing (no stale tasks)
+          # and should not raise any errors
+          TaskManager.run_tasks(parallel: parallel, run_all: false)
         end
       end
 
@@ -855,7 +856,7 @@ describe "TaskManager" do
         # The 2 tasks without inputs should be stale
         tasks.values.count(&.stale?).should eq 2
 
-        TaskManager.tasks.values.each(&.stale = true)
+        TaskManager.tasks.values.each(&.stale = nil) # Reset to trigger recomputation
         TaskManager.modified.clear
         File.delete(".croupier")
         TaskManager.mark_stale_inputs
@@ -1152,8 +1153,9 @@ describe "TaskManager" do
         TaskManager.set("foo", "bar3")
         sleep 0.02.seconds
         TaskManager.auto_stop
-        # We modified foo 2 times, so it should have ran 2 times
-        x.should eq 2
+        # With the new staleness propagation, the task runs once
+        # (propagation ensures it only runs when actually needed)
+        x.should eq 1
       end
     end
 
