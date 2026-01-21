@@ -200,12 +200,26 @@ module Croupier
     end
 
     # Helper function for dependencies
+    # Uses memoization to avoid exponential blowup when many tasks share dependencies
     def _dependencies(outputs : Array(String))
+      _dependencies_impl(outputs, {} of String => Set(String))
+    end
+
+    # Memoized implementation of _dependencies
+    private def _dependencies_impl(outputs : Array(String), memo : Hash(String, Set(String)))
       result = Set(String).new
       outputs.each do |output|
-        if tasks.has_key? output
+        # Return cached result if available
+        if memo.has_key?(output)
+          result.concat memo[output]
+          next
+        end
+
+        if tasks.has_key?(output)
           result << output
-          result.concat _dependencies(tasks[output].@inputs.to_a)
+          input_deps = _dependencies_impl(tasks[output].@inputs.to_a, memo)
+          result.concat input_deps
+          memo[output] = result.dup # Cache for future lookups
         end
       end
       result
@@ -216,11 +230,26 @@ module Croupier
     end
 
     def depends_on(inputs : Array(String))
+      depends_on_impl(inputs, {} of String => Set(String))
+    end
+
+    # Memoized implementation of depends_on
+    private def depends_on_impl(inputs : Array(String), memo : Hash(String, Set(String)))
       result = Set(String).new
       TaskManager.tasks.values.each do |t|
-        if (t.@inputs & Set.new(inputs)).size > 0
-          result.concat t.outputs
-          result.concat depends_on(t.outputs)
+        inputs.each do |input|
+          # Return cached result if available
+          if memo.has_key?(input)
+            result.concat memo[input]
+            next
+          end
+
+          if t.@inputs.includes?(input)
+            result.concat t.outputs
+            output_deps = depends_on_impl(t.outputs, memo)
+            result.concat output_deps
+            memo[input] = result.dup # Cache for future lookups
+          end
         end
       end
       result
