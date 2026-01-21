@@ -432,17 +432,25 @@ module Croupier
       parallel : Bool = false,
       keep_going : Bool = false,
     )
-      tasks = dependencies(targets)
-      if parallel
-        _run_tasks_parallel(tasks, run_all, dry_run, keep_going)
+      # Optimization: if targets already contains all tasks (from sorted_task_graph),
+      # skip the expensive dependencies() call since they're already in correct order
+      if targets.size == tasks.size
+        Log.debug { "Skipping dependencies() call, targets already contain all #{targets.size} tasks" }
+        task_names = targets
       else
-        _run_tasks(tasks, run_all, dry_run, keep_going)
+        task_names = dependencies(targets)
+      end
+
+      if parallel
+        _run_tasks_parallel(task_names, run_all, dry_run, keep_going)
+      else
+        _run_tasks(task_names, run_all, dry_run, keep_going)
       end
     end
 
     # Internal helper to run tasks serially
     def _run_tasks(
-      outputs,
+      task_names,
       run_all : Bool = false,
       dry_run : Bool = false,
       keep_going : Bool = false,
@@ -450,8 +458,8 @@ module Croupier
       mark_stale_inputs
       propagate_staleness
       finished = Set(Task).new
-      outputs.compact_map { |o|
-        tasks.fetch(o, nil)
+      task_names.compact_map { |name|
+        tasks.fetch(name, nil)
       }.reject { |t|
         !(t.stale? || run_all || t.@always_run)
       }.each do |t|
@@ -475,7 +483,7 @@ module Croupier
     # This is only concurrency, not parallelism, but on tests
     # it seems to be faster than running tasks sequentially.
     def _run_tasks_parallel(
-      targets : Array(String) = [] of String,
+      task_names : Array(String) = [] of String,
       run_all : Bool = false,
       dry_run : Bool = false,
       keep_going : Bool = false,
@@ -483,9 +491,8 @@ module Croupier
       mark_stale_inputs
       propagate_staleness
 
-      targets = tasks.keys if targets.empty?
-      deps = dependencies(targets)
-      _tasks = deps.map { |t| tasks[t] }
+      task_names = tasks.keys if task_names.empty?
+      _tasks = task_names.map { |name| tasks[name] }
       finished_tasks = Set(Task).new
       failed_tasks = Set(Task).new
       errors = [] of String
