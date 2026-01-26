@@ -1153,9 +1153,8 @@ describe "TaskManager" do
         TaskManager.set("foo", "bar3")
         sleep 0.02.seconds
         TaskManager.auto_stop
-        # With the new staleness propagation, the task runs once
-        # (propagation ensures it only runs when actually needed)
-        x.should eq 1
+        # With the auto mode fix, both changes are detected (not just the first)
+        x.should eq 2
       end
     end
 
