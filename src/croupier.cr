@@ -37,6 +37,9 @@ module Croupier
     property? fast_dirs : Bool = false
     # If set, it's called after every task finishes
     property progress_callback : Proc(String, Nil) = ->(_id : String) { }
+    # If set, it's called in auto mode after changes are detected but before tasks run
+    # Receives the list of changed files as an argument
+    property before_run_hook : Proc(Set(String), Nil) = ->(_changes : Set(String)) { }
     # A hash of mutexes required by tasks
     property mutexes = {} of String => Mutex
 
@@ -612,6 +615,8 @@ module Croupier
               targets.each { |t| tasks[t].stale = true }
               @modified += @queued_changes
               Log.debug { "Modified: #{@modified}" }
+              # Call the before_run_hook if set, passing the changed files
+              before_run_hook.call(@modified.dup) unless @modified.empty?
               run_tasks(targets: targets, parallel: false)
               # Only clean queued changes after a successful run
               @modified.clear

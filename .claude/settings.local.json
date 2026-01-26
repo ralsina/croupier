@@ -11,7 +11,11 @@
       "Bash(make:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(shards build:*)"
+      "Bash(shards build:*)",
+      "Bash(GIT_SEQUENCE_EDITOR=\"sed -i '2,9s/^pick /squash /'\" git rebase:*)",
+      "Bash(git reset:*)",
+      "Bash(git push:*)",
+      "Bash(gh release create:*)"
     ],
     "deny": [],
     "ask": []

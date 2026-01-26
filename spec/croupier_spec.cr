@@ -1260,5 +1260,41 @@ describe "TaskManager" do
         TaskManager.get("foo").should eq "bar"
       end
     end
+
+    it "should call before_run_hook before tasks run" do
+      with_scenario("empty") do
+        hook_called = false
+        hook_changes = Set(String).new
+
+        # Create a task that depends on a file
+        File.open("input", "w") { |f| f << "initial" }
+        Task.new(inputs: ["input"], output: "output",
+          proc: TaskProc.new {
+            File.open("output", "w") { |f| f << "done" }
+            "output"
+          })
+
+        TaskManager.before_run_hook = ->(changes : Set(String)) {
+          hook_called = true
+          hook_changes = changes.dup
+        }
+
+        TaskManager.auto_run
+        # Initially no changes, hook not called
+        hook_called.should be_false
+
+        # Trigger a change
+        File.open("input", "w") << "modified"
+        sleep 0.05.seconds
+
+        # Hook should have been called with the changed file
+        hook_called.should be_true
+        hook_changes.should contain "input"
+
+        TaskManager.auto_stop
+        # Reset hook for other tests
+        TaskManager.before_run_hook = ->(_changes : Set(String)) { }
+      end
+    end
   end
 end
