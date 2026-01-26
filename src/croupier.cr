@@ -587,12 +587,8 @@ module Croupier
       # File watching and parallel execution don't mix well due to
       # shared state and nonblocking inotify library limitations
       Log.info { "Auto_run mode: forcing serial execution (parallel disabled)" }
-      Log.info { "Watching #{inputs.size} inputs: #{inputs.inspect}" }
       watch(targets)
       spawn do
-        Log.info { "Auto run fiber started, waiting for events..." }
-        loop_counter = 0
-        last_watch_log_time = Time.monotonic
         loop do
           select
           when @autorun_control.receive
@@ -604,24 +600,6 @@ module Croupier
             break
           else
             begin
-              # Log every 100 iterations to show we're alive
-              loop_counter += 1
-              if loop_counter % 100 == 0
-                Log.info { "Auto run fiber is alive (iteration #{loop_counter}), qc: #{@queued_changes.size}, mod: #{@modified.size}" }
-              end
-
-              # Log every 5 seconds the list of watched files and watcher status
-              now = Time.monotonic
-              if (now - last_watch_log_time).total_seconds >= 5
-                if watcher = @@watcher
-                  Log.info { "Watcher active: true, enabled: #{watcher.@enabled}, watching #{watcher.watching.size} paths:" }
-                  watcher.watching.each { |w| Log.info { "  - #{w}" } }
-                else
-                  Log.warn { "Watcher active: false (@@watcher is nil)" }
-                end
-                last_watch_log_time = now
-              end
-
               # Sleep early is better for race conditions in tests
               # If we sleep late, it's likely that we'll get the
               # stop order and break the loop without running, so
@@ -629,17 +607,15 @@ module Croupier
               # the tests.
               sleep 0.01.seconds
               next if @queued_changes.empty? && @modified.empty?
-              Log.info { "Detected changes in #{@queued_changes}, modified: #{@modified}" }
+              Log.info { "Detected changes in #{@queued_changes}" }
               # Mark all targets as stale
               targets.each { |t| tasks[t].stale = true }
               @modified += @queued_changes
               Log.debug { "Modified: #{@modified}" }
-              Log.info { "Running tasks for #{targets.size} targets" }
               run_tasks(targets: targets, parallel: false)
               # Only clean queued changes after a successful run
               @modified.clear
               @queued_changes.clear
-              Log.info { "Task run complete, waiting for next change" }
             rescue ex
               # Sometimes we can't run because not all dependencies
               # are there yet or whatever. We'll try again later
@@ -683,29 +659,22 @@ module Croupier
       # when those are triggered we have no input file to
       # process.
 
-      Log.info { "Setting up inotify event handler" }
       event_handler = ->(event : Inotify::Event) do
-        Log.info { "inotify event fired! mask=#{event.mask}, name=#{event.name}, path=#{event.path}, wd=#{event.wd}" }
         # It's a file we care about, add it to the queue
         path = Path["#{event.path}/#{event.name}"].normalize.to_s
-        Log.info { "inotify detected change in #{path}" }
-        Log.trace { "Event: #{event}" }
 
         # If watch was removed (e.g., editor deleted/replaced the file), re-add it
         if event.type_is?(LibInotify::IN_IGNORED)
-          Log.warn { "Watch removed (IN_IGNORED) for wd=#{event.wd}, path=#{event.path}" }
-          # Re-watch the file if it still exists or watch its parent directory
           if ep = event.path
             if target_inputs.includes?(ep)
               if File.exists?(ep)
                 watcher.watch ep, watch_flags
-                Log.info { "Re-watched file after IN_IGNORED: #{ep}" }
+                Log.debug { "Re-watched file after editor replacement: #{ep}" }
               else
                 # File doesn't exist, watch parent directory for creation
                 parent = Path[ep].parent.to_s
                 unless watcher.watching.includes?(parent)
                   watcher.watch parent, watch_flags
-                  Log.info { "Watching parent directory after IN_IGNORED: #{parent}" }
                 end
               end
             end
@@ -715,28 +684,23 @@ module Croupier
         # If path matches a watched path, add it to the queue
         if target_inputs.includes? path
           @queued_changes << path
-          Log.info { "Queued change in #{path}" }
+          Log.debug { "Detected change in #{path}" }
         elsif target_inputs.any? { |input|
                 if path.starts_with? "#{input}/"
                   # If we are watching a folder in path, add the folder to the queue
                   @queued_changes << input
-                  Log.info { "Queued change in #{input}" }
+                  Log.debug { "Detected change in #{input}" }
                 end
               }
-        else
-          Log.trace { "Ignoring event for #{path}" }
         end
       end
       watcher.on_event(&event_handler)
-      Log.info { "Inotify event handler registered" }
-      Log.info { "Watcher enabled: #{watcher.@enabled}" }
 
       target_inputs.each do |input|
         # Don't watch for changes in k/v store
         next if input.lchop?("kv://")
         if File.exists? input
           watcher.watch input, watch_flags
-          Log.info { "Watching file: #{input}" }
         else
           # It's a file that doesn't exist. To detect it
           # being created, we watch the parent directory
@@ -744,12 +708,9 @@ module Croupier
           path = (Path[input].parent).to_s
           if !watcher.watching.includes?(path)
             watcher.watch path, watch_flags
-            Log.info { "Watching directory for non-existent file: #{path}" }
           end
         end
       end
-      Log.info { "Watching #{watcher.watching.size} paths via inotify:" }
-      watcher.watching.each { |w| Log.info { "  - #{w}" } }
     end
   end
 
