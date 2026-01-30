@@ -42,6 +42,7 @@ module Croupier
     property before_run_hook : Proc(Set(String), Nil) = ->(_changes : Set(String)) { }
     # A hash of mutexes required by tasks
     property mutexes = {} of String => Mutex
+    @graph_invalidated : Bool = false
 
     def add_mutex(name : String)
       mutexes[name] = Mutex.new
@@ -87,6 +88,42 @@ module Croupier
       Log.debug { "Storing k/v data in #{path}" }
     end
 
+    # Register a subtask with the task manager
+    def register_subtask(master_id : String, subtask : Task)
+      # Track this subtask in master's subtask list
+      if master = tasks[master_id]?
+        master.subtask_ids << subtask.id
+      end
+
+      invalidate_graph_cache
+    end
+
+    # Remove all subtasks belonging to a master task
+    def remove_subtasks(master_id : String)
+      if master = tasks[master_id]?
+        keys_to_delete = [] of String
+        tasks.each do |key, task|
+          keys_to_delete << key if master.subtask_ids.includes?(task.id)
+        end
+        keys_to_delete.each { |key| tasks.delete(key) }
+        master.subtask_ids.clear
+      end
+
+      invalidate_graph_cache
+    end
+
+    # Invalidate the cached task graph
+    def invalidate_graph_cache
+      @graph_invalidated = true
+      # Don't use set() here to avoid triggering auto_run loops
+      @_store.set("__croupier_graph_rebuild_needed", "true")
+    end
+
+    # Invalidate the graph cache without setting k/v (for internal use from Task.initialize)
+    def invalidate_graph_cache_no_store
+      @graph_invalidated = true
+    end
+
     # Remove all tasks and everything else (good for tests)
     def cleanup
       modified.clear
@@ -102,6 +139,7 @@ module Croupier
       @_store = Kiwi::MemoryStore.new
       @fast_mode = false
       @auto_mode = false
+      @graph_invalidated = false
       return unless watcher = @@watcher
       begin
         watcher.close
@@ -117,44 +155,51 @@ module Croupier
     @graph_sorted = [] of String
 
     def sorted_task_graph
-      return @graph, @graph_sorted unless @graph.@vertice_dict.empty?
-      # First, we create the graph
-      @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
+      # Rebuild graph if invalidated
+      if @graph_invalidated || @graph.@vertice_dict.empty?
+        @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
+        @graph_sorted = [] of String
+        @graph_invalidated = false
+        # Don't use set() here to avoid triggering auto_run loops
+        @_store.set("__croupier_graph_rebuild_needed", "false")
+        # Clear all_inputs cache so it gets rebuilt with new subtask inputs
+        @all_inputs.clear
 
-      # Add all tasks and inputs as vertices
-      # Add all dependencies as edges
+        # Add all tasks and inputs as vertices
+        # Add all dependencies as edges
 
-      # The start node is just a convenience
-      @graph.add_vertex "start"
+        # The start node is just a convenience
+        @graph.add_vertex "start"
 
-      # All inputs are vertices
-      all_inputs.each do |input|
-        if !tasks.has_key? input
-          @graph.add_vertex input
-          @graph.add_edge "start", input
+        # All inputs are vertices
+        all_inputs.each do |input|
+          if !tasks.has_key? input
+            @graph.add_vertex input
+            @graph.add_edge "start", input
+          end
         end
+
+        # Tasks without outputs are added as vertices by ID
+        tasks.values.each do |task|
+          if task.@outputs.empty?
+            @graph.add_vertex task.@id
+          end
+        end
+
+        # Add vertices and edges for inputs
+        tasks.each do |output, task|
+          @graph.add_vertex output
+          if task.@inputs.empty?
+            @graph.add_edge "start", output
+          end
+          task.@inputs.each do |input|
+            @graph.add_edge input, output
+          end
+        end
+
+        # Only return tasks, not inputs in the sorted graph
+        @graph_sorted = topological_sort(@graph.@vertice_dict).select { |v| tasks.has_key? v }
       end
-
-      # Tasks without outputs are added as vertices by ID
-      tasks.values.each do |task|
-        if task.@outputs.empty?
-          @graph.add_vertex task.@id
-        end
-      end
-
-      # Add vertices and edges for inputs
-      tasks.each do |output, task|
-        @graph.add_vertex output
-        if task.@inputs.empty?
-          @graph.add_edge "start", output
-        end
-        task.@inputs.each do |input|
-          @graph.add_edge input, output
-        end
-      end
-
-      # Only return tasks, not inputs in the sorted graph
-      @graph_sorted = topological_sort(@graph.@vertice_dict).select { |v| tasks.has_key? v }
       return @graph, @graph_sorted
     end
 
@@ -584,6 +629,7 @@ module Croupier
       targets = tasks.keys if targets.empty?
       # Only want dependencies that are not tasks
       inputs = inputs(targets)
+      Log.info { "Auto_run: targets=#{targets.inspect}, inputs=#{inputs.inspect}" }
       raise "No inputs to watch, can't auto_run" if inputs.empty?
 
       # Auto_run always runs serially to avoid inotify thread safety issues
@@ -615,9 +661,21 @@ module Croupier
               targets.each { |t| tasks[t].stale = true }
               @modified += @queued_changes
               Log.debug { "Modified: #{@modified}" }
+              # Check for graph rebuild flag before running tasks
+              if TaskManager.get("__croupier_graph_rebuild_needed") == "true"
+                @graph_invalidated = true
+              end
               # Call the before_run_hook if set, passing the changed files
               before_run_hook.call(@modified.dup) unless @modified.empty?
+              # Run tasks - if master tasks create new subtasks, the graph
+              # will be invalidated and we need to run again to execute them
+              initial_task_count = tasks.size
               run_tasks(targets: targets, parallel: false)
+              # If new tasks were created (graph was invalidated), run again
+              if @graph_invalidated || tasks.size > initial_task_count
+                targets = tasks.keys
+                run_tasks(targets: targets, parallel: false)
+              end
               # Only clean queued changes after a successful run
               @modified.clear
               @queued_changes.clear
@@ -642,12 +700,12 @@ module Croupier
     #
     # Changes are added to queued_changes
 
-    def watch(targets : Array(String) = [] of String)
+    def watch(targets : Array(String) = [] of String) # ameba:disable Metrics/CyclomaticComplexity
       if current_watcher = @@watcher
         current_watcher.close
       end
 
-      @@watcher = Inotify::Watcher.new
+      @@watcher = Inotify::Watcher.new(recursive: true)
       targets = tasks.keys if targets.empty?
       target_inputs = inputs(targets)
 
@@ -666,7 +724,14 @@ module Croupier
 
       event_handler = ->(event : Inotify::Event) do
         # It's a file we care about, add it to the queue
-        path = Path["#{event.path}/#{event.name}"].normalize.to_s
+        path = event.path && event.name ? Path["#{event.path}/#{event.name}"].normalize.to_s : (event.path || "nil")
+
+        # Debug logging
+        Log.debug do
+          "inotify event: path=#{event.path.inspect}, name=#{event.name.inspect}, " \
+          "mask=#{event.mask.inspect}, constructed=#{path.inspect}, " \
+          "target_inputs=#{target_inputs.inspect}"
+        end
 
         # If watch was removed (e.g., editor deleted/replaced the file), re-add it
         if event.type_is?(LibInotify::IN_IGNORED)
@@ -687,17 +752,27 @@ module Croupier
         end
 
         # If path matches a watched path, add it to the queue
+        matched = false
         if target_inputs.includes? path
           @queued_changes << path
-          Log.debug { "Detected change in #{path}" }
-        elsif target_inputs.any? { |input|
-                if path.starts_with? "#{input}/"
-                  # If we are watching a folder in path, add the folder to the queue
-                  @queued_changes << input
-                  Log.debug { "Detected change in #{input}" }
-                end
-              }
+          Log.debug { "Detected change in #{path} (exact match)" }
+          matched = true
+        else
+          target_inputs.each do |input|
+            # Check if path starts with input followed by a slash (or input is exactly the path)
+            # Need to handle trailing slash in input properly
+            input_normalized = input.ends_with?("/") ? input : "#{input}/"
+            if path.starts_with?(input_normalized) || path == input
+              # If we are watching a folder in path, add the folder to the queue
+              @queued_changes << input
+              Log.debug { "Detected change in #{input} (prefix match: #{path} starts with #{input_normalized})" }
+              matched = true
+              break
+            end
+          end
         end
+
+        Log.debug { "Event NOT matched for path=#{path}, target_inputs=#{target_inputs.inspect}" } unless matched
       end
       watcher.on_event(&event_handler)
 
@@ -706,6 +781,7 @@ module Croupier
         next if input.lchop?("kv://")
         if File.exists? input
           watcher.watch input, watch_flags
+          Log.info { "Watching: #{input}" }
         else
           # It's a file that doesn't exist. To detect it
           # being created, we watch the parent directory
@@ -713,9 +789,12 @@ module Croupier
           path = (Path[input].parent).to_s
           if !watcher.watching.includes?(path)
             watcher.watch path, watch_flags
+            Log.info { "Watching parent: #{path}" }
           end
         end
       end
+
+      Log.info { "Watching: #{watcher.watching.inspect}" }
     end
   end
 

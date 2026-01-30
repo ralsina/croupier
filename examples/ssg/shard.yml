@@ -1,0 +1,21 @@
+name: ssg
+version: 0.1.0
+
+authors:
+  - Roberto Alsina <roberto.alsina@gmail.com>
+
+targets:
+  ssg:
+    main: src/ssg.cr
+
+crystal: 1.8.2
+
+license: MIT
+
+dependencies:
+  markd:
+    github: icyleaf/markd
+  croupier:
+    path: ../../
+
+development_dependencies: {}

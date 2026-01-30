@@ -76,12 +76,13 @@ describe "Task" do
     it "should be yaml serializable" do
       with_scenario("basic") do
         expected = {
-          "id"         => "77012200e4c39aa279b0d3e16dca43a7b02eb4a5",
-          "inputs"     => [] of String,
-          "outputs"    => ["output1"],
-          "always_run" => false,
-          "no_save"    => false,
-          "mergeable"  => true,
+          "id"          => "77012200e4c39aa279b0d3e16dca43a7b02eb4a5",
+          "inputs"      => [] of String,
+          "outputs"     => ["output1"],
+          "always_run"  => false,
+          "no_save"     => false,
+          "mergeable"   => true,
+          "master_task" => false,
         }
         YAML.parse(TaskManager.tasks["output1"].to_yaml).should eq expected
       end
@@ -1182,6 +1183,65 @@ describe "TaskManager" do
         TaskManager.auto_stop
       end
     end
+
+    it "should run tasks if a subdirectory is created in a watched folder" do
+      with_scenario("a_dir") do
+        Dir.mkdir("a_dir")
+        TaskManager.auto_run
+        sleep 0.02.seconds
+        File.exists?("output3").should be_false
+        # Create a nested subdirectory with a file
+        Dir.mkdir("a_dir/subdir")
+        File.open("a_dir/subdir/input", "w") << "bar"
+        sleep 0.02.seconds
+        File.exists?("output3").should be_true
+        TaskManager.auto_stop
+      end
+    end
+
+    it "should run tasks if a file is modified in a nested subdirectory" do
+      with_scenario("a_dir") do
+        Dir.mkdir("a_dir")
+        Dir.mkdir("a_dir/subdir")
+        File.open("a_dir/subdir/input", "w") << "bar"
+        # Run once to create output3
+        TaskManager.run_tasks
+        File.exists?("output3").should be_true
+        initial_content = File.read("output3")
+        # Now watch for changes
+        TaskManager.auto_run
+        sleep 0.02.seconds
+        # Modify the nested file
+        File.open("a_dir/subdir/input", "w") << "modified"
+        sleep 0.02.seconds
+        # Task should have run again, content should change
+        new_content = File.read("output3")
+        new_content.should_not eq initial_content
+        TaskManager.auto_stop
+      end
+    end
+
+    it "should run tasks if a file is deleted from a nested subdirectory" do
+      with_scenario("a_dir") do
+        Dir.mkdir("a_dir")
+        Dir.mkdir("a_dir/subdir")
+        File.open("a_dir/subdir/input", "w") << "bar"
+        # Run once to create output3
+        TaskManager.run_tasks
+        File.exists?("output3").should be_true
+        initial_content = File.read("output3")
+        # Now watch for changes
+        TaskManager.auto_run
+        sleep 0.02.seconds
+        # Delete the nested file
+        File.delete("a_dir/subdir/input")
+        sleep 0.02.seconds
+        # Task should have run again, content should change
+        new_content = File.read("output3")
+        new_content.should_not eq initial_content
+        TaskManager.auto_stop
+      end
+    end
   end
 
   describe "save_run" do
@@ -1294,6 +1354,396 @@ describe "TaskManager" do
         TaskManager.auto_stop
         # Reset hook for other tests
         TaskManager.before_run_hook = ->(_changes : Set(String)) { }
+      end
+    end
+  end
+
+  describe "Master/Subtask Tasks" do
+    it "should create a master task with master_task flag" do
+      with_scenario("empty") do
+        master = Task.new(
+          id: "test_master",
+          inputs: [] of String,
+          always_run: true,
+          master_task: true,
+        ) do
+          nil
+        end
+
+        master.master_task?.should be_true
+        TaskManager.tasks["test_master"].master_task?.should be_true
+      end
+    end
+
+    it "should allow master task to create subtasks" do
+      with_scenario("empty") do
+        # Create content directory
+        Dir.mkdir_p("content")
+
+        # Create some test content files
+        File.write("content/file1.md", "Content 1")
+        File.write("content/file2.md", "Content 2")
+
+        # Master task creates subtasks
+        master = Task.new(
+          id: "content_master",
+          inputs: ["content/"],
+          always_run: true,
+          master_task: true,
+        ) do
+          current_files = Dir.glob("content/**/*.md").to_set
+
+          # Create subtask for each file
+          current_files.each do |file|
+            subtask_id = "render_#{Digest::SHA1.hexdigest(file)[0..6]}"
+            output_file = "output/#{File.basename(file, ".md")}.html"
+
+            subtask = Task.new(
+              id: subtask_id,
+              inputs: [file],
+              outputs: [output_file],
+            ) do
+              File.read(file)
+            end
+
+            TaskManager.register_subtask("content_master", subtask)
+          end
+
+          nil
+        end
+
+        # Run the master task
+        TaskManager.run_tasks
+
+        # Verify subtasks were registered
+        master.subtask_ids.size.should eq 2
+        TaskManager.tasks.size.should be > 1 # Master + subtasks
+
+        # Verify subtasks are registered (check by their outputs)
+        TaskManager.tasks.has_key?("output/file1.html").should be_true
+        TaskManager.tasks.has_key?("output/file2.html").should be_true
+      end
+    end
+
+    it "should track subtasks in master's subtask_ids set" do
+      with_scenario("empty") do
+        Dir.mkdir_p("content")
+        File.write("content/test.md", "Test content")
+
+        master = Task.new(
+          id: "test_master",
+          inputs: [] of String,
+          always_run: true,
+          master_task: true,
+        ) do
+          subtask = Task.new(
+            id: "subtask_1",
+            inputs: ["content/test.md"],
+            outputs: ["output/test.html"],
+          ) do
+            "test content"
+          end
+
+          TaskManager.register_subtask("test_master", subtask)
+          nil
+        end
+
+        TaskManager.run_tasks
+
+        # Master should track the subtask
+        master.subtask_ids.should contain "subtask_1"
+      end
+    end
+
+    it "should remove subtasks when remove_subtasks is called" do
+      with_scenario("empty") do
+        Dir.mkdir_p("content")
+        File.write("content/test.md", "Test content")
+
+        # Create master and subtasks
+        master = Task.new(
+          id: "test_master",
+          inputs: [] of String,
+          always_run: true,
+          master_task: true,
+        ) do
+          subtask1 = Task.new(
+            id: "subtask_1",
+            inputs: ["content/test.md"],
+            outputs: ["output1.html"],
+          ) do
+            "content1"
+          end
+
+          subtask2 = Task.new(
+            id: "subtask_2",
+            inputs: ["content/test.md"],
+            outputs: ["output2.html"],
+          ) do
+            "content2"
+          end
+
+          TaskManager.register_subtask("test_master", subtask1)
+          TaskManager.register_subtask("test_master", subtask2)
+          nil
+        end
+
+        TaskManager.run_tasks
+
+        # Verify subtasks exist
+        master.subtask_ids.size.should eq 2
+        TaskManager.tasks.has_key?("output1.html").should be_true
+        TaskManager.tasks.has_key?("output2.html").should be_true
+
+        # Remove subtasks
+        TaskManager.remove_subtasks("test_master")
+
+        # Subtasks should be gone
+        master.subtask_ids.size.should eq 0
+        TaskManager.tasks.has_key?("output1.html").should be_false
+        TaskManager.tasks.has_key?("output2.html").should be_false
+      end
+    end
+
+    it "should rebuild graph when subtasks are registered" do
+      with_scenario("empty") do
+        # Build initial graph
+        initial_task = Task.new(
+          inputs: [] of String,
+          outputs: ["initial.txt"],
+        ) do
+          "initial"
+        end
+
+        _, initial_sorted = TaskManager.sorted_task_graph
+        initial_sorted.size.should eq 1
+
+        # Add master task that creates subtasks
+        master = Task.new(
+          id: "test_master",
+          inputs: [] of String,
+          always_run: true,
+          master_task: true,
+        ) do
+          subtask = Task.new(
+            id: "subtask_1",
+            inputs: [] of String,
+            outputs: ["output1.html"],
+          ) do
+            "content"
+          end
+
+          TaskManager.register_subtask("test_master", subtask)
+          nil
+        end
+
+        TaskManager.run_tasks
+
+        # Check that subtask was registered
+        TaskManager.tasks.has_key?("output1.html").should be_true
+
+        # Graph should be rebuilt with new tasks
+        # We have: initial.txt, output1.html, and the master task (test_master)
+        _, new_sorted = TaskManager.sorted_task_graph
+        new_sorted.size.should eq 3
+      end
+    end
+
+    it "should not merge master tasks with non-master tasks" do
+      with_scenario("empty") do
+        # Create a regular task
+        regular = Task.new(
+          outputs: ["test.txt"],
+        ) do
+          "regular content"
+        end
+
+        # Try to create a master task with same output (should fail)
+        expect_raises(Exception, /Cannot merge master task with non-master task/) do
+          Task.new(
+            outputs: ["test.txt"],
+            master_task: true,
+          ) do
+            nil
+          end
+        end
+      end
+    end
+
+    it "should persist subtask list across runs using k/v store" do
+      with_scenario("empty") do
+        Dir.mkdir_p("content")
+        File.write("content/file1.md", "Content 1")
+
+        # First run - create subtasks
+        master = Task.new(
+          id: "content_master",
+          inputs: ["content/"],
+          always_run: true,
+          master_task: true,
+        ) do
+          files = Dir.glob("content/**/*.md").to_set
+
+          files.each do |file|
+            subtask_id = "render_#{Digest::SHA1.hexdigest(file)[0..6]}"
+            subtask = Task.new(
+              id: subtask_id,
+              inputs: [file],
+              outputs: ["output/#{File.basename(file, ".md")}.html"],
+            ) do
+              File.read(file)
+            end
+
+            TaskManager.register_subtask("content_master", subtask)
+          end
+
+          # Store the file list
+          TaskManager.set("content_subtasks", files.to_a.join("\n"))
+          nil
+        end
+
+        TaskManager.run_tasks
+
+        # Verify data was stored
+        stored_data = TaskManager.get("content_subtasks")
+        stored_data.should_not be_nil
+        stored_data.as(String).should contain "content/file1.md"
+      end
+    end
+
+    it "should invalidate graph cache when subtasks change" do
+      with_scenario("empty") do
+        Dir.mkdir_p("content")
+        File.write("content/test.md", "Test")
+
+        master = Task.new(
+          id: "test_master",
+          inputs: [] of String,
+          always_run: true,
+          master_task: true,
+        ) do
+          subtask = Task.new(
+            id: "dynamic_subtask",
+            inputs: [] of String,
+            outputs: ["dynamic.html"],
+          ) do
+            "dynamic content"
+          end
+
+          TaskManager.register_subtask("test_master", subtask)
+          nil
+        end
+
+        TaskManager.run_tasks
+
+        # Check that graph rebuild flag was set
+        flag = TaskManager.get("__croupier_graph_rebuild_needed")
+        flag.should eq "true"
+      end
+    end
+
+    it "should allow subtasks to depend on master's inputs" do
+      with_scenario("empty") do
+        Dir.mkdir_p("content")
+        Dir.mkdir_p("templates")
+        File.write("content/page.md", "Page content")
+        File.write("templates/layout.html", "<html>{{content}}</html>")
+
+        master = Task.new(
+          id: "content_master",
+          inputs: ["content/"],
+          always_run: true,
+          master_task: true,
+        ) do
+          subtask = Task.new(
+            id: "render_page",
+            inputs: ["content/page.md", "templates/layout.html"],
+            outputs: ["output/page.html"],
+          ) do
+            content = File.read("content/page.md")
+            layout = File.read("templates/layout.html")
+            layout.sub("{{content}}", content)
+          end
+
+          TaskManager.register_subtask("content_master", subtask)
+          nil
+        end
+
+        TaskManager.run_tasks
+
+        # Subtask should have both inputs
+        subtask = TaskManager.tasks["output/page.html"]
+        subtask.inputs.should contain "content/page.md"
+        subtask.inputs.should contain "templates/layout.html"
+      end
+    end
+
+    it "should work in auto mode with master tasks" do
+      with_scenario("empty") do
+        Dir.mkdir_p("content")
+
+        # Create file before defining master task to avoid cycle
+        File.write("content/test.md", "Initial content")
+
+        master = Task.new(
+          id: "auto_master",
+          always_run: true,
+          master_task: true,
+        ) do
+          files = Dir.glob("content/**/*.md").to_set
+
+          # Get previous files from k/v store
+          previous_data = TaskManager.get("auto_content_subtasks")
+          previous_files = previous_data ? previous_data.split("\n").to_set : Set(String).new
+
+          # Remove deleted file subtasks
+          (previous_files - files).each do |deleted_file|
+            subtask_id = "render_#{Digest::SHA1.hexdigest(deleted_file)[0..6]}"
+            TaskManager.tasks.each do |key, task|
+              TaskManager.tasks.delete(key) if task.id == subtask_id
+            end
+          end
+
+          # Create new file subtasks
+          (files - previous_files).each do |new_file|
+            subtask_id = "render_#{Digest::SHA1.hexdigest(new_file)[0..6]}"
+            subtask = Task.new(
+              id: subtask_id,
+              inputs: [new_file],
+              outputs: ["output/#{File.basename(new_file, ".md")}.html"],
+            ) do
+              File.read(new_file)
+            end
+
+            TaskManager.register_subtask("auto_master", subtask)
+          end
+
+          TaskManager.set("auto_content_subtasks", files.to_a.join("\n"))
+          nil
+        end
+
+        # Run tasks - master task will create subtask
+        TaskManager.run_tasks
+        # Run again to execute the newly created subtask
+        TaskManager.run_tasks
+
+        # Initial file should have been processed
+        TaskManager.tasks.has_key?("output/test.html").should be_true
+        File.exists?("output/test.html").should be_true
+        File.read("output/test.html").should eq "Initial content"
+
+        # Now test auto mode - start watching for changes to content files
+        TaskManager.auto_run
+        sleep 0.1.seconds
+
+        # Modify a file
+        File.write("content/test.md", "Modified content")
+        sleep 0.2.seconds
+
+        # File should be regenerated
+        File.read("output/test.html").should eq "Modified content"
+
+        TaskManager.auto_stop
       end
     end
   end

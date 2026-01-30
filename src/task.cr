@@ -24,6 +24,9 @@ module Croupier
     property procs : Array(TaskProc) = [] of TaskProc
     property? mergeable : Bool = true
     property mutex : String? = nil
+    property? master_task : Bool = false
+    @[YAML::Field(ignore: true)]
+    property subtask_ids : Set(String) = Set(String).new
 
     # Under what keys should this task be registered with TaskManager
     def keys
@@ -63,9 +66,10 @@ module Croupier
       always_run : Bool = false,
       mergeable : Bool = true,
       mutex : String? = nil,
+      master_task : Bool = false,
       &block : TaskProc
     )
-      initialize(outputs, inputs, block, no_save, id, always_run, mergeable)
+      initialize(outputs, inputs, block, no_save, id, always_run, mergeable, master_task)
       TaskManager.add_mutex(mutex, self) if mutex
     end
 
@@ -77,6 +81,7 @@ module Croupier
       id : String | Nil = nil,
       always_run : Bool = false,
       mergeable : Bool = true,
+      master_task : Bool = false,
     )
       if !(inputs.to_set & outputs.to_set).empty?
         raise "Cycle detected"
@@ -89,6 +94,7 @@ module Croupier
       @inputs = Set.new inputs
       @no_save = no_save
       @mergeable = mergeable
+      @master_task = master_task
 
       # Register with the task manager.
       # We should merge every task we have output/id collision with
@@ -104,6 +110,9 @@ module Croupier
         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
+
+      # Invalidate graph cache since we added/modified a task
+      TaskManager.invalidate_graph_cache_no_store
     end
 
     def initialize(
@@ -113,9 +122,10 @@ module Croupier
       id : String | Nil = nil,
       always_run : Bool = false,
       mergeable : Bool = true,
+      master_task : Bool = false,
       &block : TaskProc
     )
-      initialize(output, inputs, block, no_save, id, always_run, mergeable)
+      initialize(output, inputs, block, no_save, id, always_run, mergeable, master_task)
     end
 
     # Create a task with zero or one outputs. Overload for convenience.
@@ -127,6 +137,7 @@ module Croupier
       id : String | Nil = nil,
       always_run : Bool = false,
       mergeable : Bool = true,
+      master_task : Bool = false,
     )
       initialize(
         outputs: output ? [output] : [] of String,
@@ -135,7 +146,8 @@ module Croupier
         no_save: no_save,
         id: id,
         always_run: always_run,
-        mergeable: mergeable
+        mergeable: mergeable,
+        master_task: master_task
       )
     end
 
@@ -279,6 +291,7 @@ module Croupier
     def merge(other : Task)
       raise "Cannot merge tasks with different no_save settings" unless no_save? == other.no_save?
       raise "Cannot merge tasks with different always_run settings" unless always_run? == other.always_run?
+      raise "Cannot merge master task with non-master task" unless master_task? == other.master_task?
 
       # @outputs is NOT unique! We can save multiple times
       # the same file in multiple procs

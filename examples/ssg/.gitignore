@@ -1,0 +1,19 @@
+# Binaries
+/bin/
+*.db
+
+# Build outputs
+/output/
+*.html
+
+# Dependencies
+/lib/
+/shard.lock
+
+# Crystal
+.crystal/
+*.~
+
+# OS
+.DS_Store
+Thumbs.db

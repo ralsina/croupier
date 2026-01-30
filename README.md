@@ -98,6 +98,112 @@ to create any output files. Other than that, it's just a regular task.
 If a task expects the TaskManager to create multiple files, it
 should return an array of strings.
 
+## Master/Subtask Tasks
+
+Croupier supports hierarchical tasks through the **master/subtask pattern**. This allows you to create tasks that dynamically generate and manage other tasks at runtime.
+
+### What are Master Tasks?
+
+A **master task** is a special type of task that:
+- Has `master_task: true` in its definition
+- Runs on every build (typically with `always_run: true`)
+- Dynamically creates, removes, or manages **subtasks** based on runtime conditions
+- Has no outputs of its own (returns `nil`)
+
+### When to Use Master/Subtask Pattern
+
+The master/subtask pattern is ideal when:
+
+- You have a variable number of similar tasks (e.g., processing files in a directory)
+- Tasks need to be created dynamically based on folder contents
+- You want to avoid manually defining a task for each file
+- The set of tasks changes frequently (files added/removed)
+
+### Example: Static Site Generator
+
+```crystal
+require "croupier"
+
+# Master task watches content/ folder and creates subtasks for each markdown file
+master_task = Croupier::Task.new(
+  id: "content_master",
+  inputs: ["content/"],
+  always_run: true,
+  master_task: true,
+) do
+  current_files = Dir.glob("content/**/*.md").to_set
+
+  # Get previously created subtasks from k/v store
+  previous_data = Croupier::TaskManager.get("content_subtasks")
+  previous_files = previous_data ? previous_data.split("\n").to_set : Set(String).new
+
+  # Remove subtasks for deleted files
+  (previous_files - current_files).each do |deleted_file|
+    puts "🗑️  Removing subtask for deleted file: #{deleted_file}"
+    subtask_id = "render_#{Digest::SHA1.hexdigest(deleted_file)[0..6]}"
+    Croupier::TaskManager.tasks.each do |key, task|
+      Croupier::TaskManager.tasks.delete(key) if task.id == subtask_id
+    end
+
+    # Also remove output file
+    output_path = deleted_file.sub("content", "output").sub(".md", ".html")
+    File.delete?(output_path)
+  end
+
+  # Create subtasks for new/changed files
+  (current_files - previous_files).each do |new_file|
+    puts "✨ Creating subtask for new file: #{new_file}"
+    subtask_id = "render_#{Digest::SHA1.hexdigest(new_file)[0..6]}"
+    output_file = new_file.sub("content", "output").sub(".md", ".html")
+
+    subtask = Croupier::Task.new(
+      id: subtask_id,
+      inputs: [new_file],
+      outputs: [output_file],
+    ) do
+      # Render markdown to HTML
+      content = File.read(new_file)
+      Markd.to_html(content)
+    end
+
+    Croupier::TaskManager.register_subtask("content_master", subtask)
+  end
+
+  # Save current list for next run
+  Croupier::TaskManager.set("content_subtasks", current_files.to_a.join("\n"))
+
+  nil  # Master tasks return nil
+end
+
+# Run tasks (master task creates subtasks, then we run again to execute them)
+Croupier::TaskManager.run_tasks
+Croupier::TaskManager.run_tasks
+```
+
+### Key Methods
+
+- **`register_subtask(master_id, subtask)`**: Register a newly created subtask with a master task
+- **`remove_subtasks(master_id)`**: Remove all subtasks belonging to a master task
+- **`invalidate_graph_cache`**: Force the task graph to rebuild (called automatically when subtasks are added/removed)
+
+### Important Notes
+
+1. **Double Execution**: When using master tasks, call `run_tasks` twice:
+   - First run: Master task executes and creates/removes subtasks
+   - Second run: Newly created subtasks execute
+
+   In auto mode, this is handled automatically - Croupier detects when the task graph changes and runs tasks again as needed.
+
+2. **Subtasks are Regular Tasks**: Subtasks participate in the task graph just like any other task. They can have dependencies, outputs, and are subject to incremental builds.
+
+3. **Graph Invalidation**: When `register_subtask` or `remove_subtasks` is called, the task graph is automatically invalidated and rebuilt on the next `run_tasks` call.
+
+4. **State Persistence**: Use the k/v store to persist state between runs (e.g., the list of files from the previous build).
+
+### See It In Action
+
+For a complete working example, see the `examples/ssg/` directory, which contains a full static site generator using the master/subtask pattern.
+
 ## Installation
 
 1. Add the dependency to your `shard.yml`:
