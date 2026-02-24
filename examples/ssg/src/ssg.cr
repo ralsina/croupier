@@ -149,7 +149,7 @@ master_task = Croupier::Task.new(
   # Save current list for next run
   Croupier::TaskManager.set("content_subtasks", current_files.to_a.join("\n"))
 
-  nil  # Master tasks return nil
+  nil # Master tasks return nil
 end
 
 if auto_mode
