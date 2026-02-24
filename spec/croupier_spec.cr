@@ -1747,4 +1747,75 @@ describe "TaskManager" do
       end
     end
   end
+
+  describe "k/v store modification detection" do
+    it "should re-run tasks when k/v store values are modified via set()" do
+      with_scenario("empty") do
+        # Set initial value
+        TaskManager.set("test_key", "100")
+
+        # Create a task that depends on the k/v store value
+        task = Task.new(
+          id: "kv_task",
+          inputs: ["kv://test_key"],
+          outputs: ["kv://output_key"],
+        ) do
+          value = TaskManager.get("test_key") || "0"
+          (value.to_i * 2).to_s
+        end
+
+        # First run - should work correctly
+        TaskManager.run_tasks
+        TaskManager.get("output_key").should eq "200"
+
+        # Change the k/v store value
+        TaskManager.set("test_key", "200")
+
+        # Second run - should re-run the task because the input changed
+        TaskManager.run_tasks
+        TaskManager.get("output_key").should eq "400"
+      end
+    end
+
+    it "should detect multiple k/v store modifications in a single run" do
+      with_scenario("empty") do
+        # Set initial values
+        TaskManager.set("key1", "10")
+        TaskManager.set("key2", "20")
+
+        # Create tasks that depend on k/v store values
+        Task.new(
+          id: "task1",
+          inputs: ["kv://key1"],
+          outputs: ["kv://out1"],
+        ) do
+          val = TaskManager.get("key1")
+          ((val || "0").to_i * 2).to_s
+        end
+
+        Task.new(
+          id: "task2",
+          inputs: ["kv://key2"],
+          outputs: ["kv://out2"],
+        ) do
+          val = TaskManager.get("key2")
+          ((val || "0").to_i * 3).to_s
+        end
+
+        # First run
+        TaskManager.run_tasks
+        TaskManager.get("out1").should eq "20"
+        TaskManager.get("out2").should eq "60"
+
+        # Modify both k/v store values
+        TaskManager.set("key1", "100")
+        TaskManager.set("key2", "200")
+
+        # Second run - should re-run both tasks
+        TaskManager.run_tasks
+        TaskManager.get("out1").should eq "200"
+        TaskManager.get("out2").should eq "600"
+      end
+    end
+  end
 end

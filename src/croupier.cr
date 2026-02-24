@@ -315,6 +315,10 @@ module Croupier
         return
       end
 
+      # Preserve k/v store modifications before clearing
+      # K/v modifications are added via set() and need to survive the clear
+      # so that propagate_staleness() can detect tasks that depend on them
+      kv_modifications = @modified.select(&.starts_with?("kv://"))
       @modified.clear
 
       if File.exists? ".croupier"
@@ -337,6 +341,9 @@ module Croupier
           @modified << file if last_run.fetch(file, "") != sha1
         end
       end
+
+      # Restore k/v store modifications so they're available for propagate_staleness
+      @modified |= kv_modifications.to_set
     end
 
     # Scan all inputs and return a hash with their sha1
