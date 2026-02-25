@@ -35,6 +35,8 @@ module Croupier
     property? auto_mode : Bool = false
     # If true, directories depend on a list of files, not its contents
     property? fast_dirs : Bool = false
+    # If true, enable early cutoff optimization (skip tasks when upstream outputs unchanged)
+    property? early_cutoff : Bool = true
     # If set, it's called after every task finishes
     property progress_callback : Proc(String, Nil) = ->(_id : String) { }
     # If set, it's called in auto mode after changes are detected but before tasks run
@@ -323,13 +325,14 @@ module Croupier
 
       if File.exists? ".croupier"
         last_run_date = File.info(".croupier").modification_time
-        last_run = File.open(".croupier") do |file|
+        @last_run = File.open(".croupier") do |file|
           YAML.parse(file).as_h.map { |k, v| [k.to_s, v.to_s] }.to_h
         end
       else
         last_run_date = Time.utc # Now
-        last_run = {} of String => String
+        @last_run = {} of String => String
       end
+
       if @fast_mode
         all_inputs.each do |file|
           if info = File.info?(file)
@@ -381,8 +384,8 @@ module Croupier
     # This replaces the expensive recursive staleness checking with an
     # O(V+E) algorithm that's critical for tasks with many inputs.
     def propagate_staleness
-      # Reset all task staleness to nil (unknown) first
-      tasks.values.each(&.stale=(nil))
+      # Reset all task staleness to true (stale) first as default
+      tasks.values.each(&.stale=(true))
 
       # Build reverse dependency graph (who depends on me)
       reverse_deps = Hash(String, Set(String)).new do |h, k|
@@ -454,6 +457,20 @@ module Croupier
       Log.debug { "Propagated staleness: #{stale_tasks.size} stale, #{tasks.size - stale_tasks.size} fresh" }
     end
 
+    # Find all tasks that depend on the given task and mark them as potentially fresh
+    # This is used for early cutoff optimization
+    private def find_and_mark_dependents_fresh(task : Task, potentially_fresh : Set(Task))
+      task.outputs.each do |output|
+        # Find all tasks that have this output as an input
+        tasks.each do |_, other_task|
+          if other_task.inputs.includes?(output) && other_task.stale?
+            potentially_fresh << other_task
+            Log.debug { "Marking #{other_task.id} as potentially fresh (depends on unchanged #{task.id})" }
+          end
+        end
+      end
+    end
+
     # Check if all inputs are correct:
     # They should all be either task outputs or existing files
     def check_dependencies
@@ -472,15 +489,19 @@ module Croupier
     # If `dry_run` is true, only log what would be done, but don't do it
     # If `parallel` is true, run tasks in parallel
     # If `keep_going` is true, keep going even if a task fails
+    # If `early_cutoff` is true, skip tasks when upstream outputs are unchanged
     def run_tasks(
       run_all : Bool = false,
       dry_run : Bool = false,
       parallel : Bool = false,
       keep_going : Bool = false,
+      early_cutoff : Bool? = nil,
     )
       _, tasks = sorted_task_graph
       check_dependencies
-      run_tasks(tasks, run_all, dry_run, parallel, keep_going)
+      # Use TaskManager.early_cutoff if not explicitly specified
+      early_cutoff = @early_cutoff if early_cutoff.nil?
+      run_tasks(tasks, run_all, dry_run, parallel, keep_going, early_cutoff)
     end
 
     # Run the tasks needed to create or update the requested targets
@@ -489,12 +510,14 @@ module Croupier
     # If `dry_run` is true, only log what would be done, but don't do it
     # If `parallel` is true, run tasks in parallel
     # If `keep_going` is true, keep going even if a task fails
+    # If `early_cutoff` is true, skip tasks when upstream outputs are unchanged
     def run_tasks(
       targets : Array(String),
       run_all : Bool = false,
       dry_run : Bool = false,
       parallel : Bool = false,
       keep_going : Bool = false,
+      early_cutoff : Bool? = nil,
     )
       # Optimization: if targets already contains all tasks (from sorted_task_graph),
       # skip the expensive dependencies() call since they're already in correct order
@@ -505,29 +528,38 @@ module Croupier
         task_names = dependencies(targets)
       end
 
+      # Use TaskManager.early_cutoff if not explicitly specified
+      early_cutoff = @early_cutoff if early_cutoff.nil?
+
       if parallel
-        _run_tasks_parallel(task_names, run_all, dry_run, keep_going)
+        _run_tasks_parallel(task_names, run_all, dry_run, keep_going, early_cutoff)
       else
-        _run_tasks(task_names, run_all, dry_run, keep_going)
+        _run_tasks(task_names, run_all, dry_run, keep_going, early_cutoff)
       end
     end
 
     # Internal helper to run tasks serially
+    # ameba:disable Metrics/CyclomaticComplexity
     def _run_tasks(
       task_names,
       run_all : Bool = false,
       dry_run : Bool = false,
       keep_going : Bool = false,
+      early_cutoff : Bool = true,
     )
       mark_stale_inputs
       propagate_staleness
+
       finished = Set(Task).new
+
       task_names.compact_map { |name|
         tasks.fetch(name, nil)
       }.reject { |t|
         !(t.stale? || run_all || t.@always_run)
       }.each do |t|
         next if t.nil? || finished.includes?(t)
+        # Re-check staleness in case early cutoff marked this task as fresh
+        next unless t.stale?
         Log.debug { "Running task for #{t.outputs}" }
         raise "Can't run task for #{t.outputs}: Waiting for #{t.waiting_for}" unless t.waiting_for.empty? || dry_run
         begin
@@ -537,7 +569,22 @@ module Croupier
           raise ex unless keep_going
         end
         finished << t
+
+        # Early cutoff: if outputs didn't change, notify dependent tasks
+        if early_cutoff && !t.outputs_changed?
+          Log.debug { "Early cutoff: #{t.id} outputs unchanged, notifying dependents" }
+          t.outputs.each do |output|
+            # Find all tasks that depend on this output and notify them
+            tasks.each do |_, other_task|
+              if other_task.inputs.includes?(output) && other_task.stale?
+                Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
+                other_task.mark_dependency_fresh(output)
+              end
+            end
+          end
+        end
       end
+
       save_run
     end
 
@@ -546,11 +593,13 @@ module Croupier
     # Whenever a task is ready, launch it in a separate fiber
     # This is only concurrency, not parallelism, but on tests
     # it seems to be faster than running tasks sequentially.
+    # ameba:disable Metrics/CyclomaticComplexity
     def _run_tasks_parallel(
       task_names : Array(String) = [] of String,
       run_all : Bool = false,
       dry_run : Bool = false,
       keep_going : Bool = false,
+      early_cutoff : Bool = true,
     )
       mark_stale_inputs
       propagate_staleness
@@ -603,6 +652,19 @@ module Croupier
 
               begin
                 task.run unless dry_run
+                # Early cutoff: if outputs didn't change, notify dependent tasks
+                if early_cutoff && !task.outputs_changed?
+                  Log.debug { "Early cutoff: #{task.id} outputs unchanged, notifying dependents" }
+                  task.outputs.each do |output|
+                    # Find all tasks that depend on this output and notify them
+                    tasks.each do |_, other_task|
+                      if other_task.inputs.includes?(output) && other_task.stale?
+                        Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
+                        other_task.mark_dependency_fresh(output)
+                      end
+                    end
+                  end
+                end
               rescue ex
                 failed_tasks << task
                 errors << ex.message.to_s
@@ -729,6 +791,7 @@ module Croupier
       # when those are triggered we have no input file to
       # process.
 
+      # ameba:disable Metrics/CyclomaticComplexity
       event_handler = ->(event : Inotify::Event) do
         # It's a file we care about, add it to the queue
         path = event.path && event.name ? Path["#{event.path}/#{event.name}"].normalize.to_s : (event.path || "nil")

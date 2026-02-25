@@ -1818,4 +1818,166 @@ describe "TaskManager" do
       end
     end
   end
+
+  describe "early cutoff optimization" do
+    it "should not rebuild downstream tasks when upstream output is unchanged" do
+      with_scenario("empty") do
+        # Create a chain: file1 -> file2 -> file3
+        # file2 normalizes content (e.g., trim whitespace, normalize)
+
+        # Create file1 with trailing space
+        File.write("file1", "hello   ")
+
+        # Task 1: file1 -> file2 (strip and uppercase)
+        t1_run_count = 0
+        Task.new(
+          inputs: ["file1"],
+          outputs: ["file2"],
+        ) do
+          t1_run_count += 1
+          File.read("file1").strip.upcase
+        end
+
+        # Task 2: file2 -> file3 (add suffix)
+        t2_run_count = 0
+        Task.new(
+          inputs: ["file2"],
+          outputs: ["file3"],
+        ) do
+          t2_run_count += 1
+          File.read("file2") + "_SUFFIX"
+        end
+
+        # First run - both tasks should run
+        TaskManager.run_tasks
+        t1_run_count.should eq 1
+        t2_run_count.should eq 1
+        File.read("file2").should eq "HELLO"
+        File.read("file3").should eq "HELLO_SUFFIX"
+
+        # Modify file1 with different formatting but same output after processing
+        File.write("file1", "hello") # No trailing space, still produces "HELLO"
+
+        # Second run - t1 should run, but t2 should NOT run (early cutoff)
+        TaskManager.run_tasks
+        t1_run_count.should eq 2 # t1 ran again (file1 changed)
+        t2_run_count.should eq 1 # t2 was skipped (early cutoff - file2 unchanged!)
+      end
+    end
+
+    it "should rebuild downstream tasks when upstream output changes" do
+      with_scenario("empty") do
+        # Create a chain: file1 -> file2 -> file3
+
+        File.write("file1", "hello")
+
+        t1_run_count = 0
+        Task.new(
+          inputs: ["file1"],
+          outputs: ["file2"],
+        ) do
+          t1_run_count += 1
+          File.read("file1").upcase
+        end
+
+        t2_run_count = 0
+        Task.new(
+          inputs: ["file2"],
+          outputs: ["file3"],
+        ) do
+          t2_run_count += 1
+          File.read("file2") + "_SUFFIX"
+        end
+
+        # First run
+        TaskManager.run_tasks
+        t1_run_count.should eq 1
+        t2_run_count.should eq 1
+
+        # Modify file1 with DIFFERENT content
+        File.write("file1", "world")
+
+        # Second run - both should run
+        TaskManager.run_tasks
+        t1_run_count.should eq 2
+        t2_run_count.should eq 2 # t2 ran because file2 changed
+        File.read("file2").should eq "WORLD"
+        File.read("file3").should eq "WORLD_SUFFIX"
+      end
+    end
+
+    it "should rebuild dependent tasks that have multiple stale dependencies" do
+      with_scenario("empty") do
+        # t3 depends on both t1 (file2) and t2 (file4)
+        # If t1's output is unchanged but t2's output CHANGES, t3 should still run
+
+        File.write("file1", "hello")
+        File.write("file3", "world")
+
+        # Task 1: file1 -> file2 (uppercase)
+        t1_run_count = 0
+        Task.new(
+          inputs: ["file1"],
+          outputs: ["file2"],
+        ) do
+          t1_run_count += 1
+          File.read("file1").upcase
+        end
+
+        # Task 2: file3 -> file4 (uppercase)
+        t2_run_count = 0
+        Task.new(
+          inputs: ["file3"],
+          outputs: ["file4"],
+        ) do
+          t2_run_count += 1
+          File.read("file3").upcase
+        end
+
+        # Task 3: depends on both file2 and file4
+        t3_run_count = 0
+        Task.new(
+          inputs: ["file2", "file4"],
+          outputs: ["file5"],
+        ) do
+          t3_run_count += 1
+          File.read("file2") + "_" + File.read("file4")
+        end
+
+        # First run - all tasks should run
+        TaskManager.run_tasks
+        t1_run_count.should eq 1
+        t2_run_count.should eq 1
+        t3_run_count.should eq 1
+        File.read("file2").should eq "HELLO"
+        File.read("file4").should eq "WORLD"
+        File.read("file5").should eq "HELLO_WORLD"
+
+        # Modify file1 with different formatting but same output (file2 unchanged)
+        File.write("file1", "hello") # Same content
+
+        # Second run - t1 doesn't run (file1 unchanged)
+        # t2 doesn't run (file3 unchanged)
+        # t3 doesn't run (both inputs unchanged)
+        TaskManager.run_tasks
+        t1_run_count.should eq 1
+        t2_run_count.should eq 1
+        t3_run_count.should eq 1
+
+        # Now modify file3 - t2 should run and produce DIFFERENT file4
+        # t3 SHOULD run because file4 changed
+        File.write("file3", "earth") # Different content!
+
+        TaskManager.run_tasks
+        t1_run_count.should eq 1 # t1 didn't run
+        t2_run_count.should eq 2 # t2 ran
+        t3_run_count.should eq 2 # t3 ran because file4 changed!
+
+        # Verify file5 is updated
+        File.read("file2").should eq "HELLO"
+        File.read("file4").should eq "EARTH"
+        File.read("file5").should eq "HELLO_EARTH"
+      end
+    end
+  end
 end
