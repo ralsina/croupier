@@ -17,7 +17,9 @@ module Croupier
     property inputs : Set(String) = Set(String).new
     property outputs : Array(String) = [] of String
     @[YAML::Field(ignore: true)]
-    property stale : Bool | Nil = nil # nil=unknown, true=stale, false=fresh
+    property stale : Bool | Nil = nil # nil=unknown, true=stale, false=fresh (for serialization and tests)
+    @[YAML::Field(ignore: true)]
+    @stale_atomic : Atomic(Bool) = Atomic.new(true) # Thread-safe staleness for parallel execution
     property? always_run : Bool = false
     property? no_save : Bool = false
     @[YAML::Field(ignore: true)]
@@ -27,6 +29,8 @@ module Croupier
     property? master_task : Bool = false
     @[YAML::Field(ignore: true)]
     property subtask_ids : Set(String) = Set(String).new
+    @[YAML::Field(ignore: true)]
+    property? outputs_changed : Bool = false # Track if outputs actually changed during run
 
     # Under what keys should this task be registered with TaskManager
     def keys
@@ -173,6 +177,9 @@ module Croupier
         end
       end
 
+      # Track if any output changed (for early cutoff optimization)
+      @outputs_changed = false
+
       if @no_save
         # The task saved the data so we should not do it
         # but we need to update hashes
@@ -182,7 +189,11 @@ module Croupier
           if !File.exists?(output)
             raise "Task #{self} did not generate #{output}"
           end
-          TaskManager.next_run[output] = Digest::SHA1.hexdigest(File.read(output))
+          new_hash = Digest::SHA1.hexdigest(File.read(output))
+          TaskManager.next_run[output] = new_hash
+          # Check if output changed
+          old_hash = TaskManager.last_run[output]?
+          @outputs_changed = true if old_hash != new_hash
         end
       else
         # We have to save the files ourselves
@@ -192,6 +203,8 @@ module Croupier
             if k = output.lchop?("kv://")
               # If the output is a kv:// url, we save it in the k/v store
               TaskManager.set(k, call_result)
+              # For k/v store, always consider it changed (can't easily hash)
+              @outputs_changed = true
             else
               begin
                 Dir.mkdir_p(File.dirname output)
@@ -203,14 +216,22 @@ module Croupier
               File.open(output, "w") do |io|
                 io << call_result
               end
-              TaskManager.next_run[output] = Digest::SHA1.hexdigest(call_result)
+              new_hash = Digest::SHA1.hexdigest(call_result)
+              TaskManager.next_run[output] = new_hash
+              # Check if output changed
+              old_hash = TaskManager.last_run[output]?
+              if old_hash != new_hash
+                @outputs_changed = true
+              else
+                Log.debug { "Task #{id} output #{output} unchanged (old=#{old_hash.inspect}, new=#{new_hash.inspect})" }
+              end
             end
           end
         rescue IndexError
           raise "Task #{self} did not return the correct number of outputs"
         end
       end
-      @stale = false # Done, not stale anymore
+      self.stale = false # Done, not stale anymore
       TaskManager.progress_callback.call(id)
     end
 
@@ -228,11 +249,58 @@ module Croupier
       # Tasks without inputs or flagged always_run are always stale
       return true if @always_run || @inputs.empty?
 
-      return @stale.as(Bool) unless @stale.nil?
+      # If @stale is nil, compute on-demand (for test compatibility)
+      if @stale.nil?
+        @stale = compute_staleness
+        @stale_atomic.set(@stale.as(Bool))
+      end
 
-      # Compute on-demand for backward compatibility with tests
-      # that call stale? before run_tasks
-      @stale = compute_staleness
+      # Use atomic value for thread-safe access
+      @stale_atomic.get
+    end
+
+    # Set staleness (updates both property and atomic for thread safety)
+    def stale=(value : Bool | Nil)
+      @stale = value
+      # When set to nil, default to true (stale) in atomic
+      # When set to true/false, use that value
+      @stale_atomic.set(value.nil? ? true : value.as(Bool))
+    end
+
+    # Mark that a dependency (input) is known to be unchanged.
+    # Recomputes staleness considering ALL inputs together (thread-safe).
+    def mark_dependency_fresh(input : String)
+      new_stale = recompute_staleness
+      @stale = new_stale
+      @stale_atomic.set(new_stale)
+    end
+
+    # Internal: get current atomic staleness value
+    private def get_stale_atomic
+      @stale_atomic.get
+    end
+
+    # Recompute staleness by checking all inputs and outputs
+    private def recompute_staleness
+      return true if @always_run || @inputs.empty?
+
+      file_outputs = @outputs.reject(&.lchop?("kv://"))
+      kv_outputs = @outputs.select(&.lchop?("kv://")).map(&.lchop("kv://"))
+
+      # Check if outputs are missing
+      missing_outputs = file_outputs.any? { |output| !File.exists?(output) } ||
+                        kv_outputs.any? { |output| !TaskManager.get(output) }
+      return true if missing_outputs
+
+      # Check if inputs are modified
+      modified_inputs = @inputs.any? { |input| TaskManager.modified.includes?(input) }
+      return true if modified_inputs
+
+      # Check if any input tasks are stale
+      stale_inputs = @inputs.any? do |input|
+        TaskManager.tasks.has_key?(input) && TaskManager.tasks[input].stale?
+      end
+      stale_inputs
     end
 
     # Internal method to compute staleness on-demand
