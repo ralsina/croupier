@@ -37,6 +37,8 @@ module Croupier
     property? fast_dirs : Bool = false
     # If true, enable early cutoff optimization (skip tasks when upstream outputs unchanged)
     property? early_cutoff : Bool = true
+    # Path to the state file that stores hashes between runs
+    property state_file : String = ".croupier"
     # If set, it's called after every task finishes
     property progress_callback : Proc(String, Nil) = ->(_id : String) { }
     # If set, it's called in auto mode after changes are detected but before tasks run
@@ -309,7 +311,7 @@ module Croupier
     def mark_stale_inputs
       if auto_mode?
         # In auto mode, the watcher tells us what changed, so we don't need to scan
-        # But we still need to update @this_run so hashes are saved to .croupier
+        # But we still need to update @this_run so hashes are saved to state file
         @this_run = scan_inputs
         # The watcher has already populated @modified with changed files
         # Just ensure it's a Set
@@ -323,9 +325,9 @@ module Croupier
       kv_modifications = @modified.select(&.starts_with?("kv://"))
       @modified.clear
 
-      if File.exists? ".croupier"
-        last_run_date = File.info(".croupier").modification_time
-        @last_run = File.open(".croupier") do |file|
+      if File.exists? @state_file
+        last_run_date = File.info(@state_file).modification_time
+        @last_run = File.open(@state_file) do |file|
           YAML.parse(file).as_h.map { |k, v| [k.to_s, v.to_s] }.to_h
         end
       else
@@ -375,7 +377,7 @@ module Croupier
 
     # We ran all tasks, store the current state
     def save_run
-      File.open(".croupier", "w") do |file|
+      File.open(@state_file, "w") do |file|
         file << YAML.dump(this_run.merge next_run)
       end
     end
