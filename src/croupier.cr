@@ -3,7 +3,9 @@ require "./task"
 require "./topo_sort"
 require "crystalline"
 require "digest/sha1"
-require "inotify"
+{% if flag?(:linux) %}
+  require "inotify"
+{% end %}
 require "kiwi/file_store"
 require "kiwi/memory_store"
 require "log"
@@ -144,14 +146,16 @@ module Croupier
       @fast_mode = false
       @auto_mode = false
       @graph_invalidated = false
-      return unless watcher = @@watcher
-      begin
-        watcher.close
-      rescue ex : Inotify::Error
-        # Ignore "Bad file descriptor" errors during cleanup
-        # This can happen when the watcher is already closed or invalid
-      end
-      @@watcher = nil
+      {% if flag?(:linux) %}
+        return unless watcher = @@watcher
+        begin
+          watcher.close
+        rescue ex : Inotify::Error
+          # Ignore "Bad file descriptor" errors during cleanup
+          # This can happen when the watcher is already closed or invalid
+        end
+        @@watcher = nil
+      {% end %}
     end
 
     # Tasks as a dependency graph sorted topologically
@@ -703,11 +707,19 @@ module Croupier
       Log.info { "Auto_run: targets=#{targets.inspect}, inputs=#{inputs.inspect}" }
       raise "No inputs to watch, can't auto_run" if inputs.empty?
 
+    {% if flag?(:linux) %}
       # Auto_run always runs serially to avoid inotify thread safety issues
       # File watching and parallel execution don't mix well due to
       # shared state and nonblocking inotify library limitations
       Log.info { "Auto_run mode: forcing serial execution (parallel disabled)" }
+    {% else %}
+      # Auto_run always runs serially on non-Linux platforms
+      Log.info { "Auto_run mode: forcing serial execution (no file watching support)" }
+    {% end %}
+
+    {% if flag?(:linux) %}
       watch(targets)
+    {% end %}
       spawn do
         loop do
           select
@@ -762,6 +774,7 @@ module Croupier
       end
     end
 
+    {% if flag?(:linux) %}
     # Filesystem watcher
     @@watcher : Inotify::Watcher | Nil = nil
 
@@ -868,6 +881,7 @@ module Croupier
 
       Log.info { "Watching: #{watcher.watching.inspect}" }
     end
+    {% end %}
   end
 
   # The global task manager (singleton)
