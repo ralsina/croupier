@@ -775,119 +775,118 @@ module Croupier
       end
     end
     {% else %}
-    # Non-Linux stub for auto_run
-    def auto_run(targets : Array(String) = [] of String)
-      raise "auto_run is only supported on Linux. File watching requires inotify, which is Linux-specific."
-    end
+      # Non-Linux stub for auto_run
+      def auto_run(targets : Array(String) = [] of String)
+        raise "auto_run is only supported on Linux. File watching requires inotify, which is Linux-specific."
+      end
     {% end %}
 
     {% if flag?(:linux) %}
-    # Filesystem watcher
-    @@watcher : Inotify::Watcher | Nil = nil
+      # Filesystem watcher
+      @@watcher : Inotify::Watcher | Nil = nil
 
-    # Watch for changes in inputs.
-    # If an input has been changed BEFORE calling this method,
-    # it will NOT be detected as a change.
-    #
-    # Changes are added to queued_changes
+      # Watch for changes in inputs.
+      # If an input has been changed BEFORE calling this method,
+      # it will NOT be detected as a change.
+      #
+      # Changes are added to queued_changes
 
-    def watch(targets : Array(String) = [] of String) # ameba:disable Metrics/CyclomaticComplexity
-      if current_watcher = @@watcher
-        current_watcher.close
-      end
-
-      @@watcher = Inotify::Watcher.new(recursive: true)
-      targets = tasks.keys if targets.empty?
-      target_inputs = inputs(targets)
-
-      return unless watcher = @@watcher
-
-      # Define watch flags before event handler so it's accessible in the closure
-      watch_flags = LibInotify::IN_DELETE |
-                    LibInotify::IN_CREATE |
-                    LibInotify::IN_MODIFY |
-                    LibInotify::IN_MOVED_TO |
-                    LibInotify::IN_CLOSE_WRITE |
-                    LibInotify::IN_ATTRIB
-      # NOT watching IN_DELETE_SELF, IN_MOVE_SELF because
-      # when those are triggered we have no input file to
-      # process.
-
-      # ameba:disable Metrics/CyclomaticComplexity
-      event_handler = ->(event : Inotify::Event) do
-        # It's a file we care about, add it to the queue
-        path = event.path && event.name ? Path["#{event.path}/#{event.name}"].normalize.to_s : (event.path || "nil")
-
-        # Debug logging
-        Log.debug do
-          "inotify event: path=#{event.path.inspect}, name=#{event.name.inspect}, " \
-          "mask=#{event.mask.inspect}, constructed=#{path.inspect}, " \
-          "target_inputs=#{target_inputs.inspect}"
+      def watch(targets : Array(String) = [] of String)
+        if current_watcher = @@watcher
+          current_watcher.close
         end
 
-        # If watch was removed (e.g., editor deleted/replaced the file), re-add it
-        if event.type_is?(LibInotify::IN_IGNORED)
-          if ep = event.path
-            if target_inputs.includes?(ep)
-              if File.exists?(ep)
-                watcher.watch ep, watch_flags
-                Log.debug { "Re-watched file after editor replacement: #{ep}" }
-              else
-                # File doesn't exist, watch parent directory for creation
-                parent = Path[ep].parent.to_s
-                unless watcher.watching.includes?(parent)
-                  watcher.watch parent, watch_flags
+        @@watcher = Inotify::Watcher.new(recursive: true)
+        targets = tasks.keys if targets.empty?
+        target_inputs = inputs(targets)
+
+        return unless watcher = @@watcher
+
+        # Define watch flags before event handler so it's accessible in the closure
+        watch_flags = LibInotify::IN_DELETE |
+                      LibInotify::IN_CREATE |
+                      LibInotify::IN_MODIFY |
+                      LibInotify::IN_MOVED_TO |
+                      LibInotify::IN_CLOSE_WRITE |
+                      LibInotify::IN_ATTRIB
+        # NOT watching IN_DELETE_SELF, IN_MOVE_SELF because
+        # when those are triggered we have no input file to
+        # process.
+
+        event_handler = ->(event : Inotify::Event) do
+          # It's a file we care about, add it to the queue
+          path = event.path && event.name ? Path["#{event.path}/#{event.name}"].normalize.to_s : (event.path || "nil")
+
+          # Debug logging
+          Log.debug do
+            "inotify event: path=#{event.path.inspect}, name=#{event.name.inspect}, " \
+            "mask=#{event.mask.inspect}, constructed=#{path.inspect}, " \
+            "target_inputs=#{target_inputs.inspect}"
+          end
+
+          # If watch was removed (e.g., editor deleted/replaced the file), re-add it
+          if event.type_is?(LibInotify::IN_IGNORED)
+            if ep = event.path
+              if target_inputs.includes?(ep)
+                if File.exists?(ep)
+                  watcher.watch ep, watch_flags
+                  Log.debug { "Re-watched file after editor replacement: #{ep}" }
+                else
+                  # File doesn't exist, watch parent directory for creation
+                  parent = Path[ep].parent.to_s
+                  unless watcher.watching.includes?(parent)
+                    watcher.watch parent, watch_flags
+                  end
                 end
               end
             end
           end
-        end
 
-        # If path matches a watched path, add it to the queue
-        matched = false
-        if target_inputs.includes? path
-          @queued_changes << path
-          Log.debug { "Detected change in #{path} (exact match)" }
-          matched = true
-        else
-          target_inputs.each do |input|
-            # Check if path starts with input followed by a slash (or input is exactly the path)
-            # Need to handle trailing slash in input properly
-            input_normalized = input.ends_with?("/") ? input : "#{input}/"
-            if path.starts_with?(input_normalized) || path == input
-              # If we are watching a folder in path, add the folder to the queue
-              @queued_changes << input
-              Log.debug { "Detected change in #{input} (prefix match: #{path} starts with #{input_normalized})" }
-              matched = true
-              break
+          # If path matches a watched path, add it to the queue
+          matched = false
+          if target_inputs.includes? path
+            @queued_changes << path
+            Log.debug { "Detected change in #{path} (exact match)" }
+            matched = true
+          else
+            target_inputs.each do |input|
+              # Check if path starts with input followed by a slash (or input is exactly the path)
+              # Need to handle trailing slash in input properly
+              input_normalized = input.ends_with?("/") ? input : "#{input}/"
+              if path.starts_with?(input_normalized) || path == input
+                # If we are watching a folder in path, add the folder to the queue
+                @queued_changes << input
+                Log.debug { "Detected change in #{input} (prefix match: #{path} starts with #{input_normalized})" }
+                matched = true
+                break
+              end
+            end
+          end
+
+          Log.debug { "Event NOT matched for path=#{path}, target_inputs=#{target_inputs.inspect}" } unless matched
+        end
+        watcher.on_event(&event_handler)
+
+        target_inputs.each do |input|
+          # Don't watch for changes in k/v store
+          next if input.lchop?("kv://")
+          if File.exists? input
+            watcher.watch input, watch_flags
+            Log.info { "Watching: #{input}" }
+          else
+            # It's a file that doesn't exist. To detect it
+            # being created, we watch the parent directory
+            # if we are not already watching it.
+            path = (Path[input].parent).to_s
+            if !watcher.watching.includes?(path)
+              watcher.watch path, watch_flags
+              Log.info { "Watching parent: #{path}" }
             end
           end
         end
 
-        Log.debug { "Event NOT matched for path=#{path}, target_inputs=#{target_inputs.inspect}" } unless matched
+        Log.info { "Watching: #{watcher.watching.inspect}" }
       end
-      watcher.on_event(&event_handler)
-
-      target_inputs.each do |input|
-        # Don't watch for changes in k/v store
-        next if input.lchop?("kv://")
-        if File.exists? input
-          watcher.watch input, watch_flags
-          Log.info { "Watching: #{input}" }
-        else
-          # It's a file that doesn't exist. To detect it
-          # being created, we watch the parent directory
-          # if we are not already watching it.
-          path = (Path[input].parent).to_s
-          if !watcher.watching.includes?(path)
-            watcher.watch path, watch_flags
-            Log.info { "Watching parent: #{path}" }
-          end
-        end
-      end
-
-      Log.info { "Watching: #{watcher.watching.inspect}" }
-    end
     {% end %}
   end
 
