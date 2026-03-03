@@ -699,6 +699,7 @@ module Croupier
       @autorun_control = Channel(Bool).new
     end
 
+    {% if flag?(:linux) %}
     def auto_run(targets : Array(String) = [] of String)
       @auto_mode = true
       targets = tasks.keys if targets.empty?
@@ -773,6 +774,12 @@ module Croupier
         end
       end
     end
+    {% else %}
+    # Non-Linux stub for auto_run
+    def auto_run(targets : Array(String) = [] of String)
+      raise "auto_run is only supported on Linux. File watching requires inotify, which is Linux-specific."
+    end
+    {% end %}
 
     {% if flag?(:linux) %}
     # Filesystem watcher
