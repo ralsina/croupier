@@ -85,12 +85,11 @@ module Croupier
       return if path == @_store_path
       raise "Can't change persistent k/v store path" unless @_store_path.nil?
       new_store = Kiwi::FileStore.new(path)
-      if @_store_path.nil?
-        # Convert from MemoryStore to FileStore
-        old_store = @_store.as(Kiwi::MemoryStore)
-        old_store.@mem.each { |k, v| new_store[k] = v }
-        @_store = new_store
-      end
+      # Convert from MemoryStore to FileStore, copying any data set so far
+      old_store = @_store.as(Kiwi::MemoryStore)
+      old_store.@mem.each { |k, v| new_store[k] = v }
+      @_store = new_store
+      @_store_path = path
       Log.debug { "Storing k/v data in #{path}" }
     end
 
