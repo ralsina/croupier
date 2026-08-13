@@ -140,6 +140,7 @@ module Croupier
       @all_inputs.clear
       @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
       @graph_sorted = [] of String
+      @reverse_deps.clear
       @queued_changes.clear
       @_store_path = nil
       @_store = Kiwi::MemoryStore.new
@@ -161,6 +162,10 @@ module Croupier
     # Tasks as a dependency graph sorted topologically
     @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
     @graph_sorted = [] of String
+    # Reverse dependency map (output name -> task keys that depend on it).
+    # Built in propagate_staleness and reused by the early-cutoff scans so
+    # they don't have to walk every task per output.
+    @reverse_deps = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
 
     def sorted_task_graph
       # Rebuild graph if invalidated
@@ -393,18 +398,17 @@ module Croupier
       # Reset all task staleness to true (stale) first as default
       tasks.values.each(&.stale=(true))
 
-      # Build reverse dependency graph (who depends on me)
-      reverse_deps = Hash(String, Set(String)).new do |h, k|
-        h[k] = Set(String).new
-      end
-
+      # Build reverse dependency graph (who depends on me) into the cached
+      # @reverse_deps field, reused later by the early-cutoff scans.
+      @reverse_deps.clear
       tasks.each do |output, task|
         task.inputs.each do |input|
           if tasks.has_key?(input)
-            reverse_deps[input] << output
+            @reverse_deps[input] << output
           end
         end
       end
+      reverse_deps = @reverse_deps
 
       # Find definitively stale tasks (roots of staleness)
       # These are tasks that are stale for their own reasons:
@@ -461,20 +465,6 @@ module Croupier
       end
 
       Log.debug { "Propagated staleness: #{stale_tasks.size} stale, #{tasks.size - stale_tasks.size} fresh" }
-    end
-
-    # Find all tasks that depend on the given task and mark them as potentially fresh
-    # This is used for early cutoff optimization
-    private def find_and_mark_dependents_fresh(task : Task, potentially_fresh : Set(Task))
-      task.outputs.each do |output|
-        # Find all tasks that have this output as an input
-        tasks.each do |_, other_task|
-          if other_task.inputs.includes?(output) && other_task.stale?
-            potentially_fresh << other_task
-            Log.debug { "Marking #{other_task.id} as potentially fresh (depends on unchanged #{task.id})" }
-          end
-        end
-      end
     end
 
     # Check if all inputs are correct:
@@ -580,11 +570,14 @@ module Croupier
         if early_cutoff && !t.outputs_changed?
           Log.debug { "Early cutoff: #{t.id} outputs unchanged, notifying dependents" }
           t.outputs.each do |output|
-            # Find all tasks that depend on this output and notify them
-            tasks.each do |_, other_task|
-              if other_task.inputs.includes?(output) && other_task.stale?
-                Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
-                other_task.mark_dependency_fresh(output)
+            # Look up dependents via the cached reverse-deps map instead of
+            # scanning every task for each output.
+            @reverse_deps.fetch(output, nil).try &.each do |dependent_key|
+              if other_task = tasks[dependent_key]?
+                if other_task.stale?
+                  Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
+                  other_task.mark_dependency_fresh(output)
+                end
               end
             end
           end
@@ -662,11 +655,14 @@ module Croupier
                 if early_cutoff && !task.outputs_changed?
                   Log.debug { "Early cutoff: #{task.id} outputs unchanged, notifying dependents" }
                   task.outputs.each do |output|
-                    # Find all tasks that depend on this output and notify them
-                    tasks.each do |_, other_task|
-                      if other_task.inputs.includes?(output) && other_task.stale?
-                        Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
-                        other_task.mark_dependency_fresh(output)
+                    # Look up dependents via the cached reverse-deps map instead
+                    # of scanning every task for each output.
+                    @reverse_deps.fetch(output, nil).try &.each do |dependent_key|
+                      if other_task = tasks[dependent_key]?
+                        if other_task.stale?
+                          Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
+                          other_task.mark_dependency_fresh(output)
+                        end
                       end
                     end
                   end
