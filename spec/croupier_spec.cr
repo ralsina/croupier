@@ -1337,6 +1337,17 @@ describe "TaskManager" do
         TaskManager.@_store.as(Kiwi::FileStore)
         # Data should be migrated
         TaskManager.get("foo").should eq "bar"
+        # The chosen path should be recorded so the same-path guard works
+        TaskManager.@_store_path.should eq "store"
+        # Calling again with the same path is a no-op and must not crash
+        # (previously @_store_path was never set, so the second call would
+        # try to cast a FileStore back to MemoryStore and raise)
+        TaskManager.use_persistent_store("store")
+        TaskManager.get("foo").should eq "bar"
+        # Switching to a different path is refused
+        expect_raises(Exception, "Can't change persistent k/v store path") do
+          TaskManager.use_persistent_store("other")
+        end
       end
     end
 
