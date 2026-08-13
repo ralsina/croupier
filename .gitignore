@@ -12,4 +12,8 @@
 /spec/testcases/**/input*
 /spec/testcases/**/output*
 /spec/testcases/**/store
+# The "empty" scenario is a scratch dir for tests that generate arbitrary
+# output filenames; ignore everything in it except the tracked .keep.
+/spec/testcases/empty/*
+!/spec/testcases/empty/.keep
 /.claude/
