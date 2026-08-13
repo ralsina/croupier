@@ -443,6 +443,7 @@ module Croupier
       hash = {} of String => String
       return hash if file_inputs.empty?
       num_workers = Math.min(System.cpu_count, file_inputs.size)
+      enable_parallelism(num_workers)
       task_queue = Channel(String).new(file_inputs.size)
       result_queue = Channel({String, String}).new(file_inputs.size)
 
@@ -463,6 +464,17 @@ module Croupier
         hash[path] = sha1
       end
       hash
+    end
+
+    # Resize the default fiber execution context so worker fibers spread
+    # across OS threads (real parallelism, not just concurrency). Cheap and
+    # idempotent, so it's safe to call once per batch / per call.
+    # No-op on Crystal < 1.18 where the execution-context API doesn't exist.
+    private def enable_parallelism(workers : Int32) : Nil
+      workers = 1 if workers < 1
+      {% if compare_versions(Crystal::VERSION, "1.18.0") >= 0 %}
+        Fiber::ExecutionContext.default.resize(workers)
+      {% end %}
     end
 
     # We ran all tasks, store the current state
@@ -668,11 +680,12 @@ module Croupier
       save_run
     end
 
-    # Internal helper to run tasks concurrently
+    # Internal helper to run tasks concurrently.
     #
-    # Whenever a task is ready, launch it in a separate fiber
-    # This is only concurrency, not parallelism, but on tests
-    # it seems to be faster than running tasks sequentially.
+    # Whenever a task is ready, launch it in a separate fiber. On
+    # Crystal >= 1.18 the default execution context is resized to the
+    # worker count, so ready tasks run with real multi-core parallelism;
+    # on older Crystal this degrades to cooperative concurrency.
     # ameba:disable Metrics/CyclomaticComplexity
     def _run_tasks_parallel(
       task_names : Array(String) = [] of String,
@@ -715,6 +728,7 @@ module Croupier
 
         # Use work-stealing approach for better load balancing
         num_workers = Math.min(System.cpu_count, batch.size)
+        enable_parallelism(num_workers)
         task_queue = Channel(Task).new(batch.size)
 
         # Add all tasks to the shared queue
