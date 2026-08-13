@@ -17,3 +17,4 @@
 /spec/testcases/empty/*
 !/spec/testcases/empty/.keep
 /.claude/
+/.zcode/
