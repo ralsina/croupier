@@ -355,27 +355,69 @@ module Croupier
       @modified |= kv_modifications.to_set
     end
 
-    # Scan all inputs and return a hash with their sha1
+    # Scan all inputs and return a hash with their sha1.
+    #
+    # Plain files are hashed in parallel (one fiber per worker, bounded by
+    # CPU count) since hashing is CPU-bound and the files are independent.
+    # Directories are hashed serially because they share a single digest.
+    # The hashing algorithm is unchanged, so content-identical inputs
+    # produce identical hashes to the previous serial implementation.
     def scan_inputs
-      all_inputs.reduce({} of String => String) do |hash, path|
+      hash = {} of String => String
+
+      # Partition inputs into files (hashable in parallel) and directories.
+      file_inputs = [] of String
+      all_inputs.each do |path|
         if File.file? path
-          hash[path] = Digest::SHA1.hexdigest(File.read(path))
-        else
-          if File.directory? path
-            digest = Digest::SHA1.digest do |ctx|
-              # Hash the directory tree
-              ctx.update(Dir.glob("#{path}/**/*").sort.join("\n"))
-              if !@fast_dirs
-                # Hash *everything* in the directory (this will be slow)
-                Dir.glob("#{path}/**/*").each do |f|
-                  ctx.update File.read(f) if File.file? f
-                end
-              end
-            end
-            hash[path] = digest.hexstring
+          file_inputs << path
+        elsif File.directory? path
+          hash[path] = hash_directory(path)
+        end
+      end
+
+      hash_files_parallel(file_inputs, hash)
+      hash
+    end
+
+    # Hash a single directory input: the sorted file list, and (unless
+    # fast_dirs) the concatenation of every file's contents.
+    private def hash_directory(path : String) : String
+      Digest::SHA1.digest do |ctx|
+        # Hash the directory tree (glob once, reuse the list)
+        entries = Dir.glob("#{path}/**/*").sort
+        ctx.update(entries.join("\n"))
+        unless @fast_dirs
+          # Hash *everything* in the directory (this will be slow)
+          entries.each do |f|
+            ctx.update File.read(f) if File.file? f
           end
         end
-        hash
+      end.hexstring
+    end
+
+    # Hash a list of files concurrently into `hash`. Uses a shared channel
+    # of work and a small pool of worker fibers bounded by CPU count.
+    private def hash_files_parallel(file_inputs : Array(String), hash : Hash(String, String))
+      return if file_inputs.empty?
+      num_workers = Math.min(System.cpu_count, file_inputs.size)
+      task_queue = Channel(String).new(file_inputs.size)
+      result_queue = Channel({String, String}).new(file_inputs.size)
+
+      file_inputs.each { |path| task_queue.send(path) }
+
+      num_workers.times do
+        spawn do
+          loop do
+            path = task_queue.receive?
+            break unless path
+            result_queue.send({path, Digest::SHA1.hexdigest(File.read(path))})
+          end
+        end
+      end
+
+      file_inputs.size.times do
+        path, sha1 = result_queue.receive
+        hash[path] = sha1
       end
     end
 

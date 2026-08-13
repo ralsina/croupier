@@ -845,6 +845,23 @@ describe "TaskManager" do
         TaskManager.scan_inputs.should eq({"dir" => "f6fa5320de20f424aaab984f56d470386ca9cb96"})
       end
     end
+
+    it "should hash many files in parallel with identical results to serial" do
+      with_scenario("empty") do
+        # More files than typical CPU count to exercise the worker pool.
+        files = {} of String => String
+        20.times do |i|
+          name = "f#{i}"
+          content = "content-#{i}-#{i * i}"
+          File.write(name, content)
+          files[name] = Digest::SHA1.hexdigest(content)
+          Task.new(inputs: [name], always_run: true, proc: nil, id: "t#{i}")
+        end
+
+        result = TaskManager.scan_inputs
+        result.should eq(files)
+      end
+    end
   end
 
   describe "mark_stale_inputs" do
