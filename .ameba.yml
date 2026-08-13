@@ -11,3 +11,8 @@ Documentation/DocumentationAdmonition:
     - src/**/**
     - spec/**/**
   Enabled: true
+
+# Vendored third-party libraries are not our code; don't lint them.
+Excluded:
+  - lib/**/**
+  - examples/ssg/lib/**/**

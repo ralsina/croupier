@@ -1508,7 +1508,7 @@ describe "TaskManager" do
     it "should rebuild graph when subtasks are registered" do
       with_scenario("empty") do
         # Build initial graph
-        initial_task = Task.new(
+        Task.new(
           inputs: [] of String,
           outputs: ["initial.txt"],
         ) do
@@ -1519,7 +1519,7 @@ describe "TaskManager" do
         initial_sorted.size.should eq 1
 
         # Add master task that creates subtasks
-        master = Task.new(
+        Task.new(
           id: "test_master",
           inputs: [] of String,
           always_run: true,
@@ -1552,7 +1552,7 @@ describe "TaskManager" do
     it "should not merge master tasks with non-master tasks" do
       with_scenario("empty") do
         # Create a regular task
-        regular = Task.new(
+        Task.new(
           outputs: ["test.txt"],
         ) do
           "regular content"
@@ -1576,7 +1576,7 @@ describe "TaskManager" do
         File.write("content/file1.md", "Content 1")
 
         # First run - create subtasks
-        master = Task.new(
+        Task.new(
           id: "content_master",
           inputs: ["content/"],
           always_run: true,
@@ -1616,7 +1616,7 @@ describe "TaskManager" do
         Dir.mkdir_p("content")
         File.write("content/test.md", "Test")
 
-        master = Task.new(
+        Task.new(
           id: "test_master",
           inputs: [] of String,
           always_run: true,
@@ -1649,7 +1649,7 @@ describe "TaskManager" do
         File.write("content/page.md", "Page content")
         File.write("templates/layout.html", "<html>{{content}}</html>")
 
-        master = Task.new(
+        Task.new(
           id: "content_master",
           inputs: ["content/"],
           always_run: true,
@@ -1685,7 +1685,7 @@ describe "TaskManager" do
         # Create file before defining master task to avoid cycle
         File.write("content/test.md", "Initial content")
 
-        master = Task.new(
+        Task.new(
           id: "auto_master",
           always_run: true,
           master_task: true,
@@ -1755,7 +1755,7 @@ describe "TaskManager" do
         TaskManager.set("test_key", "100")
 
         # Create a task that depends on the k/v store value
-        task = Task.new(
+        Task.new(
           id: "kv_task",
           inputs: ["kv://test_key"],
           outputs: ["kv://output_key"],

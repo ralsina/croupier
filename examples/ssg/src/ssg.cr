@@ -99,7 +99,7 @@ FileUtils.mkdir_p("output")
 FileUtils.mkdir_p("output/blog")
 
 # Master task watches content/ folder and creates subtask per markdown file
-master_task = Croupier::Task.new(
+Croupier::Task.new(
   id: "content_master",
   inputs: ["content/"],
   always_run: true,
