@@ -531,6 +531,19 @@ describe "TaskManager" do
         TaskManager.all_inputs.should eq Set{"input", "output3", "input2"}
       end
     end
+
+    it "should be invalidated when a task is added" do
+      with_scenario("basic") do
+        # Force the cache to populate.
+        TaskManager.all_inputs.should eq Set{"input", "output3", "input2"}
+
+        # Register a new task with a previously-unseen input. The cache
+        # must be invalidated so all_inputs reflects the new input without
+        # an intervening graph rebuild.
+        Task.new(inputs: ["new_input"], output: "new_output") { "new" }
+        TaskManager.all_inputs.should eq Set{"input", "output3", "input2", "new_input"}
+      end
+    end
   end
 
   describe "sorted_task_graph" do

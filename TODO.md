@@ -110,10 +110,12 @@ branches; the rest are recorded here for later.
   upstream rename would break the build opaquely.
 * #4 `scan_inputs` reads every file in a watched directory with no size
   guard or error handling — one unreadable file or symlink loop crashes
-  the run. Also `Dir.glob` is called twice per directory.
+  the run. Also `Dir.glob` is called twice per directory. *(double-glob
+  fixed in #19; the throw-on-unreadable behavior is intentional: an
+  unreadable declared input is a real error, not something to skip)*
 * #8 `@all_inputs` cache is only rebuilt when empty; it's cleared during
   graph rebuild today but a task added between build and scan could see a
-  stale set. Make registration clear it explicitly.
+  stale set. Make registration clear it explicitly. *(fixed)*
 * Concurrency: early-cutoff path mutates `other_task` state from worker
   fibers without synchronization; safe only because MT is off. Guard
   `mark_dependency_fresh` or document the single-threaded requirement.
@@ -145,4 +147,4 @@ branches; the rest are recorded here for later.
   artifacts; `.gitignore` only covers `input*`/`output*`. Broaden the
   ignore. *(fixed on branch)*
 * `~2000` lines in `croupier_spec.cr` — consider splitting by topic.
-* Typo in comment `croupier.cr:33`: "SAH1" → "SHA1".
+* Typo in comment `croupier.cr:33`: "SAH1" → "SHA1". *(fixed)*
