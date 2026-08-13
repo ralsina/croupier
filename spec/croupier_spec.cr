@@ -815,14 +815,16 @@ describe "TaskManager" do
           proc: nil,
           id: "t1"
         )
-        TaskManager.scan_inputs.should eq({"dir" => "da39a3ee5e6b4b0d3255bfef95601890afd80709"})
+        # Directory hashes use a hash-of-hashes (per-file SHA1 folded into a
+        # final SHA1, with explicit framing) so files hash in parallel.
+        TaskManager.scan_inputs.should eq({"dir" => "71853c6197a6a7f222db0f1978c7cb232b87c5ee"})
         File.write("dir/input", "foo")
-        TaskManager.scan_inputs.should eq({"dir" => "7e0dbd57e84798fe1a40bb453dcf51f2569a3a2e"})
+        TaskManager.scan_inputs.should eq({"dir" => "489b711174b065f00574ceab0782f56d99f0bb66"})
         # This mode doesn't ignore file contents
         File.write("dir/input", "bar")
-        TaskManager.scan_inputs.should eq({"dir" => "63734eec74b627be2865c006e11b270747b4df2c"})
+        TaskManager.scan_inputs.should eq({"dir" => "bd39227745e0c9ecfc68e24abe1f6844594ce320"})
         Dir.mkdir("dir/dir1")
-        TaskManager.scan_inputs.should eq({"dir" => "05cfe846d65930c8a0be1da2b8aa16ee21d0cbdd"})
+        TaskManager.scan_inputs.should eq({"dir" => "e6b2e5679b55e24c3bc87c2c42a54485e312a617"})
       end
     end
     it "should hash directories in fast_dirs mode" do
@@ -843,6 +845,23 @@ describe "TaskManager" do
         TaskManager.scan_inputs.should eq({"dir" => "18e96066fa04ae6c67b5cdcfb02c7c5646ae2402"})
         Dir.mkdir("dir/dir1")
         TaskManager.scan_inputs.should eq({"dir" => "f6fa5320de20f424aaab984f56d470386ca9cb96"})
+      end
+    end
+
+    it "should hash many files in parallel with identical results to serial" do
+      with_scenario("empty") do
+        # More files than typical CPU count to exercise the worker pool.
+        files = {} of String => String
+        20.times do |i|
+          name = "f#{i}"
+          content = "content-#{i}-#{i * i}"
+          File.write(name, content)
+          files[name] = Digest::SHA1.hexdigest(content)
+          Task.new(inputs: [name], always_run: true, proc: nil, id: "t#{i}")
+        end
+
+        result = TaskManager.scan_inputs
+        result.should eq(files)
       end
     end
   end

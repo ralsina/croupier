@@ -355,28 +355,95 @@ module Croupier
       @modified |= kv_modifications.to_set
     end
 
-    # Scan all inputs and return a hash with their sha1
+    # Scan all inputs and return a hash with their sha1.
+    #
+    # Plain files and the contents of directory inputs are hashed in
+    # parallel (a pool of worker fibers bounded by CPU count), since both
+    # the disk read and the hashing are independent per file.
     def scan_inputs
-      all_inputs.reduce({} of String => String) do |hash, path|
+      hash = {} of String => String
+
+      # Partition inputs into files (hashable in parallel) and directories.
+      file_inputs = [] of String
+      all_inputs.each do |path|
         if File.file? path
-          hash[path] = Digest::SHA1.hexdigest(File.read(path))
-        else
-          if File.directory? path
-            digest = Digest::SHA1.digest do |ctx|
-              # Hash the directory tree
-              ctx.update(Dir.glob("#{path}/**/*").sort.join("\n"))
-              if !@fast_dirs
-                # Hash *everything* in the directory (this will be slow)
-                Dir.glob("#{path}/**/*").each do |f|
-                  ctx.update File.read(f) if File.file? f
-                end
-              end
-            end
-            hash[path] = digest.hexstring
+          file_inputs << path
+        elsif File.directory? path
+          hash[path] = hash_directory(path)
+        end
+      end
+
+      hash_files_parallel(file_inputs).each do |path, sha1|
+        hash[path] = sha1
+      end
+      hash
+    end
+
+    # Hash a single directory input.
+    #
+    # The directory digest is a hash-of-hashes: every file in the tree is
+    # hashed independently (in parallel), and those per-file hashes are
+    # folded into a final SHA1 along with the sorted entry list. This is
+    # the Merkle-tree pattern (as used by git tree objects): collision
+    # resistance is preserved, and per-file hashing parallelizes the
+    # expensive part while leaving the door open to a future per-file
+    # mtime+size cache.
+    #
+    # The path list and the file-hash list are framed as separate,
+    # newline-joined fields with a distinct separator so two different
+    # trees can't collide by construction (the previous scheme folded raw
+    # file bytes directly into the same context with no boundary).
+    private def hash_directory(path : String) : String
+      # Glob the tree once and reuse the list.
+      entries = Dir.glob("#{path}/**/*").sort
+
+      return Digest::SHA1.hexdigest(entries.join("\n")) if @fast_dirs
+
+      # Hash every file in the tree in parallel.
+      files = entries.select(&->File.file?(String))
+      file_hashes = hash_files_parallel(files)
+
+      Digest::SHA1.hexdigest do |ctx|
+        # Field 1: the sorted entry list (captures tree structure).
+        ctx.update(entries.join("\n"))
+        ctx.update("\n\n")
+        # Field 2: each file's path + content hash (captures contents).
+        files.each do |f|
+          ctx.update(f)
+          ctx.update("\0")
+          ctx.update(file_hashes[f])
+          ctx.update("\n")
+        end
+      end
+    end
+
+    # Hash a list of files concurrently, returning a {path => sha1} map.
+    # Uses a shared channel of work and a small pool of worker fibers
+    # bounded by CPU count.
+    private def hash_files_parallel(file_inputs : Array(String)) : Hash(String, String)
+      hash = {} of String => String
+      return hash if file_inputs.empty?
+      num_workers = Math.min(System.cpu_count, file_inputs.size)
+      task_queue = Channel(String).new(file_inputs.size)
+      result_queue = Channel({String, String}).new(file_inputs.size)
+
+      file_inputs.each { |path| task_queue.send(path) }
+
+      num_workers.times do
+        spawn do
+          loop do
+            path = task_queue.receive?
+            break unless path
+            result_queue.send({path, Digest::SHA1.hexdigest(File.read(path))})
           end
         end
-        hash
       end
+
+      file_inputs.size.times do
+        path, sha1 = result_queue.receive
+        hash[path] = sha1
+      end
+      hash
     end
 
     # We ran all tasks, store the current state
