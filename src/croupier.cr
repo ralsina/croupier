@@ -29,7 +29,7 @@ module Croupier
     property last_run = {} of String => String
     # SHA1 of files as of starting this run
     property this_run = {} of String => String
-    # SAH1 of input files as of ending this run
+    # SHA1 of input files as of ending this run
     property next_run = {} of String => String
     # If true, only compare file dates
     property? fast_mode : Bool = false
@@ -120,6 +120,7 @@ module Croupier
     # Invalidate the cached task graph
     def invalidate_graph_cache
       @graph_invalidated = true
+      @all_inputs.clear
       # Don't use set() here to avoid triggering auto_run loops
       @_store.set("__croupier_graph_rebuild_needed", "true")
     end
@@ -127,6 +128,7 @@ module Croupier
     # Invalidate the graph cache without setting k/v (for internal use from Task.initialize)
     def invalidate_graph_cache_no_store
       @graph_invalidated = true
+      @all_inputs.clear
     end
 
     # Remove all tasks and everything else (good for tests)
