@@ -266,6 +266,9 @@ module Croupier
     end
 
     # Memoized implementation of _dependencies
+    # Each node's own transitive closure is cached, so a memoized entry
+    # never includes contributions from sibling outputs processed earlier
+    # in the same call.
     private def _dependencies_impl(outputs : Array(String), memo : Hash(String, Set(String)))
       result = Set(String).new
       outputs.each do |output|
@@ -276,10 +279,13 @@ module Croupier
         end
 
         if tasks.has_key?(output)
-          result << output
-          input_deps = _dependencies_impl(tasks[output].@inputs.to_a, memo)
-          result.concat input_deps
-          memo[output] = result.dup # Cache for future lookups
+          # Compute this node's *own* closure (itself + closure of inputs)
+          # into a local set, cache THAT, then merge into the running result.
+          node_result = Set(String).new
+          node_result << output
+          node_result.concat(_dependencies_impl(tasks[output].@inputs.to_a, memo))
+          memo[output] = node_result
+          result.concat(node_result)
         end
       end
       result
@@ -294,23 +300,30 @@ module Croupier
     end
 
     # Memoized implementation of depends_on
+    # Each input's own transitive closure (the outputs of all tasks that
+    # consume it, plus their closures) is cached independently, so a
+    # memoized entry never includes contributions from other inputs
+    # processed earlier in the same call.
     private def depends_on_impl(inputs : Array(String), memo : Hash(String, Set(String)))
       result = Set(String).new
-      TaskManager.tasks.values.each do |t|
-        inputs.each do |input|
-          # Return cached result if available
-          if memo.has_key?(input)
-            result.concat memo[input]
-            next
-          end
+      inputs.each do |input|
+        # Return cached result if available
+        if memo.has_key?(input)
+          result.concat memo[input]
+          next
+        end
 
+        # Compute this input's *own* closure into a local set: for every
+        # task that consumes `input`, add its outputs and their closures.
+        node_result = Set(String).new
+        TaskManager.tasks.values.each do |t|
           if t.@inputs.includes?(input)
-            result.concat t.outputs
-            output_deps = depends_on_impl(t.outputs, memo)
-            result.concat output_deps
-            memo[input] = result.dup # Cache for future lookups
+            node_result.concat t.outputs
+            node_result.concat(depends_on_impl(t.outputs, memo))
           end
         end
+        memo[input] = node_result
+        result.concat(node_result)
       end
       result
     end

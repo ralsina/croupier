@@ -1308,6 +1308,32 @@ describe "TaskManager" do
         end
       end
     end
+
+    it "should compute each node's own closure on a diamond (memoization)" do
+      # Diamond: root -> left, root -> right, left -> sink, right -> sink
+      # The memo caches each node's transitive closure. Querying several
+      # outputs together exercises the shared memo across reconvergent
+      # paths; each individual query must still resolve to exactly that
+      # node's own transitive dependencies.
+      with_scenario("empty", to_create: {"root_in" => "x"}) do
+        Task.new(outputs: ["root"], inputs: ["root_in"]) { "root" }
+        Task.new(outputs: ["left"], inputs: ["root"]) { "left" }
+        Task.new(outputs: ["right"], inputs: ["root"]) { "right" }
+        Task.new(outputs: ["sink"], inputs: ["left", "right"]) { "sink" }
+
+        # Querying several outputs at once exercises the shared memo.
+        TaskManager._dependencies(["left", "right", "sink"])
+
+        # Each node's own closure must be exact, regardless of query order.
+        TaskManager._dependencies(["sink"]).should eq Set.new(["root", "left", "right", "sink"])
+        TaskManager._dependencies(["left"]).should eq Set.new(["root", "left"])
+        TaskManager._dependencies(["right"]).should eq Set.new(["root", "right"])
+        TaskManager._dependencies(["root"]).should eq Set.new(["root"])
+
+        # And the public API returns the full diamond in dependency order.
+        TaskManager.dependencies("sink").should eq ["root", "left", "right", "sink"]
+      end
+    end
   end
 
   describe "store" do
