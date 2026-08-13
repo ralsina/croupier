@@ -469,12 +469,10 @@ module Croupier
     # Resize the default fiber execution context so worker fibers spread
     # across OS threads (real parallelism, not just concurrency). Cheap and
     # idempotent, so it's safe to call once per batch / per call.
-    # No-op on Crystal < 1.18 where the execution-context API doesn't exist.
-    private def enable_parallelism(workers : Int32) : Nil
+    # Requires Crystal >= 1.21, where execution contexts are on by default.
+    private def enable_parallelism(workers : Int) : Nil
       workers = 1 if workers < 1
-      {% if compare_versions(Crystal::VERSION, "1.18.0") >= 0 %}
-        Fiber::ExecutionContext.default.resize(workers)
-      {% end %}
+      Fiber::ExecutionContext.default.resize(workers.to_i32)
     end
 
     # We ran all tasks, store the current state
