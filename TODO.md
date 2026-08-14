@@ -129,8 +129,10 @@ branches; the rest are recorded here for later.
   and graphs rooted at such tasks were unrunnable ("Waiting for ...")~~
   *(fixed: `stale?` now trusts the assigned tri-state and only treats
   such tasks as always-stale while staleness is unknown)*
-* `@stale` / `@stale_atomic` are two sources of truth kept in sync by
-  hand — drift-bug magnet. Consider one field behind an `Atomic`.
+* ~~`@stale` / `@stale_atomic` are two sources of truth kept in sync by
+  hand — drift-bug magnet.~~ *(fixed: single `Atomic(Staleness)` field
+  with tri-state Unknown/Stale/Fresh; `stale`/`stale=`/`stale?` are
+  views over it)*
 * `Task#run` rescues broadly and re-raises wrapped, obscuring the
   original backtrace. Prefer re-raise or cause-chaining.
 

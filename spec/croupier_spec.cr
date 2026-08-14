@@ -481,6 +481,30 @@ describe "Task" do
       end
     end
 
+    it "should round-trip the stale property" do
+      with_scenario("empty") do
+        t = Task.new(id: "t", output: "upstream") { "upstream data" }
+        # Starts unknown
+        t.stale.should be_nil
+        t.stale = true
+        t.stale.should be_true
+        t.stale?.should be_true
+        t.stale = false
+        t.stale.should be_false
+        t.stale?.should be_false
+        # Reset to unknown, then recomputed on demand
+        t.stale = nil
+        t.stale.should be_nil
+        t.stale?.should be_true
+
+        # Computing staleness on demand caches the result in the property
+        t2 = Task.new(id: "t2", inputs: ["upstream"], output: "downstream") { "downstream data" }
+        t2.stale.should be_nil
+        t2.stale?.should be_true # output missing
+        t2.stale.should be_true
+      end
+    end
+
     it "should not report a finished input-less task as stale" do
       with_scenario("empty") do
         t = Task.new(id: "t", output: "upstream") { "upstream data" }
