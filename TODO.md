@@ -82,6 +82,19 @@
 
   Not really needed.
 
+* Switch `topological_sort` to Kahn's algorithm (in-degree + queue)
+
+  Measured 2026-08-14 on synthetic DAGs shaped like the real
+  vertice_dict: the current DFS is already O(V+E) and Kahn is
+  ~1.7–2.4x slower at every size (5k vertices/15k edges: 1.3ms vs
+  2.3ms per sort; 100k/300k: 79ms vs 191ms). Kahn builds a
+  `Hash(String, Int32)` of in-degrees and makes three passes, so it
+  hashes more, and on string-keyed graphs hashing is the cost.
+
+  Also, `sorted_task_graph` caches the result: the sort runs once per
+  invalidated graph, not per task, so even 79ms at 100k vertices would
+  be noise in a run executing that many tasks.
+
 * Using RomainFranceschini/cgl instead of crystalline which seems buggy
 
   What can I say, it works, and the gains look marginal since cgl doesn't
@@ -148,13 +161,6 @@ branches; the rest are recorded here for later.
   and `find_and_mark_dependents_fresh` is O(V) per output → O(V²·outs)
   per run. Reuse the `reverse_deps` map already built in
   `propagate_staleness`. *(addressed on branch)*
-* ~~`#9` `topological_sort` allocates per vertex; for very large graphs
-  Kahn's algorithm (in-degree + queue) would be simpler and faster.~~
-  *(measured 2026-08-14: rejected. The current DFS is already O(V+E)
-  and Kahn is ~1.7–2.4x slower on string-keyed graphs (it builds a
-  `Hash(String, Int32)` of in-degrees and makes three passes, so it
-  hashes more). At 5k vertices/15k edges the whole sort is ~1.3ms and
-  runs once per invalidated graph)*
 * `#10` `_run_tasks_parallel` reallocates a `Channel` + `WaitGroup` per
   wave; reusing the channel across waves would reduce churn.
 * `#11` `_run_tasks` (serial) builds intermediate arrays via
