@@ -469,10 +469,16 @@ module Croupier
     # Resize the default fiber execution context so worker fibers spread
     # across OS threads (real parallelism, not just concurrency). Cheap and
     # idempotent, so it's safe to call once per batch / per call.
-    # Requires Crystal >= 1.21, where execution contexts are on by default.
+    #
+    # The API only exists on Crystal >= 1.21 without -Dpreview_mt (the
+    # deprecated flag selects the old runtime, which lacks execution
+    # contexts). Guard on both so the call compiles everywhere; elsewhere
+    # this degrades to a no-op, same as before the resize existed.
     private def enable_parallelism(workers : Int) : Nil
       workers = 1 if workers < 1
-      Fiber::ExecutionContext.default.resize(workers.to_i32)
+      {% if !flag?(:preview_mt) && compare_versions(Crystal::VERSION, "1.21.0") >= 0 %}
+        Fiber::ExecutionContext.default.resize(workers.to_i32)
+      {% end %}
     end
 
     # We ran all tasks, store the current state
@@ -645,8 +651,10 @@ module Croupier
         !(t.stale? || run_all || t.@always_run)
       }.each do |t|
         next if t.nil? || finished.includes?(t)
-        # Re-check staleness in case early cutoff marked this task as fresh
-        next unless t.stale?
+        # Re-check staleness in case early cutoff marked this task as fresh,
+        # but keep honoring run_all / always_run like the reject above and
+        # ready?(run_all) do, or -B silently skips fresh tasks.
+        next unless t.stale? || t.always_run? || run_all
         Log.debug { "Running task for #{t.outputs}" }
         raise "Can't run task for #{t.outputs}: Waiting for #{t.waiting_for}" unless t.waiting_for.empty? || dry_run
         begin

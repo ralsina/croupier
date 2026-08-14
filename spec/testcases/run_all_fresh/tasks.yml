@@ -1,0 +1,9 @@
+# Task with inputs and existing outputs: fresh once the state file has
+# recorded a run, so only run_all (make -B style) can force it to rerun.
+t1:
+  outputs: ["out1"]
+  inputs: ["in.txt"]
+  procs: "append_marker"
+  always_run: false
+  no_save: true
+  id: t1

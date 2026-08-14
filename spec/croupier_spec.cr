@@ -621,6 +621,29 @@ describe "TaskManager" do
         end
       end
 
+      it "should rerun fresh tasks when run_all is true" do
+        marker_proc = TaskProc.new do
+          File.open("marker", "a") { |io| io << "x\n" }
+          ""
+        end
+        with_scenario("run_all_fresh",
+          to_create: {"in.txt" => "data", "out1" => "existing"},
+          procs: {"append_marker" => marker_proc}) do
+          # First run: no state file yet, so the task is stale and runs.
+          TaskManager.run_tasks(parallel: parallel)
+          File.read("marker").lines.size.should eq 1
+
+          # Second run: inputs unchanged and outputs exist, so the task is
+          # fresh and must NOT run again without run_all.
+          TaskManager.run_tasks(parallel: parallel)
+          File.read("marker").lines.size.should eq 1
+
+          # run_all must force execution even though nothing is stale.
+          TaskManager.run_tasks(parallel: parallel, run_all: true)
+          File.read("marker").lines.size.should eq 2
+        end
+      end
+
       it "should save files but respect the no_save flag" do
         with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
           File.exists?("output1").should be_false

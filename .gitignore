@@ -18,3 +18,7 @@
 !/spec/testcases/empty/.keep
 /.claude/
 /.zcode/
+# The run_all_fresh scenario is a scratch dir like "empty": the spec
+# creates and counts its inputs/outputs/marker at runtime.
+/spec/testcases/run_all_fresh/*
+!/spec/testcases/run_all_fresh/tasks.yml
