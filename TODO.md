@@ -134,13 +134,14 @@ branches; the rest are recorded here for later.
   graph rebuild today but a task added between build and scan could see a
   stale set. Make registration clear it explicitly. *(fixed)*
 * ~~Concurrency: early-cutoff path mutates `other_task` state from worker
-  fibers without synchronization~~ *(fixed: parallel bookkeeping and
-  TaskManager data access are now serialized — `@bookkeeping_mutex`
-  guards worker bookkeeping / early-cutoff / stale transitions,
-  `@data_mutex` guards the k/v store, `modified`, `next_run`, `last_run`;
-  see `spec/parallel_stress_spec.cr`. Longer term, having workers send
-  results over a Channel to a coordinating fiber that owns all
-  bookkeeping would remove the locks.)*
+  fibers without synchronization~~ *(fixed twice over: first by
+  serializing with mutexes, then redesigned — parallel workers now
+  only execute tasks and report `{task, error}` over a results
+  channel; the coordinating fiber owns all bookkeeping (finished /
+  failed / errors, stale transitions, early-cutoff notifications), so
+  the bookkeeping mutex is gone. `@data_mutex` still guards the k/v
+  store, `modified`, `next_run`, `last_run`; see
+  `spec/parallel_stress_spec.cr`)*
 * ~~`stale?` short-circuited to `true` forever for input-less and
   `always_run` tasks, so `waiting_for` never released their dependents
   and graphs rooted at such tasks were unrunnable ("Waiting for ...")~~
@@ -165,8 +166,13 @@ branches; the rest are recorded here for later.
   and `find_and_mark_dependents_fresh` is O(V) per output → O(V²·outs)
   per run. Reuse the `reverse_deps` map already built in
   `propagate_staleness`. *(addressed on branch)*
-* `#10` `_run_tasks_parallel` reallocates a `Channel` + `WaitGroup` per
-  wave; reusing the channel across waves would reduce churn.
+* ~~`#10` `_run_tasks_parallel` reallocates a `Channel` + `WaitGroup` per
+  wave; reusing the channel across waves would reduce churn.~~
+  *(measured 2026-08-14: a wave's throwaways cost ~10µs total, i.e.
+  fractions of a millisecond per run — not worth optimizing. The
+  WaitGroup is now gone anyway: workers report over a results channel
+  and the coordinator's receive count is the wave barrier. Workers
+  still respawn per wave, deliberately)*
 * ~~`#11` `_run_tasks` (serial) builds intermediate arrays via
   `compact_map` + `reject` before a single iteration — easy to fuse.~~
   *(fixed: fused into one pass; staleness is now decided at visit time.

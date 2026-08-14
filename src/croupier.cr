@@ -8,7 +8,6 @@ require "digest/sha1"
 require "kiwi/file_store"
 require "kiwi/memory_store"
 require "log"
-require "wait_group"
 
 module Croupier
   VERSION = {{ `shards version #{__DIR__}`.chomp.stringify }}
@@ -73,17 +72,6 @@ module Croupier
     # multiple OS threads.
     @data_mutex = Sync::Mutex.new
 
-    # Guards the run bookkeeping done by parallel workers (finished /
-    # failed / error bookkeeping, early-cutoff notifications, task stale
-    # transitions).
-    #
-    # Lock order: bookkeeping -> data, never the reverse. The early-cutoff
-    # block legitimately nests (it holds this lock while staleness
-    # recompute takes @data_mutex). Never hold either lock while running
-    # user procs, doing file I/O or hashing, invoking progress_callback,
-    # or waiting on a batch WaitGroup.
-    @bookkeeping_mutex = Sync::Mutex.new
-
     def set(key, value)
       Log.debug { "Setting k/v data for #{key}" }
       @data_mutex.synchronize do
@@ -110,11 +98,6 @@ module Croupier
     # Whether `key` (a file or kv:// key) was modified since the last run.
     def modified?(key : String) : Bool
       @data_mutex.synchronize { modified.includes?(key) }
-    end
-
-    # Run-bookkeeping critical section for parallel task workers.
-    def with_run_bookkeeping(&)
-      @bookkeeping_mutex.synchronize { yield }
     end
 
     # Use a persistent k/v store in this path instead of
@@ -720,6 +703,12 @@ module Croupier
     # Crystal >= 1.18 the default execution context is resized to the
     # worker count, so ready tasks run with real multi-core parallelism;
     # on older Crystal this degrades to cooperative concurrency.
+    #
+    # Worker fibers only execute tasks and report each outcome over the
+    # results channel; this coordinating fiber owns all shared
+    # bookkeeping (finished / failed / error collections, stale
+    # transitions, early-cutoff notifications), so none of it needs a
+    # lock. Receiving batch.size results is the wave barrier.
     # ameba:disable Metrics/CyclomaticComplexity
     def _run_tasks_parallel(
       task_names : Array(String) = [] of String,
@@ -764,64 +753,64 @@ module Croupier
         num_workers = Math.min(System.cpu_count, batch.size)
         enable_parallelism(num_workers)
         task_queue = Channel(Task).new(batch.size)
+        results = Channel({Task, Exception?}).new(batch.size)
 
         # Add all tasks to the shared queue
         batch.each { |task| task_queue.send(task) }
 
-        wg = WaitGroup.new(batch.size)
         Log.debug { "Starting work-stealing execution of #{batch.size} tasks with #{num_workers} workers" }
 
-        # Create worker fibers that pull tasks from the queue
+        # Create worker fibers that pull tasks from the queue and report
+        # each outcome. They touch no shared bookkeeping: task staleness
+        # is a single atomic field, and the TaskManager data they write
+        # goes through @data_mutex-guarded accessors.
         num_workers.times do
           spawn do
             loop do
               task = task_queue.receive?
               break unless task # Queue is empty, exit worker
 
+              error : Exception? = nil
               begin
                 task.run unless dry_run
-                # Early cutoff: if outputs didn't change, notify dependent tasks
-                if early_cutoff && !task.outputs_changed?
-                  Log.debug { "Early cutoff: #{task.id} outputs unchanged, notifying dependents" }
-                  # Notifications mutate other tasks' staleness (possibly
-                  # tasks sibling workers are finishing), so they share the
-                  # run-bookkeeping lock with the ensure block below.
-                  with_run_bookkeeping do
-                    task.outputs.each do |output|
-                      # Look up dependents via the cached reverse-deps map instead
-                      # of scanning every task for each output.
-                      @reverse_deps.fetch(output, nil).try &.each do |dependent_key|
-                        if other_task = tasks[dependent_key]?
-                          if other_task.stale?
-                            Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
-                            other_task.mark_dependency_fresh(output)
-                          end
-                        end
-                      end
-                    end
+              rescue ex
+                error = ex
+              end
+              results.send({task, error})
+            end
+          end
+        end
+
+        # Collect every outcome. This loop is the wave barrier and the
+        # only writer of the bookkeeping state.
+        batch.size.times do
+          task, error = results.receive
+          if failure = error
+            failed_tasks << task
+            errors << failure.message.to_s
+            Log.error { "Task #{task.outputs} failed: #{failure.message}" }
+          end
+          # Task is done, do not run again
+          task.stale = false
+          finished_tasks << task
+
+          # Early cutoff: if outputs didn't change, notify dependent tasks
+          if error.nil? && early_cutoff && !task.outputs_changed?
+            Log.debug { "Early cutoff: #{task.id} outputs unchanged, notifying dependents" }
+            task.outputs.each do |output|
+              # Look up dependents via the cached reverse-deps map instead
+              # of scanning every task for each output.
+              @reverse_deps.fetch(output, nil).try &.each do |dependent_key|
+                if other_task = tasks[dependent_key]?
+                  if other_task.stale?
+                    Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
+                    other_task.mark_dependency_fresh(output)
                   end
                 end
-              rescue ex
-                # Shared with the other workers of this batch: concurrent
-                # Array/Set growth would corrupt memory.
-                with_run_bookkeeping do
-                  failed_tasks << task
-                  errors << ex.message.to_s
-                end
-                Log.error { "Task #{task.outputs} failed: #{ex.message}" }
-              ensure
-                # Task is done, do not run again
-                with_run_bookkeeping do
-                  task.stale = false
-                  finished_tasks << task
-                end
-                wg.done
               end
             end
           end
         end
-        # Wait for the whole batch to finish
-        wg.wait
       end
       raise errors.join("\n") unless errors.empty? unless keep_going
       save_run

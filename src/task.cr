@@ -245,9 +245,7 @@ module Croupier
           raise "Task #{self} did not return the correct number of outputs"
         end
       end
-      # Serialize with the parallel runner's bookkeeping (early-cutoff
-      # notifications from sibling workers may touch our stale flag).
-      TaskManager.with_run_bookkeeping { self.stale = false } # Done, not stale anymore
+      self.stale = false # Done, not stale anymore (staleness is a single atomic field)
       TaskManager.progress_callback.call(id)
     end
 
