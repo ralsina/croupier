@@ -39,7 +39,6 @@ what's necessary based on file/content changes.
 
 - `make mutation` - Run mutation testing
 
-- `bin/crytic` - Run mutation testing manually
 
 **Cleanup:**
 
