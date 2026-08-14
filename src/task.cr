@@ -3,6 +3,12 @@ require "yaml"
 module Croupier
   alias TaskProc = -> String? | Array(String)
 
+  # Error raised when a task's proc raises: it carries the task context
+  # in its message and keeps the original exception (with its backtrace)
+  # available as `#cause`.
+  class TaskFailure < Exception
+  end
+
   # A Task is an object that may generate output
   #
   # It has a `Proc` which is executed when the task is run
@@ -172,7 +178,7 @@ module Croupier
           TaskManager.lock_mutex(mutex.as(String)) unless mutex.nil?
           result = proc.call
         rescue ex
-          raise "Task #{self} failed: #{ex}"
+          raise TaskFailure.new("Task #{self} failed: #{ex}", cause: ex)
         ensure
           TaskManager.unlock_mutex(mutex.as(String)) unless mutex.nil?
         end

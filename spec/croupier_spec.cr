@@ -318,6 +318,29 @@ describe "Task" do
       end
     end
 
+    it "should raise TaskFailure with the original exception as cause" do
+      with_scenario("empty") do
+        t = Task.new("output2", proc: TaskProc.new { raise ArgumentError.new("bad argument") })
+        ex = expect_raises(TaskFailure) { t.run }
+        ex.message.should eq("Task 052cd9c::output2 failed: bad argument")
+        cause = ex.cause
+        cause.should be_a(ArgumentError)
+        cause.as(ArgumentError).message.should eq("bad argument")
+        # The cause keeps the backtrace of the failing proc, not the wrapper's
+        cause.as(Exception).backtrace.first.should contain("croupier_spec")
+      end
+    end
+
+    it "should propagate TaskFailure through run_tasks" do
+      with_scenario("empty") do
+        Task.new("output2", inputs: [] of String, proc: TaskProc.new { raise "foo" })
+        Task.new("output3", inputs: ["output2"], proc: TaskProc.new { "" })
+        expect_raises(TaskFailure, "Task 052cd9c::output2 failed: foo") do
+          TaskManager.run_tasks
+        end
+      end
+    end
+
     it "should record hash for outputs in the TaskManager" do
       with_scenario("empty") do
         t = Task.new(

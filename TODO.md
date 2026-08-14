@@ -133,8 +133,10 @@ branches; the rest are recorded here for later.
   hand — drift-bug magnet.~~ *(fixed: single `Atomic(Staleness)` field
   with tri-state Unknown/Stale/Fresh; `stale`/`stale=`/`stale?` are
   views over it)*
-* `Task#run` rescues broadly and re-raises wrapped, obscuring the
-  original backtrace. Prefer re-raise or cause-chaining.
+* ~~`Task#run` rescues broadly and re-raises wrapped, obscuring the
+  original backtrace.~~ *(fixed: proc failures raise `TaskFailure`
+  with the original exception chained as `#cause`, message format
+  unchanged)*
 
 ### Performance left on the table
 
