@@ -1,7 +1,6 @@
 # Croupier describes a task graph and lets you operate on them
 require "./task"
 require "./topo_sort"
-require "crystalline"
 require "digest/sha1"
 {% if flag?(:linux) %}
   require "inotify"
@@ -178,7 +177,7 @@ module Croupier
       this_run.clear
       next_run.clear
       @all_inputs.clear
-      @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
+      @graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
       @graph_sorted = [] of String
       @reverse_deps.clear
       @queued_changes.clear
@@ -199,8 +198,11 @@ module Croupier
       {% end %}
     end
 
-    # Tasks as a dependency graph sorted topologically
-    @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
+    # Tasks as a dependency graph sorted topologically.
+    # A plain adjacency hash (vertex => the vertices it points at); the
+    # default block registers vertices on first touch, so an edge add
+    # never needs a separate "add vertex" step.
+    @graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
     @graph_sorted = [] of String
     # Reverse dependency map (output name -> task keys that depend on it).
     # Built in propagate_staleness and reused by the early-cutoff scans so
@@ -209,8 +211,8 @@ module Croupier
 
     def sorted_task_graph
       # Rebuild graph if invalidated
-      if @graph_invalidated || @graph.@vertice_dict.empty?
-        @graph = Crystalline::Graph::DirectedAdjacencyGraph(String, Set(String)).new
+      if @graph_invalidated || @graph.empty?
+        @graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
         @graph_sorted = [] of String
         @graph_invalidated = false
         # Don't use set() here to avoid triggering auto_run loops
@@ -218,40 +220,27 @@ module Croupier
         # Clear all_inputs cache so it gets rebuilt with new subtask inputs
         @all_inputs.clear
 
-        # Add all tasks and inputs as vertices
-        # Add all dependencies as edges
-
-        # The start node is just a convenience
-        @graph.add_vertex "start"
-
         # All inputs are vertices
         all_inputs.each do |input|
-          if !tasks.has_key? input
-            @graph.add_vertex input
-            @graph.add_edge "start", input
-          end
+          # The start node is just a convenience root for non-task inputs
+          @graph["start"] << input unless tasks.has_key? input
         end
 
-        # Tasks without outputs are added as vertices by ID
-        tasks.values.each do |task|
-          if task.@outputs.empty?
-            @graph.add_vertex task.@id
-          end
-        end
-
-        # Add vertices and edges for inputs
+        # Add vertices and edges for tasks: tasks with no inputs hang
+        # off the start node, each input gets an edge into the task.
+        # Every vertex (including tasks without outputs, keyed by id)
+        # is registered on first touch by the hash's default block.
         tasks.each do |output, task|
-          @graph.add_vertex output
           if task.@inputs.empty?
-            @graph.add_edge "start", output
+            @graph["start"] << output
           end
           task.@inputs.each do |input|
-            @graph.add_edge input, output
+            @graph[input] << output
           end
         end
 
         # Only return tasks, not inputs in the sorted graph
-        @graph_sorted = topological_sort(@graph.@vertice_dict).select { |v| tasks.has_key? v }
+        @graph_sorted = topological_sort(@graph).select { |v| tasks.has_key? v }
       end
       return @graph, @graph_sorted
     end

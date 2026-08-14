@@ -118,9 +118,13 @@ branches; the rest are recorded here for later.
   over-approximate on diamond/DAG shapes. Still safe (runs extra tasks,
   never too few) because `dependencies()` re-selects against the graph,
   but the memoization is incorrect as a per-node cache. *(fixed on branch)*
-* `#3` `sorted_task_graph` reaches into `@graph.@vertice_dict` (crystalline
-  private ivar). Works but couples us to crystalline internals; an
-  upstream rename would break the build opaquely.
+* ~~`#3` `sorted_task_graph` reaches into `@graph.@vertice_dict`
+  (crystalline private ivar). Works but couples us to crystalline
+  internals; an upstream rename would break the build opaquely.~~
+  *(fixed: crystalline is gone — the graph is a plain
+  `Hash(String, Set(String))` with a default block; we only ever used
+  the library as an adjacency-hash container, the topological sort
+  was already ours)*
 * `#4` `scan_inputs` reads every file in a watched directory with no size
   guard or error handling — one unreadable file or symlink loop crashes
   the run. Also `Dir.glob` is called twice per directory. *(double-glob

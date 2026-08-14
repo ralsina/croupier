@@ -619,7 +619,7 @@ describe "TaskManager" do
       }
       with_scenario("basic") do
         g, s = TaskManager.sorted_task_graph
-        g.@vertice_dict.should eq expected
+        g.should eq expected
         s.size.should eq TaskManager.tasks.size
         s.should eq ["output3", "output4", "output5", "output1", "output2"]
       end

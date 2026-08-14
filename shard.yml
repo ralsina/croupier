@@ -9,8 +9,6 @@ crystal: 1.8.2
 license: MIT
 
 dependencies:
-  crystalline:
-    github: jtomschroeder/crystalline
   inotify:
     github: petoem/inotify.cr
   kiwi:
