@@ -4,7 +4,7 @@ description: A smart task definition and execution library
 authors:
   - Roberto Alsina <roberto.alsina@gmail.com>
 
-crystal: 1.8.2
+crystal: 1.20.0
 
 license: MIT
 
