@@ -686,6 +686,27 @@ describe "TaskManager" do
         end
       end
 
+      it "should re-run fresh tasks when run_all is true" do
+        with_scenario("empty", to_create: {"seed" => "seed"}) do
+          runs = 0
+          Task.new(output: "counter", inputs: ["seed"]) {
+            runs += 1
+            "data"
+          }
+
+          TaskManager.run_tasks(parallel: parallel)
+          runs.should eq 1
+
+          # Everything is fresh now: a normal run skips it
+          TaskManager.run_tasks(parallel: parallel)
+          runs.should eq 1
+
+          # run_all must run fresh tasks too
+          TaskManager.run_tasks(parallel: parallel, run_all: true)
+          runs.should eq 2
+        end
+      end
+
       it "should run no tasks when dry_run is true" do
         with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
           TaskManager.run_tasks(parallel: parallel, run_all: true, dry_run: true)

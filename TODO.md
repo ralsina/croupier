@@ -167,8 +167,12 @@ branches; the rest are recorded here for later.
   `propagate_staleness`. *(addressed on branch)*
 * `#10` `_run_tasks_parallel` reallocates a `Channel` + `WaitGroup` per
   wave; reusing the channel across waves would reduce churn.
-* `#11` `_run_tasks` (serial) builds intermediate arrays via
-  `compact_map` + `reject` before a single iteration — easy to fuse.
+* ~~`#11` `_run_tasks` (serial) builds intermediate arrays via
+  `compact_map` + `reject` before a single iteration — easy to fuse.~~
+  *(fixed: fused into one pass; staleness is now decided at visit time.
+  This also settled a discrepancy the two filter layers hid: serial
+  `run_all` used to skip fresh tasks while parallel re-ran them —
+  serial now matches the parallel semantics)*
 
 ### Housekeeping
 

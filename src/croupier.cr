@@ -660,7 +660,6 @@ module Croupier
     end
 
     # Internal helper to run tasks serially
-    # ameba:disable Metrics/CyclomaticComplexity
     def _run_tasks(
       task_names,
       run_all : Bool = false,
@@ -673,32 +672,33 @@ module Croupier
 
       finished = Set(Task).new
 
-      task_names.compact_map { |name|
-        tasks.fetch(name, nil)
-      }.reject { |t|
-        !(t.stale? || run_all || t.@always_run)
-      }.each do |t|
-        next if t.nil? || finished.includes?(t)
-        # Re-check staleness in case early cutoff marked this task as fresh,
-        # but keep honoring run_all / always_run like the reject above and
-        # ready?(run_all) do, or -B silently skips fresh tasks.
-        next unless t.stale? || t.always_run? || run_all
-        Log.debug { "Running task for #{t.outputs}" }
-        raise "Can't run task for #{t.outputs}: Waiting for #{t.waiting_for}" unless t.waiting_for.empty? || dry_run
+      # Single pass: no intermediate name→task arrays, and staleness is
+      # decided at visit time so tasks marked fresh by early cutoff are
+      # skipped. Like the parallel runner, run_all re-runs fresh tasks.
+      # (Supersedes the 4793a67 re-check patch: the visit-time check
+      # t.stale? || run_all honors run_all the same way, and always_run
+      # needs no explicit check because propagate_staleness marks those
+      # tasks stale and early cutoff cannot freshen them.)
+      task_names.each do |name|
+        next unless task = tasks.fetch(name, nil)
+        next if finished.includes?(task)
+        next unless task.stale? || run_all
+        Log.debug { "Running task for #{task.outputs}" }
+        raise "Can't run task for #{task.outputs}: Waiting for #{task.waiting_for}" unless task.waiting_for.empty? || dry_run
         begin
-          t.run unless dry_run
+          task.run unless dry_run
         rescue ex
-          Log.error { "Error running task for #{t.outputs}: #{ex}" }
+          Log.error { "Error running task for #{task.outputs}: #{ex}" }
           raise ex unless keep_going
         end
-        finished << t
+        finished << task
 
         # Early cutoff: if outputs didn't change, notify dependent tasks
-        if early_cutoff && !t.outputs_changed?
-          Log.debug { "Early cutoff: #{t.id} outputs unchanged, notifying dependents" }
-          t.outputs.each do |output|
-            # Look up dependents via the cached reverse-deps map instead of
-            # scanning every task for each output.
+        if early_cutoff && !task.outputs_changed?
+          Log.debug { "Early cutoff: #{task.id} outputs unchanged, notifying dependents" }
+          task.outputs.each do |output|
+            # Look up dependents via the cached reverse-deps map instead
+            # of scanning every task for each output.
             @reverse_deps.fetch(output, nil).try &.each do |dependent_key|
               if other_task = tasks[dependent_key]?
                 if other_task.stale?
