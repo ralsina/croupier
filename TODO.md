@@ -124,6 +124,11 @@ branches; the rest are recorded here for later.
   see `spec/parallel_stress_spec.cr`. Longer term, having workers send
   results over a Channel to a coordinating fiber that owns all
   bookkeeping would remove the locks.)*
+* ~~`stale?` short-circuited to `true` forever for input-less and
+  `always_run` tasks, so `waiting_for` never released their dependents
+  and graphs rooted at such tasks were unrunnable ("Waiting for ...")~~
+  *(fixed: `stale?` now trusts the assigned tri-state and only treats
+  such tasks as always-stale while staleness is unknown)*
 * `@stale` / `@stale_atomic` are two sources of truth kept in sync by
   hand — drift-bug magnet. Consider one field behind an `Atomic`.
 * `Task#run` rescues broadly and re-raises wrapped, obscuring the

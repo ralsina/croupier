@@ -480,6 +480,18 @@ describe "Task" do
         t.stale?.should be_false
       end
     end
+
+    it "should not report a finished input-less task as stale" do
+      with_scenario("empty") do
+        t = Task.new(id: "t", output: "upstream") { "upstream data" }
+        # Before running, staleness is unknown: an input-less task is stale
+        t.stale?.should be_true
+        t.run
+        # Once it ran this run, it is not stale anymore, so dependents
+        # waiting on it can proceed
+        t.stale?.should be_false
+      end
+    end
   end
 
   describe "waiting_for" do
@@ -600,6 +612,30 @@ describe "TaskManager" do
             TaskManager.tasks["t1"].ready?.should be_false
             TaskManager.run_tasks
           end
+        end
+      end
+
+      it "should run tasks downstream of an input-less task" do
+        with_scenario("empty") do
+          Task.new(output: "upstream", inputs: [] of String) { "upstream data" }
+          Task.new(output: "downstream", inputs: ["upstream"]) { "downstream data" }
+
+          TaskManager.run_tasks(parallel: parallel)
+
+          File.read("upstream").should eq "upstream data"
+          File.read("downstream").should eq "downstream data"
+        end
+      end
+
+      it "should run tasks downstream of an always_run task" do
+        with_scenario("empty", to_create: {"seed" => "seed"}) do
+          Task.new(output: "upstream", inputs: ["seed"], always_run: true) { "upstream data" }
+          Task.new(output: "downstream", inputs: ["upstream"]) { "downstream data" }
+
+          TaskManager.run_tasks(parallel: parallel)
+
+          File.read("upstream").should eq "upstream data"
+          File.read("downstream").should eq "downstream data"
         end
       end
 
@@ -909,8 +945,10 @@ describe "TaskManager" do
         # modified and there is no .croupier file
         tasks = TaskManager.tasks
         TaskManager.run_tasks
-        # The 2 tasks without inputs should be stale
-        tasks.values.count(&.stale?).should eq 2
+        # After a completed run no task reports stale, not even the
+        # 2 without inputs (those go stale again at the start of the
+        # next run, when propagate_staleness resets them)
+        tasks.values.count(&.stale?).should eq 0
 
         TaskManager.tasks.values.each(&.stale = nil) # Reset to trigger recomputation
         TaskManager.modified.clear
