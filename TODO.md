@@ -96,29 +96,34 @@ branches; the rest are recorded here for later.
 
 ### Bugs / correctness
 
-* #1 `use_persistent_store` never assigns `@_store_path`, so the "can't
+* `#1` `use_persistent_store` never assigns `@_store_path`, so the "can't
   change path" guard is dead and a second call will crash casting a
   `FileStore` back to `MemoryStore`. Only works today because tests call
   `cleanup` between scenarios. *(fixed on branch)*
-* #2 `_dependencies_impl` and `depends_on_impl` cache the *accumulating*
+* `#2` `_dependencies_impl` and `depends_on_impl` cache the *accumulating*
   result set rather than each node's own closure, so memoized entries
   over-approximate on diamond/DAG shapes. Still safe (runs extra tasks,
   never too few) because `dependencies()` re-selects against the graph,
   but the memoization is incorrect as a per-node cache. *(fixed on branch)*
-* #3 `sorted_task_graph` reaches into `@graph.@vertice_dict` (crystalline
+* `#3` `sorted_task_graph` reaches into `@graph.@vertice_dict` (crystalline
   private ivar). Works but couples us to crystalline internals; an
   upstream rename would break the build opaquely.
-* #4 `scan_inputs` reads every file in a watched directory with no size
+* `#4` `scan_inputs` reads every file in a watched directory with no size
   guard or error handling — one unreadable file or symlink loop crashes
   the run. Also `Dir.glob` is called twice per directory. *(double-glob
   fixed in #19; the throw-on-unreadable behavior is intentional: an
   unreadable declared input is a real error, not something to skip)*
-* #8 `@all_inputs` cache is only rebuilt when empty; it's cleared during
+* `#8` `@all_inputs` cache is only rebuilt when empty; it's cleared during
   graph rebuild today but a task added between build and scan could see a
   stale set. Make registration clear it explicitly. *(fixed)*
-* Concurrency: early-cutoff path mutates `other_task` state from worker
-  fibers without synchronization; safe only because MT is off. Guard
-  `mark_dependency_fresh` or document the single-threaded requirement.
+* ~~Concurrency: early-cutoff path mutates `other_task` state from worker
+  fibers without synchronization~~ *(fixed: parallel bookkeeping and
+  TaskManager data access are now serialized — `@bookkeeping_mutex`
+  guards worker bookkeeping / early-cutoff / stale transitions,
+  `@data_mutex` guards the k/v store, `modified`, `next_run`, `last_run`;
+  see `spec/parallel_stress_spec.cr`. Longer term, having workers send
+  results over a Channel to a coordinating fiber that owns all
+  bookkeeping would remove the locks.)*
 * `@stale` / `@stale_atomic` are two sources of truth kept in sync by
   hand — drift-bug magnet. Consider one field behind an `Atomic`.
 * `Task#run` rescues broadly and re-raises wrapped, obscuring the
@@ -126,24 +131,24 @@ branches; the rest are recorded here for later.
 
 ### Performance left on the table
 
-* #6 `scan_inputs` re-hashes every input file on every run (non-fast
+* `#6` `scan_inputs` re-hashes every input file on every run (non-fast
   mode). Reuse hashes when `mtime+size` is unchanged, dedupe the double
   `Dir.glob`, and hash files in parallel (fiber-per-file batch like the
   task runner). *(addressed on branch)*
-* #7 Early-cutoff notification in `_run_tasks` / `_run_tasks_parallel`
+* `#7` Early-cutoff notification in `_run_tasks` / `_run_tasks_parallel`
   and `find_and_mark_dependents_fresh` is O(V) per output → O(V²·outs)
   per run. Reuse the `reverse_deps` map already built in
   `propagate_staleness`. *(addressed on branch)*
-* #9 `topological_sort` allocates per vertex; for very large graphs
+* `#9` `topological_sort` allocates per vertex; for very large graphs
   Kahn's algorithm (in-degree + queue) would be simpler and faster.
-* #10 `_run_tasks_parallel` reallocates a `Channel` + `WaitGroup` per
+* `#10` `_run_tasks_parallel` reallocates a `Channel` + `WaitGroup` per
   wave; reusing the channel across waves would reduce churn.
-* #11 `_run_tasks` (serial) builds intermediate arrays via
+* `#11` `_run_tasks` (serial) builds intermediate arrays via
   `compact_map` + `reject` before a single iteration — easy to fuse.
 
 ### Housekeeping
 
-* #5 `spec/testcases/empty/` leaves `file1`–`file5` + `.croupier`
+* `#5` `spec/testcases/empty/` leaves `file1`–`file5` + `.croupier`
   artifacts; `.gitignore` only covers `input*`/`output*`. Broaden the
   ignore. *(fixed on branch)*
 * `~2000` lines in `croupier_spec.cr` — consider splitting by topic.

@@ -74,7 +74,7 @@ module Croupier
       &block : TaskProc
     )
       initialize(outputs, inputs, block, no_save, id, always_run, mergeable, master_task)
-      TaskManager.add_mutex(mutex, self) if mutex
+      TaskManager.add_mutex(mutex) if mutex
     end
 
     def initialize(
@@ -190,9 +190,9 @@ module Croupier
             raise "Task #{self} did not generate #{output}"
           end
           new_hash = Digest::SHA1.hexdigest(File.read(output))
-          TaskManager.next_run[output] = new_hash
+          TaskManager.record_output_hash(output, new_hash)
           # Check if output changed
-          old_hash = TaskManager.last_run[output]?
+          old_hash = TaskManager.previous_output_hash(output)
           @outputs_changed = true if old_hash != new_hash
         end
       else
@@ -217,9 +217,9 @@ module Croupier
                 io << call_result
               end
               new_hash = Digest::SHA1.hexdigest(call_result)
-              TaskManager.next_run[output] = new_hash
+              TaskManager.record_output_hash(output, new_hash)
               # Check if output changed
-              old_hash = TaskManager.last_run[output]?
+              old_hash = TaskManager.previous_output_hash(output)
               if old_hash != new_hash
                 @outputs_changed = true
               else
@@ -231,7 +231,9 @@ module Croupier
           raise "Task #{self} did not return the correct number of outputs"
         end
       end
-      self.stale = false # Done, not stale anymore
+      # Serialize with the parallel runner's bookkeeping (early-cutoff
+      # notifications from sibling workers may touch our stale flag).
+      TaskManager.with_run_bookkeeping { self.stale = false } # Done, not stale anymore
       TaskManager.progress_callback.call(id)
     end
 
@@ -293,7 +295,7 @@ module Croupier
       return true if missing_outputs
 
       # Check if inputs are modified
-      modified_inputs = @inputs.any? { |input| TaskManager.modified.includes?(input) }
+      modified_inputs = @inputs.any? { |input| TaskManager.modified?(input) }
       return true if modified_inputs
 
       # Check if any input tasks are stale
@@ -314,7 +316,7 @@ module Croupier
       return true if missing_outputs
 
       # Check if inputs are modified
-      modified_inputs = @inputs.any? { |input| TaskManager.modified.includes?(input) }
+      modified_inputs = @inputs.any? { |input| TaskManager.modified?(input) }
       return true if modified_inputs
 
       # Check if any input tasks are stale

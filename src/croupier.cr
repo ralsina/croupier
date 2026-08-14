@@ -47,11 +47,11 @@ module Croupier
     # Receives the list of changed files as an argument
     property before_run_hook : Proc(Set(String), Nil) = ->(_changes : Set(String)) { }
     # A hash of mutexes required by tasks
-    property mutexes = {} of String => Mutex
+    property mutexes = {} of String => Sync::Mutex
     @graph_invalidated : Bool = false
 
     def add_mutex(name : String)
-      mutexes[name] = Mutex.new
+      mutexes[name] = Sync::Mutex.new
     end
 
     def lock_mutex(name : String)
@@ -69,14 +69,53 @@ module Croupier
     @_store : Kiwi::Store = Kiwi::MemoryStore.new
     @_store_path : String | Nil = nil
 
+    # Guards the shared data containers (@_store, modified, next_run,
+    # last_run), which parallel task workers mutate and read from
+    # multiple OS threads.
+    @data_mutex = Sync::Mutex.new
+
+    # Guards the run bookkeeping done by parallel workers (finished /
+    # failed / error bookkeeping, early-cutoff notifications, task stale
+    # transitions).
+    #
+    # Lock order: bookkeeping -> data, never the reverse. The early-cutoff
+    # block legitimately nests (it holds this lock while staleness
+    # recompute takes @data_mutex). Never hold either lock while running
+    # user procs, doing file I/O or hashing, invoking progress_callback,
+    # or waiting on a batch WaitGroup.
+    @bookkeeping_mutex = Sync::Mutex.new
+
     def set(key, value)
       Log.debug { "Setting k/v data for #{key}" }
-      @_store.set(key, value)
-      @modified << "kv://#{key}"
+      @data_mutex.synchronize do
+        @_store.set(key, value)
+        @modified << "kv://#{key}"
+      end
     end
 
     def get(key)
-      @_store.get(key)
+      @data_mutex.synchronize { @_store.get(key) }
+    end
+
+    # Record the hash of a task output for the next run's state file.
+    # Thread-safe for parallel task workers.
+    def record_output_hash(output : String, new_hash : String) : Nil
+      @data_mutex.synchronize { next_run[output] = new_hash }
+    end
+
+    # The hash recorded for `output` by the last completed run, if any.
+    def previous_output_hash(output : String) : String | Nil
+      @data_mutex.synchronize { last_run[output]? }
+    end
+
+    # Whether `key` (a file or kv:// key) was modified since the last run.
+    def modified?(key : String) : Bool
+      @data_mutex.synchronize { modified.includes?(key) }
+    end
+
+    # Run-bookkeeping critical section for parallel task workers.
+    def with_run_bookkeeping(&)
+      @bookkeeping_mutex.synchronize { yield }
     end
 
     # Use a persistent k/v store in this path instead of
@@ -755,27 +794,38 @@ module Croupier
                 # Early cutoff: if outputs didn't change, notify dependent tasks
                 if early_cutoff && !task.outputs_changed?
                   Log.debug { "Early cutoff: #{task.id} outputs unchanged, notifying dependents" }
-                  task.outputs.each do |output|
-                    # Look up dependents via the cached reverse-deps map instead
-                    # of scanning every task for each output.
-                    @reverse_deps.fetch(output, nil).try &.each do |dependent_key|
-                      if other_task = tasks[dependent_key]?
-                        if other_task.stale?
-                          Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
-                          other_task.mark_dependency_fresh(output)
+                  # Notifications mutate other tasks' staleness (possibly
+                  # tasks sibling workers are finishing), so they share the
+                  # run-bookkeeping lock with the ensure block below.
+                  with_run_bookkeeping do
+                    task.outputs.each do |output|
+                      # Look up dependents via the cached reverse-deps map instead
+                      # of scanning every task for each output.
+                      @reverse_deps.fetch(output, nil).try &.each do |dependent_key|
+                        if other_task = tasks[dependent_key]?
+                          if other_task.stale?
+                            Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
+                            other_task.mark_dependency_fresh(output)
+                          end
                         end
                       end
                     end
                   end
                 end
               rescue ex
-                failed_tasks << task
-                errors << ex.message.to_s
+                # Shared with the other workers of this batch: concurrent
+                # Array/Set growth would corrupt memory.
+                with_run_bookkeeping do
+                  failed_tasks << task
+                  errors << ex.message.to_s
+                end
                 Log.error { "Task #{task.outputs} failed: #{ex.message}" }
               ensure
                 # Task is done, do not run again
-                task.stale = false
-                finished_tasks << task
+                with_run_bookkeeping do
+                  task.stale = false
+                  finished_tasks << task
+                end
                 wg.done
               end
             end
