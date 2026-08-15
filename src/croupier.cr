@@ -374,8 +374,14 @@ module Croupier
       result
     end
 
-    # Read state of last run, then scan inputs and compare
-    def mark_stale_inputs
+    # Read state of last run, then scan inputs and compare.
+    #
+    # With run_all the scan only feeds staleness *decisions*, which are
+    # then overridden anyway (every task re-runs), so in fast mode the
+    # mtime scan is skipped as pure overhead. Content mode still scans
+    # because @this_run feeds save_run and skipping it would make the
+    # next incremental run rebuild everything.
+    def mark_stale_inputs(run_all : Bool = false)
       if auto_mode?
         # In auto mode, the watcher tells us what changed, so we don't need to scan
         # But we still need to update @this_run so hashes are saved to state file
@@ -403,9 +409,11 @@ module Croupier
       end
 
       if @fast_mode
-        all_inputs.each do |file|
-          if info = File.info?(file)
-            @modified << file if last_run_date < info.modification_time
+        unless run_all
+          all_inputs.each do |file|
+            if info = File.info?(file)
+              @modified << file if last_run_date < info.modification_time
+            end
           end
         end
       else
@@ -535,7 +543,13 @@ module Croupier
     # Propagate staleness through the task graph in a single forward pass.
     # This replaces the expensive recursive staleness checking with an
     # O(V+E) algorithm that's critical for tasks with many inputs.
-    def propagate_staleness
+    #
+    # With run_all every task re-runs regardless of freshness, and
+    # staleness only gates *ordering* (dependents wait for stale
+    # dependencies). Leaving every task stale preserves correct ordering
+    # while skipping the per-task root scan (File.exists? and kv lookups
+    # per output), which is pure overhead under run_all.
+    def propagate_staleness(run_all : Bool = false)
       # Reset all task staleness to true (stale) first as default
       tasks.values.each(&.stale=(true))
 
@@ -549,6 +563,12 @@ module Croupier
           end
         end
       end
+
+      if run_all
+        Log.debug { "run_all: skipping staleness root scan, all tasks stale" }
+        return
+      end
+
       reverse_deps = @reverse_deps
 
       # Find definitively stale tasks (roots of staleness)
@@ -683,8 +703,8 @@ module Croupier
       keep_going : Bool = false,
       early_cutoff : Bool = true,
     )
-      mark_stale_inputs
-      propagate_staleness
+      mark_stale_inputs(run_all)
+      propagate_staleness(run_all)
 
       finished = Set(Task).new
 
@@ -750,8 +770,8 @@ module Croupier
       keep_going : Bool = false,
       early_cutoff : Bool = true,
     )
-      mark_stale_inputs
-      propagate_staleness
+      mark_stale_inputs(run_all)
+      propagate_staleness(run_all)
 
       task_names = tasks.keys if task_names.empty?
       _tasks = task_names.map { |name| tasks[name] }
