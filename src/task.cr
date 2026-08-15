@@ -27,6 +27,13 @@ module Croupier
     end
 
     property id : String = ""
+    # The task's inputs: files, task ids or kv:// keys it depends on.
+    #
+    # Treat as read-only while tasks are running: mutating it from task
+    # procs on parallel workers races and, even done safely, cannot
+    # affect the current run (wave planning happens before workers
+    # start). Use `TaskManager.add_input`, which is guarded and
+    # invalidates the caches a later run needs.
     property inputs : Set(String) = Set(String).new
     property outputs : Array(String) = [] of String
     # Tri-state staleness in a single atomic field, so reads from

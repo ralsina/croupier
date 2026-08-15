@@ -605,6 +605,46 @@ describe "TaskManager" do
     end
   end
 
+  describe "add_input" do
+    it "adds an input, invalidates the input cache, and affects the next run" do
+      with_scenario("empty", to_create: {"seed" => "seed", "extra" => "extra"}) do
+        runs = 0
+        task = Task.new(output: "out", inputs: ["seed"]) {
+          runs += 1
+          "data"
+        }
+        TaskManager.run_tasks
+        runs.should eq 1
+
+        TaskManager.add_input("out", "extra").should be_true
+        task.inputs.should contain "extra"
+        # Visible to the caches without registering any new task
+        TaskManager.all_inputs.should contain "extra"
+
+        # The new dependency makes the task stale when the input changes
+        File.write("extra", "changed")
+        TaskManager.run_tasks
+        runs.should eq 2
+      end
+    end
+
+    it "is a no-op for inputs the task already has" do
+      with_scenario("empty", to_create: {"seed" => "seed"}) do
+        Task.new(output: "out", inputs: ["seed"]) { "data" }
+        TaskManager.add_input("out", "seed").should be_false
+        TaskManager.tasks["out"].inputs.size.should eq 1
+      end
+    end
+
+    it "raises for unknown tasks and self-cycles" do
+      with_scenario("empty") do
+        Task.new(output: "out", inputs: [] of String) { "data" }
+        expect_raises(Exception, /Unknown task/) { TaskManager.add_input("nope", "x") }
+        expect_raises(Exception, /Cycle detected/) { TaskManager.add_input("out", "out") }
+      end
+    end
+  end
+
   describe "sorted_task_graph" do
     it "should create a topologically sorted task graph" do
       expected = {

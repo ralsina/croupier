@@ -70,4 +70,26 @@ describe "Parallel stress" do
       dependent_count.times { |i| File.exists?("dependent_#{i}").should be_true }
     end
   end
+
+  it "survives add_input called from parallel task procs" do
+    # Reproduces issue #22: hosts discovering dependencies lazily from
+    # inside procs. Workers mutate the target's input set concurrently;
+    # add_input must serialize that and lose nothing.
+    with_scenario("empty") do
+      procs = 8
+      adds_per_proc = 500
+      procs.times do |proc_number|
+        Task.new(id: "grower_#{proc_number}", inputs: [] of String) do
+          adds_per_proc.times { |i| TaskManager.add_input("target", "in_#{proc_number}_#{i}") }
+          nil
+        end
+      end
+      Task.new(output: "target", inputs: [] of String) { "data" }
+
+      TaskManager.run_tasks(parallel: true, run_all: true)
+
+      TaskManager.tasks["target"].inputs.size.should eq(procs * adds_per_proc)
+      TaskManager.tasks["target"].inputs.should contain "in_#{procs - 1}_#{adds_per_proc - 1}"
+    end
+  end
 end

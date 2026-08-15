@@ -19,7 +19,13 @@ module Croupier
 
   # TaskManager is a singleton that keeps track of all tasks
   class TaskManagerType
-    # Registry of all tasks
+    # Registry of all tasks.
+    #
+    # Treat as read-only while tasks are running: workers and the
+    # coordinating fiber traverse it (and the Task objects in it)
+    # concurrently during run_tasks. To grow a task's dependencies
+    # between runs, use `add_input` instead of mutating `tasks` or
+    # `Task#inputs` directly.
     property tasks = {} of String => Croupier::Task
     # Registry of modified files, which will make tasks stale
     property modified = Set(String).new
@@ -98,6 +104,33 @@ module Croupier
     # Whether `key` (a file or kv:// key) was modified since the last run.
     def modified?(key : String) : Bool
       @data_mutex.synchronize { modified.includes?(key) }
+    end
+
+    # Add `input` to the inputs of the task registered as `task_key`.
+    #
+    # Thread-safe (guarded by @data_mutex), so it is the supported way to
+    # grow a task's dependencies from task procs running on parallel
+    # workers. It can only influence the NEXT run: wave planning, staleness
+    # propagation and the task graph are all computed before workers
+    # start. It invalidates the graph and input caches so that next run
+    # actually sees the new dependency.
+    #
+    # Returns true if the input was added, false if the task already had
+    # it. Raises if `task_key` is not a registered task, or if the input
+    # is one of the task's own keys (that would be a cycle).
+    def add_input(task_key : String, input : String) : Bool
+      @data_mutex.synchronize do
+        task = tasks[task_key]?
+        raise "Unknown task #{task_key}" unless task
+        raise "Cycle detected" if task.keys.includes?(input)
+        return false if task.inputs.includes?(input)
+
+        task.inputs << input
+        # The no-store variant: the store write in invalidate_graph_cache
+        # would re-enter @data_mutex and deadlock.
+        invalidate_graph_cache_no_store
+        true
+      end
     end
 
     # Use a persistent k/v store in this path instead of
