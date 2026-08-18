@@ -2,6 +2,16 @@ require "./spec_helper"
 require "file_utils"
 include Croupier
 
+# Count live fibers via the stdlib's registry: terminated fibers are
+# removed from it, so worker fibers that exit after their work queue is
+# drained don't count, while fibers parked forever on a channel that is
+# never closed do.
+def live_fiber_count : Int32
+  count = 0
+  Fiber.each { count += 1 }
+  count
+end
+
 def with_scenario(
   name,
   keep = [] of String,
@@ -2350,6 +2360,36 @@ describe "TaskManager" do
         File.read("file2").should eq "HELLO"
         File.read("file4").should eq "EARTH"
         File.read("file5").should eq "HELLO_EARTH"
+      end
+    end
+  end
+
+  describe "fiber hygiene" do
+    it "should not leak worker fibers from parallel runs" do
+      seeds = (0...20).map { |i| {"seed_#{i}" => "data"} of String => String }
+        .reduce { |acc, hash| acc.merge(hash) }
+      with_scenario("empty", to_create: seeds) do
+        seeds.each_key { |k| Task.new(output: "out_#{k}", inputs: [k]) { "data" } }
+
+        # First round absorbs the one-time cost of resizing the fiber
+        # execution context (its threads show up as extra loop fibers
+        # and live as long as the process)
+        TaskManager.run_tasks(parallel: true)
+        5.times { TaskManager.scan_inputs }
+        sleep 0.1.seconds
+        baseline = live_fiber_count
+
+        # A second round of the same width must not grow the fiber
+        # count: worker fibers that drained their (closed) queue exit,
+        # fibers parked on a never-closed channel accumulate forever.
+        # (All seeds change so the wave width — and thus the execution
+        # context resize — matches the first round.)
+        seeds.each_key { |k| File.write(k, "changed") }
+        TaskManager.run_tasks(parallel: true)
+        5.times { TaskManager.scan_inputs }
+        sleep 0.1.seconds
+
+        live_fiber_count.should eq baseline
       end
     end
   end

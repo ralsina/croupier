@@ -570,6 +570,9 @@ module Croupier
       result_queue = Channel({String, String}).new(file_inputs.size)
 
       file_inputs.each { |path| task_queue.send(path) }
+      # Close the queue so workers exit (receive? returns nil) instead of
+      # parking forever on the drained channel
+      task_queue.close
 
       num_workers.times do
         spawn do
@@ -901,6 +904,9 @@ module Croupier
 
         # Add all tasks to the shared queue
         batch.each { |task| task_queue.send(task) }
+        # Close the queue so workers exit (receive? returns nil) instead
+        # of parking forever on the drained channel
+        task_queue.close
 
         Log.debug { "Starting work-stealing execution of #{batch.size} tasks with #{num_workers} workers" }
 
