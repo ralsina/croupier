@@ -73,6 +73,18 @@ module Croupier
     @_store : Kiwi::Store = Kiwi::MemoryStore.new
     @_store_path : String | Nil = nil
 
+    # Read-through cache for the k/v store: with a persistent
+    # (FileStore) store, every staleness check is a SHA1 of the key
+    # plus a stat and a file read, all under @data_mutex — and
+    # propagate_staleness / waiting_for check every kv output of every
+    # task. Values (and misses, which are the hot case in a
+    # from-scratch run: every unbuilt producer's key) are remembered
+    # in memory; keys only appear through set(), which invalidates
+    # both. Cleared whenever the store is swapped or cleaned up;
+    # pre-existing keys on disk are picked up lazily on first read.
+    @store_cache = Hash(String, String).new
+    @store_misses = Set(String).new
+
     # Guards the shared data containers (@_store, modified, next_run,
     # last_run), which parallel task workers mutate and read from
     # multiple OS threads.
@@ -82,12 +94,26 @@ module Croupier
       Log.debug { "Setting k/v data for #{key}" }
       @data_mutex.synchronize do
         @_store.set(key, value)
+        @store_cache[key] = value
+        @store_misses.delete(key)
         @modified << "kv://#{key}"
       end
     end
 
     def get(key)
-      @data_mutex.synchronize { @_store.get(key) }
+      @data_mutex.synchronize do
+        if value = @store_cache[key]?
+          return value
+        end
+        return nil if @store_misses.includes?(key)
+        value = @_store.get(key)
+        if value.nil?
+          @store_misses << key
+        else
+          @store_cache[key] = value
+        end
+        value
+      end
     end
 
     # Record the hash of a task output for the next run's state file.
@@ -176,6 +202,10 @@ module Croupier
       old_store.@mem.each { |k, v| new_store[k] = v }
       @_store = new_store
       @_store_path = path
+      # New backing store: drop cached answers, lazily re-prime from
+      # the file store (which may carry data from a previous process)
+      @store_cache.clear
+      @store_misses.clear
       Log.debug { "Storing k/v data in #{path}" }
     end
 
@@ -228,6 +258,8 @@ module Croupier
       @existing_files.clear
       @_store_path = nil
       @_store = Kiwi::MemoryStore.new
+      @store_cache.clear
+      @store_misses.clear
       @fast_mode = false
       @auto_mode = false
       @graph_invalidated = false

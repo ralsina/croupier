@@ -517,8 +517,10 @@ describe "Task" do
         t.stale = nil # Reset to trigger recomputation
         # Now the task has run, bar is there, not stale anymore
         t.stale?.should be_false
-        # Remove it, stale again
+        # Remove it, stale again. The delete goes around the manager, so
+        # the read-through cache entry for it goes too
         TaskManager.@_store.delete("bar")
+        TaskManager.@store_cache.delete("bar")
         t.stale = nil # Reset again since store changed
         t.stale?.should be_true
       end
@@ -1713,6 +1715,36 @@ describe "TaskManager" do
   end
 
   describe "store" do
+    it "should cache store reads in memory" do
+      with_scenario("empty") do
+        TaskManager.use_persistent_store("store")
+
+        # A miss on a fresh cache reads the (empty) store and is
+        # remembered, so repeated missing-key lookups don't re-read
+        TaskManager.get("missing").should be_nil
+        TaskManager.@store_misses.includes?("missing").should be_true
+
+        # set invalidates the miss and caches the value
+        TaskManager.set("foo", "bar")
+        TaskManager.@store_cache["foo"].should eq "bar"
+        TaskManager.@store_misses.includes?("foo").should be_false
+        TaskManager.get("foo").should eq "bar"
+
+        # Pre-existing keys on disk are picked up lazily (one path per
+        # manager lifetime, so reset first)
+        TaskManager.cleanup
+        TaskManager.use_persistent_store("store2")
+        TaskManager.@_store.as(Kiwi::FileStore).set("preexisting", "42")
+        TaskManager.get("preexisting").should eq "42"
+        TaskManager.@store_cache["preexisting"].should eq "42"
+
+        # cleanup resets the caches along with the store
+        TaskManager.cleanup
+        TaskManager.@store_cache.empty?.should be_true
+        TaskManager.@store_misses.empty?.should be_true
+      end
+    end
+
     it "should swap output hashes atomically" do
       with_scenario("empty") do
         TaskManager.last_run["out"] = "old"
