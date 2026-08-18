@@ -59,18 +59,25 @@ module Croupier
     end
 
     def lock_mutex(name : String)
-      # Register on demand: a mutex named through `task.mutex =` in a
-      # proc-built task (or after cleanup) still locks instead of
-      # raising KeyError at run time
-      mutex = @data_mutex.synchronize { mutexes[name] ||= Sync::Mutex.new }
-      mutex.lock
+      # Registry reads are lock-free: every naming path registers the
+      # mutex at declaration time (block initializer, mutex= setter),
+      # before waves start — the same read-only-during-runs contract
+      # the tasks registry relies on. Taking @data_mutex here twice
+      # per task proc was a lock convoy (see the 0.14 performance
+      # report). The locked fallback only covers direct calls with a
+      # never-declared name.
+      if mutex = mutexes[name]?
+        mutex.lock
+      else
+        mutex = @data_mutex.synchronize { mutexes[name] ||= Sync::Mutex.new }
+        mutex.lock
+      end
     end
 
     def unlock_mutex(name : String)
-      # No KeyError: this runs in Task#run's ensure, where raising
-      # would mask the proc's own exception
-      mutex = @data_mutex.synchronize { mutexes[name]? }
-      mutex.try &.unlock
+      # Lock-free read, no KeyError: this runs in Task#run's ensure,
+      # where raising would mask the proc's own exception
+      mutexes[name]?.try &.unlock
     end
 
     # Files with changes detected in auto_run
@@ -168,17 +175,20 @@ module Croupier
     # cleanup.
     @existing_files = Set(String).new
 
-    # File-existence check with a per-run positive cache. Guarded by
-    # @data_mutex like the rest of the shared data.
+    # File-existence check with a per-run positive cache. The cache
+    # check and the insert take @data_mutex, but the stat itself does
+    # NOT: holding the mutex across a syscall serialized every worker's
+    # readiness checks on the filesystem. Positive-only caching is
+    # preserved (misses are re-checked, so files appearing mid-run are
+    # still found), and racing inserters of the same path are
+    # idempotent.
     def file_exists?(path : String) : Bool
-      @data_mutex.synchronize do
-        return true if @existing_files.includes?(path)
-        if File.exists?(path)
-          @existing_files << path
-          true
-        else
-          false
-        end
+      return true if @data_mutex.synchronize { @existing_files.includes?(path) }
+      if File.exists?(path)
+        @data_mutex.synchronize { @existing_files << path }
+        true
+      else
+        false
       end
     end
 
@@ -709,16 +719,28 @@ module Croupier
 
     # Hash a list of files concurrently, returning a {path => sha1} map.
     # Uses a shared channel of work and a small pool of worker fibers
-    # bounded by CPU count.
+    # bounded by CPU count. Work and results travel in chunks: every
+    # channel operation costs a lock, so one message per file meant two
+    # lock round-trips per input; chunks amortize that to ~2 per 64
+    # files. Small batches are hashed inline, skipping the pool
+    # machinery entirely.
     private def hash_files_parallel(file_inputs : Array(String)) : Hash(String, String)
       hash = {} of String => String
       return hash if file_inputs.empty?
-      num_workers = Math.min(System.cpu_count, file_inputs.size)
-      enable_parallelism(num_workers)
-      task_queue = Channel(String).new(file_inputs.size)
-      result_queue = Channel({String, String}).new(file_inputs.size)
 
-      file_inputs.each { |path| task_queue.send(path) }
+      chunk_size = 64
+      if file_inputs.size <= chunk_size
+        file_inputs.each { |path| hash[path] = hash_file(path) }
+        return hash
+      end
+
+      chunks = file_inputs.each_slice(chunk_size).to_a
+      num_workers = Math.min(System.cpu_count, chunks.size)
+      enable_parallelism(num_workers)
+      task_queue = Channel(Array(String)).new(chunks.size)
+      result_queue = Channel(Hash(String, String)).new(chunks.size)
+
+      chunks.each { |chunk| task_queue.send(chunk) }
       # Close the queue so workers exit (receive? returns nil) instead of
       # parking forever on the drained channel
       task_queue.close
@@ -726,16 +748,17 @@ module Croupier
       num_workers.times do
         spawn do
           loop do
-            path = task_queue.receive?
-            break unless path
-            result_queue.send({path, hash_file(path)})
+            chunk = task_queue.receive?
+            break unless chunk
+            results = {} of String => String
+            chunk.each { |path| results[path] = hash_file(path) }
+            result_queue.send(results)
           end
         end
       end
 
-      file_inputs.size.times do
-        path, sha1 = result_queue.receive
-        hash[path] = sha1
+      chunks.size.times do
+        result_queue.receive.each { |path, sha1| hash[path] = sha1 }
       end
       hash
     end
