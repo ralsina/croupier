@@ -1593,6 +1593,28 @@ describe "TaskManager" do
   end
 
   describe "store" do
+    it "should cache known-to-exist files until the next run starts" do
+      with_scenario("empty", to_create: {"input" => "foo"}) do
+        # First check stats the filesystem and remembers the answer
+        TaskManager.file_exists?("input").should be_true
+
+        # A file that appeared later is picked up too (only positive
+        # results are cached, missing files are rechecked)
+        TaskManager.file_exists?("late").should be_false
+        File.write("late", "x")
+        TaskManager.file_exists?("late").should be_true
+
+        # Positive answers are cached: even if the file disappears, the
+        # answer stays true until a run start clears the cache
+        File.delete("input")
+        TaskManager.file_exists?("input").should be_true
+
+        # Starting a run resets the cache and re-stats
+        TaskManager.run_tasks
+        TaskManager.file_exists?("input").should be_false
+      end
+    end
+
     it "should save and recover values" do
       with_scenario("empty") do
         TaskManager.get("foo").should be_nil

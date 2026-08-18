@@ -106,6 +106,29 @@ module Croupier
       @data_mutex.synchronize { modified.includes?(key) }
     end
 
+    # Files known to exist during the current run, so readiness sweeps
+    # don't re-stat every plain-file input of every task on every wave.
+    # Only positive answers are cached: a file that appeared since the
+    # last check must still be discovered (negative results would
+    # deadlock tasks waiting on side-effect files), while a file that
+    # already exists stays satisfied. Cleared when a run starts and on
+    # cleanup.
+    @existing_files = Set(String).new
+
+    # File-existence check with a per-run positive cache. Guarded by
+    # @data_mutex like the rest of the shared data.
+    def file_exists?(path : String) : Bool
+      @data_mutex.synchronize do
+        return true if @existing_files.includes?(path)
+        if File.exists?(path)
+          @existing_files << path
+          true
+        else
+          false
+        end
+      end
+    end
+
     # Add `input` to the inputs of the task registered as `task_key`.
     #
     # Thread-safe (guarded by @data_mutex), so it is the supported way to
@@ -197,6 +220,7 @@ module Croupier
       @graph_sorted = [] of String
       @reverse_deps.clear
       @queued_changes.clear
+      @existing_files.clear
       @_store_path = nil
       @_store = Kiwi::MemoryStore.new
       @fast_mode = false
@@ -382,6 +406,8 @@ module Croupier
     # because @this_run feeds save_run and skipping it would make the
     # next incremental run rebuild everything.
     def mark_stale_inputs(run_all : Bool = false)
+      # New run: the positive file-existence cache may be stale
+      @existing_files.clear
       if auto_mode?
         # In auto mode, the watcher tells us what changed, so we don't need to scan
         # But we still need to update @this_run so hashes are saved to state file

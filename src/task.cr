@@ -370,7 +370,7 @@ module Croupier
       elsif key = input.lchop? "kv://"
         !TaskManager.get(key).nil?
       else
-        File.exists? input
+        TaskManager.file_exists?(input)
       end
     end
 
