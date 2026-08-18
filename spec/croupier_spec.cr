@@ -1042,6 +1042,18 @@ describe "TaskManager" do
         end
       end
 
+      it "should report unknown inputs on a targeted run" do
+        with_scenario("empty") do
+          Task.new(output: "out", inputs: ["missing"]) { "x" }
+          # The specific message matters: auto_run's warn suppression
+          # matches it, so missing inputs stay quiet instead of
+          # logging a warning on every retry
+          expect_raises(Exception, "Can't run: Unknown inputs missing") do
+            TaskManager.run_tasks(["out"])
+          end
+        end
+      end
+
       it "should not run dependents of a failed task" do
         with_scenario("empty", to_create: {"seed" => "x"}) do
           downstream_runs = 0

@@ -853,9 +853,13 @@ module Croupier
     end
 
     # Check if all inputs are correct:
-    # They should all be either task outputs or existing files
-    def check_dependencies
-      bad_inputs = all_inputs.select { |input|
+    # They should all be either task outputs or existing files.
+    # With `targets`, only the inputs of the requested closure are
+    # checked (a targeted run doesn't care about unrelated tasks'
+    # inputs).
+    def check_dependencies(targets : Array(String)? = nil)
+      scope = targets ? inputs(targets) : all_inputs
+      bad_inputs = scope.select { |input|
         !input.lchop?("kv://") &&
           !tasks.has_key?(input) &&
           !File.exists?(input)
@@ -879,7 +883,8 @@ module Croupier
       early_cutoff : Bool? = nil,
     )
       _, tasks = sorted_task_graph
-      check_dependencies
+      # Input checking happens in the targeted overload this delegates
+      # to, scoped to the full closure
       # Use TaskManager.early_cutoff if not explicitly specified
       early_cutoff = @early_cutoff if early_cutoff.nil?
       run_tasks(tasks, run_all, dry_run, parallel, keep_going, early_cutoff)
@@ -912,6 +917,14 @@ module Croupier
       else
         task_names = dependencies(targets)
       end
+
+      # Outside auto mode, a missing input must surface as "Unknown
+      # inputs" up front rather than as a "Waiting for" failure
+      # mid-run. Auto mode skips the check on purpose: inputs that
+      # don't exist yet are normal there (created later by procs or
+      # the user), and runs must build whatever is buildable — the
+      # retry backoff keeps the failed attempts cheap.
+      check_dependencies(targets) unless @auto_mode
 
       # Use TaskManager.early_cutoff if not explicitly specified
       early_cutoff = @early_cutoff if early_cutoff.nil?
@@ -1202,6 +1215,11 @@ task_names,
       watch(targets)
     {% end %}
       @autorun_running = true
+      # Retry backoff: consecutive failures slow the loop down from
+      # the 10ms change-poll to at most one attempt per second, so a
+      # persistent problem (e.g. a deleted input) can't spin the CPU
+      # and the log; any success resets it
+      retry_delay = 0.01
       spawn do
         loop do
           select
@@ -1217,10 +1235,10 @@ task_names,
             begin
               # Sleep early is better for race conditions in tests
               # If we sleep late, it's likely that we'll get the
-              # stop order and break the loop without running, so
-              # we can't see the side effects without sleeping in
-              # the tests.
-              sleep 0.01.seconds
+              # stop order and break the loop without running, so we
+              # can't see the side effects without sleeping in the
+              # tests.
+              sleep retry_delay.seconds
               next if @queued_changes.empty? && @modified.empty?
               Log.info { "Detected changes in #{@queued_changes}" }
               # No need to mark targets stale here: propagate_staleness,
@@ -1249,9 +1267,11 @@ task_names,
               # Only clean queued changes after a successful run
               @modified.clear
               @queued_changes.clear
+              retry_delay = 0.01
             rescue ex
               # Sometimes we can't run because not all dependencies
               # are there yet or whatever. We'll try again later
+              retry_delay = Math.min(retry_delay * 2, 1.0)
               unless ex.message.to_s.starts_with?("Can't run: Unknown inputs")
                 Log.warn { "Automatic run failed (will retry): #{ex.message}" }
               end
