@@ -524,7 +524,7 @@ module Croupier
     # mtime scan is skipped as pure overhead. Content mode still scans
     # because @this_run feeds save_run and skipping it would make the
     # next incremental run rebuild everything.
-    def mark_stale_inputs(run_all : Bool = false, targets : Array(String)? = nil)
+    def mark_stale_inputs(run_all : Bool = false, targets : Array(String)? = nil) # ameba:disable Metrics/CyclomaticComplexity
       # New run: the positive file-existence cache may be stale
       @existing_files.clear
       if auto_mode?
@@ -551,12 +551,19 @@ module Croupier
       kv_modifications = @modified.select(&.starts_with?("kv://"))
       @modified.clear
 
+      # When this run's scan starts: recorded in the state file so the
+      # NEXT fast-mode run compares input mtimes against this moment
+      # rather than the state file's own mtime (written at the END of
+      # the run, which hides inputs modified mid-run)
+      @scan_started = Time.utc.to_unix_f
+
       if File.exists? @state_file
         last_run_date = File.info(@state_file).modification_time
         @last_run = load_state_file
       else
         last_run_date = Time.utc # Now
         @last_run = {} of String => String
+        @last_scan_time = nil
       end
 
       # A targeted run only scans the inputs of the tasks it may
@@ -577,10 +584,30 @@ module Croupier
                    end
 
       if @fast_mode
+        # Base @this_run on @last_run so input hashes recorded by the
+        # last hash-mode run survive the save: fast mode can't hash, so
+        # wiping them would make the next hash-mode run treat every
+        # input as modified (a surprise full rebuild)
+        @this_run = @last_run.dup
         unless run_all
+          # Compare mtimes against the last run's scan START (recorded
+          # in the state file): the file is saved at the END of the
+          # run, so its own mtime would hide inputs modified mid-run.
+          # A one-second grace window (the classic make solution)
+          # absorbs filesystem timestamp granularity and the small
+          # clock skew between recorded wall time and mtimes, at the
+          # cost of occasionally re-detecting an input modified just
+          # before the previous scan. The fallback for state files
+          # written before __scan_time existed compares mtime to
+          # mtime, which needs no grace.
+          scan_started = if baseline = @last_scan_time
+                           baseline - 1.0
+                         else
+                           last_run_date.to_unix_f
+                         end
           scan_scope.each do |file|
             if info = File.info?(file)
-              @modified << file if last_run_date < info.modification_time
+              @modified << file if info.modification_time.to_unix_f > scan_started
             end
           end
         end
@@ -754,8 +781,10 @@ module Croupier
     # temporary file and renamed into place, so a crash mid-write
     # can't leave a truncated state file behind.
     def save_run
+      state = {"__version"   => STATE_VERSION,
+               "__scan_time" => @scan_started.to_s}.merge(this_run.merge(next_run))
       File.open("#{@state_file}.tmp", "w") do |file|
-        file << YAML.dump({"__version" => STATE_VERSION}.merge(this_run.merge(next_run)))
+        file << YAML.dump(state)
       end
       File.rename("#{@state_file}.tmp", @state_file)
     end
@@ -764,10 +793,21 @@ module Croupier
     # drift: anything unexpected means we know nothing about the
     # previous run, which makes every input look modified (a full
     # rebuild) — safe, and self-healing on the next save.
+    # When the run being loaded started its scan (unix_f), recorded so
+    # fast mode compares mtimes against the previous run's scan start;
+    # nil for state files written before it was recorded
+    @last_scan_time : Float64 | Nil = nil
+    # Scan start of the run in progress; written to the state file
+    @scan_started : Float64 = 0.0
+
     private def load_state_file : Hash(String, String)
+      # Full reset on every load: an early return must not leave a
+      # stale scan time from a previous state file leaking in
+      @last_scan_time = nil
       parsed = YAML.parse(File.read(@state_file)).as_h
       return {} of String => String if parsed["__version"]?.try(&.to_s) != STATE_VERSION
-      parsed.reject! { |key, _| key.to_s == "__version" }
+      @last_scan_time = parsed["__scan_time"]?.try &.to_s.to_f?
+      parsed.reject! { |key, _| {"__version", "__scan_time"}.includes?(key.to_s) }
         .map { |key, value| {key.to_s, value.to_s} }.to_h
     rescue ex : YAML::ParseException
       Log.warn { "State file #{@state_file} is corrupted (#{ex.message}), rebuilding everything" }

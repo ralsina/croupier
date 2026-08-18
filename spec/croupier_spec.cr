@@ -1568,6 +1568,65 @@ describe "TaskManager" do
       end
     end
 
+    it "should preserve input hashes across fast-mode runs" do
+      with_scenario("empty", to_create: {"seed" => "one"}) do
+        runs = 0
+        Task.new(output: "out", inputs: ["seed"]) {
+          runs += 1
+          "data"
+        }
+        TaskManager.run_tasks
+        runs.should eq 1
+
+        # A fresh process starts with no in-memory hashes; and the task
+        # must RUN in fast mode (a succeeded task's inputs are not
+        # reverted by drop_unfinished_inputs)
+        TaskManager.this_run.clear
+        TaskManager.fast_mode = true
+        sleep 0.01.seconds        # mtime granularity
+        File.write("seed", "one") # same content, new mtime
+        TaskManager.run_tasks
+        runs.should eq 2
+
+        # ...so switching back to hash mode doesn't treat unchanged
+        # inputs as modified and force a surprise full rebuild
+        TaskManager.fast_mode = false
+        TaskManager.run_tasks
+        runs.should eq 2
+      end
+    end
+
+    it "should detect inputs modified during a fast-mode run" do
+      with_scenario("empty", to_create: {"seed" => "v1", "mid" => "v1"}) do
+        b_runs = 0
+        version = 1
+        # A rewrites "mid" every time it runs; B consumes "mid"
+        Task.new(output: "a_out", inputs: ["seed"]) {
+          version += 1
+          File.write("mid", "v#{version}")
+          "a"
+        }
+        Task.new(output: "b_out", inputs: ["mid"]) {
+          b_runs += 1
+          "b"
+        }
+
+        # Hash mode: A rewrites mid, B consumes it after A
+        TaskManager.run_tasks
+        b_runs.should eq 1
+
+        # Fast mode: A runs again and rewrites mid DURING the run
+        # (after the mtime scan). Later fast runs must still see that
+        # mid changed, instead of missing it forever because its mtime
+        # predates the state-file save
+        TaskManager.fast_mode = true
+        File.write("seed", "v2")
+        TaskManager.run_tasks
+        TaskManager.run_tasks
+        (b_runs > 1).should be_true
+      end
+    end
+
     it "should mark as modified all inputs newer than .croupier when in fast mode" do
       with_scenario("basic") do
         TaskManager.fast_mode = true
@@ -1578,6 +1637,9 @@ describe "TaskManager" do
         File.write("output2", "foo")
         File.write("output4", "")
         File.write("output5", "")
+        # Ensure the files are strictly older than .croupier: same-tick
+        # mtime granularity could otherwise make them look newer
+        sleep 0.01.seconds
         File.write(".croupier", YAML.dump({
           "input"   => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
           "input2"  => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
@@ -1967,22 +2029,29 @@ describe "TaskManager" do
         TaskManager.this_run = {"foo" => "bar"}
         TaskManager.next_run = {"bat" => "quux"}
         TaskManager.save_run
-        File.read(".croupier").should eq %(---\n__version: "1"\nfoo: bar\nbat: quux\n)
+        # __scan_time is a wall-clock timestamp; only check its presence
+        state = YAML.parse(File.read(".croupier"))
+        state["__version"].to_s.should eq "1"
+        state["__scan_time"].to_s.should_not be_empty
+        state["foo"].to_s.should eq "bar"
+        state["bat"].to_s.should eq "quux"
       end
     end
 
     it "should save all inputs and outputs on a full run" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         TaskManager.run_tasks
-        File.read(".croupier").should eq "---\n" +
-                                         "__version: \"1\"\n" +
-                                         "input: 0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33\n" +
-                                         "input2: 62cdb7020ff920e5aa642c3d4066950dd1f01f4d\n" +
-                                         "output3: da39a3ee5e6b4b0d3255bfef95601890afd80709\n" +
-                                         "output4: da39a3ee5e6b4b0d3255bfef95601890afd80709\n" +
-                                         "output5: da39a3ee5e6b4b0d3255bfef95601890afd80709\n" +
-                                         "output1: 356a192b7913b04c54574d18c28d46e6395428ab\n" +
-                                         "output2: 0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33\n"
+        state = YAML.parse(File.read(".croupier")).as_h.reject { |key, _| key.to_s == "__scan_time" }
+        state.should eq({
+          "__version" => "1",
+          "input"     => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
+          "input2"    => "62cdb7020ff920e5aa642c3d4066950dd1f01f4d",
+          "output3"   => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+          "output4"   => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+          "output5"   => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+          "output1"   => "356a192b7913b04c54574d18c28d46e6395428ab",
+          "output2"   => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
+        } of String => String)
       end
     end
   end
