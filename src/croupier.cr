@@ -751,7 +751,10 @@ module Croupier
         end
       end
 
-      save_run
+      # A dry run reports what would happen without doing it: persisting
+      # the scanned input hashes would consume the changes so the next
+      # real run would find nothing to do.
+      save_run unless dry_run
     end
 
     # Internal helper to run tasks concurrently.
@@ -870,7 +873,8 @@ module Croupier
         end
       end
       raise errors.join("\n") unless errors.empty? unless keep_going
-      save_run
+      # See _run_tasks: a dry run must not consume the input changes
+      save_run unless dry_run
     end
 
     @autorun_control = Channel(Bool).new

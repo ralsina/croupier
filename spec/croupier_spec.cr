@@ -773,6 +773,29 @@ describe "TaskManager" do
         end
       end
 
+      it "should not persist input state on a dry run" do
+        with_scenario("empty", to_create: {"seed" => "one"}) do
+          runs = 0
+          Task.new(output: "out", inputs: ["seed"]) {
+            runs += 1
+            "data"
+          }
+
+          # First run builds and records the input hash
+          TaskManager.run_tasks(parallel: parallel)
+          runs.should eq 1
+
+          # Input changes, then a dry run must not consume the change
+          File.write("seed", "two")
+          TaskManager.run_tasks(parallel: parallel, dry_run: true)
+          runs.should eq 1
+
+          # The real run must still see the modified input and rebuild
+          TaskManager.run_tasks(parallel: parallel)
+          runs.should eq 2
+        end
+      end
+
       it "should run no tasks when dry_run is true" do
         with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
           TaskManager.run_tasks(parallel: parallel, run_all: true, dry_run: true)
