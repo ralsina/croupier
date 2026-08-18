@@ -1634,6 +1634,36 @@ describe "TaskManager" do
   end
 
   describe "auto_run" do
+    it "should not re-run dependents when outputs are unchanged" do
+      with_scenario("empty", to_create: {"seed" => "one"}) do
+        dependent_runs = 0
+        # The producer re-runs every cycle (always_run) but always
+        # writes the same content: its dependent must not re-run
+        Task.new(output: "up", inputs: ["seed"], always_run: true) { "same" }
+        Task.new(output: "down", inputs: ["up"]) {
+          dependent_runs += 1
+          "d"
+        }
+
+        TaskManager.auto_run
+        Fiber.yield
+
+        File.write("seed", "two")
+        sleep 0.3.seconds
+        Fiber.yield
+        dependent_runs.should eq 1
+
+        File.write("seed", "three")
+        sleep 0.3.seconds
+        Fiber.yield
+        # Early cutoff must work across auto cycles: "up" was
+        # rewritten with identical content
+        dependent_runs.should eq 1
+
+        TaskManager.auto_stop
+      end
+    end
+
     it "should watch inputs of subtasks created during auto_run" do
       with_scenario("empty", to_create: {"seed" => "one"}) do
         # The master creates a subtask whose input does not exist yet

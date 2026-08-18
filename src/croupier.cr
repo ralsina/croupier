@@ -528,10 +528,20 @@ module Croupier
       # New run: the positive file-existence cache may be stale
       @existing_files.clear
       if auto_mode?
-        # In auto mode, the watcher tells us what changed, so we don't need to scan
-        # But we still need to update @this_run so hashes are saved to state file
+        # In auto mode, the watcher tells us WHAT to look at, but events
+        # fire on rewrites even when the content is identical (a task
+        # that regenerates a watched input unchanged retriggers itself
+        # forever). Like content mode, decide by comparing hashes
+        # against the last completed cycle; unscanned entries (deleted
+        # files, kv keys set outside this flow) are kept as modified.
         @this_run = scan_inputs
-        # The watcher has already populated @modified with changed files
+        @modified = @modified.select { |path|
+          if hash = @this_run[path]?
+            last_run.fetch(path, "") != hash
+          else
+            true
+          end
+        }.to_set
         return
       end
 
@@ -1267,6 +1277,14 @@ task_names,
               # Only clean queued changes after a successful run
               @modified.clear
               @queued_changes.clear
+              # Fold this cycle's hashes into @last_run: the non-auto
+              # path reloads them from the state file every run, but
+              # the auto branch never refreshes @last_run, so without
+              # this every cycle looks like the first one (no early
+              # cutoff, and unchanged rewrites keep re-staling their
+              # dependents). this_run holds the scanned input hashes,
+              # next_run the recorded output hashes
+              @data_mutex.synchronize { last_run.merge!(this_run).merge!(next_run) }
               retry_delay = 0.01
             rescue ex
               # Sometimes we can't run because not all dependencies
