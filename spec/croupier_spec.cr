@@ -833,6 +833,44 @@ describe "TaskManager" do
         end
       end
 
+      it "should not re-run kv dependents when the kv value is unchanged" do
+        with_scenario("empty") do
+          consumer_runs = 0
+          # The producer re-runs every time but always yields the same
+          # value: its dependents must not be re-staled by the re-set
+          Task.new(output: "kv://k1", inputs: [] of String, always_run: true) { "same" }
+          Task.new(output: "out", inputs: ["kv://k1"]) {
+            consumer_runs += 1
+            "data"
+          }
+
+          TaskManager.run_tasks(parallel: parallel)
+          consumer_runs.should eq 1
+
+          TaskManager.run_tasks(parallel: parallel)
+          consumer_runs.should eq 1
+        end
+      end
+
+      it "should re-run kv dependents when the kv value changes" do
+        with_scenario("empty") do
+          consumer_runs = 0
+          value = "one"
+          Task.new(output: "kv://k1", inputs: [] of String, always_run: true) { value }
+          Task.new(output: "out", inputs: ["kv://k1"]) {
+            consumer_runs += 1
+            "data"
+          }
+
+          TaskManager.run_tasks(parallel: parallel)
+          consumer_runs.should eq 1
+
+          value = "two"
+          TaskManager.run_tasks(parallel: parallel)
+          consumer_runs.should eq 2
+        end
+      end
+
       it "should run tasks in dependency order even if targets are not sorted" do
         with_scenario("empty") do
           # Register the consumer first, so tasks.keys (same size as the
@@ -1742,6 +1780,22 @@ describe "TaskManager" do
         TaskManager.cleanup
         TaskManager.@store_cache.empty?.should be_true
         TaskManager.@store_misses.empty?.should be_true
+      end
+    end
+
+    it "should only mark kv keys modified when the value changes" do
+      with_scenario("empty") do
+        TaskManager.set("foo", "bar")
+        TaskManager.modified?("kv://foo").should be_true
+
+        TaskManager.modified.clear
+        # Setting the same value again is a no-op for staleness
+        TaskManager.set("foo", "bar")
+        TaskManager.modified?("kv://foo").should be_false
+
+        # A different value still marks it
+        TaskManager.set("foo", "baz")
+        TaskManager.modified?("kv://foo").should be_true
       end
     end
 

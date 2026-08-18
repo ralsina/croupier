@@ -90,30 +90,39 @@ module Croupier
     # multiple OS threads.
     @data_mutex = Sync::Mutex.new
 
-    def set(key, value)
+    # Store a value, returning whether it CHANGED: a same-value set is a
+    # no-op for staleness, so kv outputs holding identical values don't
+    # re-stale their dependents on every run.
+    def set(key, value) : Bool
       Log.debug { "Setting k/v data for #{key}" }
+      changed = false
       @data_mutex.synchronize do
+        changed = store_read(key) != value
         @_store.set(key, value)
         @store_cache[key] = value
         @store_misses.delete(key)
-        @modified << "kv://#{key}"
+        @modified << "kv://#{key}" if changed
       end
+      changed
     end
 
     def get(key)
-      @data_mutex.synchronize do
-        if value = @store_cache[key]?
-          return value
-        end
-        return nil if @store_misses.includes?(key)
-        value = @_store.get(key)
-        if value.nil?
-          @store_misses << key
-        else
-          @store_cache[key] = value
-        end
-        value
+      @data_mutex.synchronize { store_read(key) }
+    end
+
+    # Unsynchronized read-through lookup (callers hold @data_mutex).
+    private def store_read(key) : String | Nil
+      if value = @store_cache[key]?
+        return value
       end
+      return nil if @store_misses.includes?(key)
+      value = @_store.get(key)
+      if value.nil?
+        @store_misses << key
+      else
+        @store_cache[key] = value
+      end
+      value
     end
 
     # Record the hash of a task output for the next run's state file.
@@ -527,6 +536,9 @@ module Croupier
             end
           end
         end
+        # Fast mode can't hash values, so k/v modifications are still
+        # detected through set()'s flags and must survive the clear
+        @modified |= kv_modifications.to_set
       else
         scanned = scan_inputs(scan_scope)
         # Base @this_run on @last_run so hashes of inputs outside the
@@ -537,10 +549,11 @@ module Croupier
         scanned.each do |file, sha1|
           @modified << file if last_run.fetch(file, "") != sha1
         end
+        # k/v modifications are hash-detected like files here; set()'s
+        # flags from before the run (or from the previous run) are
+        # stale by comparison and must NOT survive the clear, or a
+        # one-time change re-stales its dependents on every later run
       end
-
-      # Restore k/v store modifications so they're available for propagate_staleness
-      @modified |= kv_modifications.to_set
     end
 
     # Scan the given inputs (all of them by default) and return a hash
@@ -553,10 +566,18 @@ module Croupier
       hash = {} of String => String
       inputs = scope || all_inputs
 
-      # Partition inputs into files (hashable in parallel) and directories.
+      # Partition inputs into kv keys, files (hashable in parallel)
+      # and directories.
       file_inputs = [] of String
       inputs.each do |path|
-        if File.file? path
+        if key = path.lchop?("kv://")
+          # A kv input's "hash" is the digest of its current value, so
+          # kv modifications are detected exactly like file
+          # modifications (a missing key hashes as "" and matches an
+          # absent state-file entry)
+          value = get(key)
+          hash[path] = value.nil? ? "" : Digest::SHA1.hexdigest(value)
+        elsif File.file? path
           file_inputs << path
         elsif File.directory? path
           hash[path] = hash_directory(path)

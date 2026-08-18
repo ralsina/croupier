@@ -233,10 +233,12 @@ module Croupier
           @outputs.zip(call_results) do |output, call_result|
             raise "Task #{self} did not return any data for output #{output}" if call_result.nil?
             if k = output.lchop?("kv://")
-              # If the output is a kv:// url, we save it in the k/v store
-              TaskManager.set(k, call_result)
-              # For k/v store, always consider it changed (can't easily hash)
-              @outputs_changed = true
+              # If the output is a kv:// url, we save it in the k/v
+              # store; set reports whether the value actually changed,
+              # and the value's hash is recorded for the next run's
+              # state file exactly like a file output's
+              @outputs_changed = true if TaskManager.set(k, call_result)
+              TaskManager.record_output_hash(output, Digest::SHA1.hexdigest(call_result))
             else
               begin
                 Dir.mkdir_p(File.dirname output)
