@@ -55,15 +55,22 @@ module Croupier
     @graph_invalidated : Bool = false
 
     def add_mutex(name : String)
-      mutexes[name] = Sync::Mutex.new
+      @data_mutex.synchronize { mutexes[name] = Sync::Mutex.new }
     end
 
     def lock_mutex(name : String)
-      mutexes[name].lock
+      # Register on demand: a mutex named through `task.mutex =` in a
+      # proc-built task (or after cleanup) still locks instead of
+      # raising KeyError at run time
+      mutex = @data_mutex.synchronize { mutexes[name] ||= Sync::Mutex.new }
+      mutex.lock
     end
 
     def unlock_mutex(name : String)
-      mutexes[name].unlock
+      # No KeyError: this runs in Task#run's ensure, where raising
+      # would mask the proc's own exception
+      mutex = @data_mutex.synchronize { mutexes[name]? }
+      mutex.try &.unlock
     end
 
     # Files with changes detected in auto_run

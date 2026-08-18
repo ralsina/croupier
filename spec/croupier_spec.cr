@@ -177,6 +177,69 @@ describe "Task" do
     end
   end
 
+  describe "mutex" do
+    it "should lock via the mutex given to the block initializer" do
+      with_scenario("empty") do
+        inside = 0
+        max_overlap = 0
+        2.times do |i|
+          Task.new(output: "out_#{i}", inputs: [] of String, mutex: "db") {
+            inside += 1
+            current = inside
+            max_overlap = current if current > max_overlap
+            sleep 0.05.seconds
+            inside -= 1
+            "x"
+          }
+        end
+        TaskManager.run_tasks(parallel: true)
+        # The two procs share the "db" mutex: they must never overlap
+        max_overlap.should eq 1
+      end
+    end
+
+    it "should register mutexes set through the setter" do
+      with_scenario("empty") do
+        task = Task.new(output: "out", inputs: [] of String) { "x" }
+        task.mutex = "db"
+        # Running must not KeyError on the unregistered mutex
+        task.run
+        File.exists?("out").should be_true
+      end
+    end
+
+    it "should keep the mutex of merged tasks and reject mismatches" do
+      with_scenario("empty") do
+        first = Task.new(output: "o", inputs: [] of String, mutex: "db") { "a" }
+        first.mutex.should eq "db"
+
+        # A colliding task with the SAME mutex merges and keeps it
+        Task.new(outputs: ["o", "o2"], inputs: [] of String, mutex: "db") { "b" }
+        TaskManager.tasks["o"].should eq first
+        first.mutex.should eq "db"
+
+        # A colliding task with a DIFFERENT mutex is refused whole
+        expect_raises(Exception, "different mutexes") do
+          Task.new(output: "o", inputs: [] of String, mutex: "other") { "c" }
+        end
+        # And the registry is untouched by the refusal
+        TaskManager.tasks["o"].should eq first
+      end
+    end
+
+    it "should merge subtask ids" do
+      with_scenario("empty") do
+        first = Task.new(output: "o", inputs: [] of String) { "a" }
+        first.subtask_ids << "s1"
+        second = Task.new(output: "p", inputs: [] of String) { "b" }
+        second.subtask_ids << "s2"
+
+        first.merge(second)
+        first.subtask_ids.should eq Set.new(["s1", "s2"])
+      end
+    end
+  end
+
   describe "new" do
     it "should be possible to create a task and fetch it" do
       with_scenario("basic") do

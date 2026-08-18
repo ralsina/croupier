@@ -48,6 +48,15 @@ module Croupier
     property procs : Array(TaskProc) = [] of TaskProc
     property? mergeable : Bool = true
     property mutex : String? = nil
+
+    # Setting a mutex also registers it: Task#run locks mutexes through
+    # the manager, and an unregistered one would fail at run time
+    # (long after the declaration that named it)
+    def mutex=(name : String?)
+      @mutex = name
+      TaskManager.add_mutex(name) if name
+    end
+
     property? master_task : Bool = false
     @[YAML::Field(ignore: true)]
     property subtask_ids : Set(String) = Set(String).new
@@ -95,6 +104,9 @@ module Croupier
       master_task : Bool = false,
       &block : TaskProc
     )
+      # Set before delegating: the inner initialize may merge this
+      # task with others, and the merge checks mutex compatibility
+      @mutex = mutex
       initialize(outputs, inputs, block, no_save, id, always_run, mergeable, master_task)
       TaskManager.add_mutex(mutex) if mutex
     end
@@ -166,6 +178,7 @@ outputs : Array(String) = [] of String,
           raise "Cannot merge tasks with different no_save settings" unless task.no_save? == first.no_save?
           raise "Cannot merge tasks with different always_run settings" unless task.always_run? == first.always_run?
           raise "Cannot merge master task with non-master task" unless task.master_task? == first.master_task?
+          raise "Cannot merge tasks with different mutexes" unless task.mutex == first.mutex
         end
       end
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
@@ -182,10 +195,15 @@ outputs : Array(String) = [] of String,
       id : String | Nil = nil,
       always_run : Bool = false,
       mergeable : Bool = true,
+      mutex : String? = nil,
       master_task : Bool = false,
       &block : TaskProc
     )
-      initialize(output, inputs, block, no_save, id, always_run, mergeable, master_task)
+      initialize(
+        output ? [output] : [] of String,
+        inputs, no_save, id, always_run, mergeable, mutex, master_task,
+        &block
+      )
     end
 
     # Create a task with zero or one outputs. Overload for convenience.
@@ -426,12 +444,16 @@ outputs : Array(String) = [] of String,
       raise "Cannot merge tasks with different no_save settings" unless no_save? == other.no_save?
       raise "Cannot merge tasks with different always_run settings" unless always_run? == other.always_run?
       raise "Cannot merge master task with non-master task" unless master_task? == other.master_task?
+      # A merged task runs all procs under one mutex: silently keeping
+      # only one side's would break the other's mutual exclusion
+      raise "Cannot merge tasks with different mutexes" unless mutex == other.mutex
 
       # @outputs is NOT unique! We can save multiple times
       # the same file in multiple procs
       @outputs += other.@outputs
       @inputs += other.@inputs
       @procs += other.@procs
+      @subtask_ids |= other.@subtask_ids
       self
     end
   end
