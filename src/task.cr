@@ -211,9 +211,7 @@ module Croupier
             raise "Task #{self} did not generate #{output}"
           end
           new_hash = Digest::SHA1.hexdigest(File.read(output))
-          TaskManager.record_output_hash(output, new_hash)
-          # Check if output changed
-          old_hash = TaskManager.previous_output_hash(output)
+          old_hash = TaskManager.swap_output_hash(output, new_hash)
           @outputs_changed = true if old_hash != new_hash
         end
       else
@@ -238,9 +236,7 @@ module Croupier
                 io << call_result
               end
               new_hash = Digest::SHA1.hexdigest(call_result)
-              TaskManager.record_output_hash(output, new_hash)
-              # Check if output changed
-              old_hash = TaskManager.previous_output_hash(output)
+              old_hash = TaskManager.swap_output_hash(output, new_hash)
               if old_hash != new_hash
                 @outputs_changed = true
               else
@@ -306,51 +302,37 @@ module Croupier
     # Mark that a dependency (input) is known to be unchanged.
     # Recomputes staleness considering ALL inputs together (thread-safe).
     def mark_dependency_fresh(input : String)
-      self.stale = recompute_staleness
+      self.stale = compute_staleness(inputless_is_stale: true)
     end
 
-    # Recompute staleness by checking all inputs and outputs
-    private def recompute_staleness
-      return true if @always_run || @inputs.empty?
+    # Compute staleness by checking that every output exists (as a file
+    # or as a k/v key) and no input is modified or produced by a stale
+    # task.
+    #
+    # Single shared implementation for the on-demand path (stale?) and
+    # the early-cutoff recompute (mark_dependency_fresh); they differ
+    # only in whether input-less / always_run tasks short-circuit to
+    # stale, which is the `inputless_is_stale` flag (stale? checks that
+    # itself before descending). The output scan is one early-exit pass
+    # instead of separate file/kv partitions, and stops at the first
+    # missing output.
+    private def compute_staleness(inputless_is_stale : Bool = false) : Bool
+      return true if inputless_is_stale && (@always_run || @inputs.empty?)
 
-      file_outputs = @outputs.reject(&.lchop?("kv://"))
-      kv_outputs = @outputs.select(&.lchop?("kv://")).map(&.lchop("kv://"))
+      return true if @outputs.any? do |output|
+                       if key = output.lchop? "kv://"
+                         !TaskManager.get(key)
+                       else
+                         !File.exists?(output)
+                       end
+                     end
 
-      # Check if outputs are missing
-      missing_outputs = file_outputs.any? { |output| !File.exists?(output) } ||
-                        kv_outputs.any? { |output| !TaskManager.get(output) }
-      return true if missing_outputs
+      return true if @inputs.any? { |input| TaskManager.modified?(input) }
 
-      # Check if inputs are modified
-      modified_inputs = @inputs.any? { |input| TaskManager.modified?(input) }
-      return true if modified_inputs
-
-      # Check if any input tasks are stale
-      stale_inputs = @inputs.any? do |input|
-        TaskManager.tasks.has_key?(input) && TaskManager.tasks[input].stale?
+      @inputs.any? do |input|
+        task = TaskManager.tasks[input]?
+        task && task.stale?
       end
-      stale_inputs
-    end
-
-    # Internal method to compute staleness on-demand
-    private def compute_staleness
-      file_outputs = @outputs.reject(&.lchop?("kv://"))
-      kv_outputs = @outputs.select(&.lchop?("kv://")).map(&.lchop("kv://"))
-
-      # Check if outputs are missing
-      missing_outputs = file_outputs.any? { |output| !File.exists?(output) } ||
-                        kv_outputs.any? { |output| !TaskManager.get(output) }
-      return true if missing_outputs
-
-      # Check if inputs are modified
-      modified_inputs = @inputs.any? { |input| TaskManager.modified?(input) }
-      return true if modified_inputs
-
-      # Check if any input tasks are stale
-      stale_inputs = @inputs.any? do |input|
-        TaskManager.tasks.has_key?(input) && TaskManager.tasks[input].stale?
-      end
-      stale_inputs
     end
 
     # For inputs that are tasks, we check if they are stale

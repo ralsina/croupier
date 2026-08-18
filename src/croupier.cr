@@ -101,6 +101,17 @@ module Croupier
       @data_mutex.synchronize { last_run[output]? }
     end
 
+    # Record `new_hash` for `output` and return the hash the last run
+    # recorded for it, in a single locked step: task workers call this
+    # once per output instead of a record-then-previous round-trip.
+    def swap_output_hash(output : String, new_hash : String) : String | Nil
+      @data_mutex.synchronize do
+        previous = last_run[output]?
+        next_run[output] = new_hash
+        previous
+      end
+    end
+
     # Whether `key` (a file or kv:// key) was modified since the last run.
     def modified?(key : String) : Bool
       @data_mutex.synchronize { modified.includes?(key) }

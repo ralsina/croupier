@@ -1593,6 +1593,17 @@ describe "TaskManager" do
   end
 
   describe "store" do
+    it "should swap output hashes atomically" do
+      with_scenario("empty") do
+        TaskManager.last_run["out"] = "old"
+        TaskManager.swap_output_hash("out", "new").should eq "old"
+        # The new hash is recorded for the next run's state file...
+        TaskManager.next_run["out"].should eq "new"
+        # ...and the last-run answer is untouched
+        TaskManager.last_run["out"].should eq "old"
+      end
+    end
+
     it "should cache known-to-exist files until the next run starts" do
       with_scenario("empty", to_create: {"input" => "foo"}) do
         # First check stats the filesystem and remembers the answer
