@@ -247,6 +247,9 @@ module Croupier
     def cleanup
       modified.clear
       tasks.clear
+      # Stop the autorun fiber first, so it doesn't fire runs against
+      # the cleared manager halfway through cleanup
+      auto_stop
       last_run.clear
       this_run.clear
       next_run.clear
@@ -263,6 +266,12 @@ module Croupier
       @fast_mode = false
       @auto_mode = false
       @graph_invalidated = false
+      # Session-level state a run may have configured
+      @state_file = ".croupier"
+      @early_cutoff = true
+      mutexes.clear
+      @progress_callback = ->(_id : String) { }
+      @before_run_hook = ->(_changes : Set(String)) { }
       {% if flag?(:linux) %}
         return unless watcher = @@watcher
         begin
@@ -1008,11 +1017,17 @@ module Croupier
     end
 
     @autorun_control = Channel(Bool).new
+    # Whether the autorun fiber is live: auto_stop's send would block
+    # forever on the unbuffered control channel if nothing is running
+    # (e.g. cleanup without auto_run)
+    @autorun_running = false
 
     def auto_stop
+      return unless @autorun_running
       @autorun_control.send true
       @autorun_control.receive?
       @autorun_control = Channel(Bool).new
+      @autorun_running = false
     end
 
     {% if flag?(:linux) %}
@@ -1037,12 +1052,14 @@ module Croupier
     {% if flag?(:linux) %}
       watch(targets)
     {% end %}
+      @autorun_running = true
       spawn do
         loop do
           select
           when @autorun_control.receive
             Log.info { "Stopping automatic run" }
             @autorun_control.close
+            @autorun_running = false
             if watcher = @@watcher
               watcher.close # Stop watchers
             end

@@ -2477,6 +2477,52 @@ describe "TaskManager" do
     end
   end
 
+  describe "cleanup" do
+    it "should reset session state" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        # Dirty up everything a session can carry
+        TaskManager.state_file = "custom_state"
+        TaskManager.early_cutoff = false
+        TaskManager.add_mutex("db")
+        TaskManager.before_run_hook = ->(_changes : Set(String)) { File.write("hook_fired", "") }
+        TaskManager.progress_callback = ->(_id : String) { File.write("progress_fired", "") }
+
+        TaskManager.cleanup
+
+        TaskManager.state_file.should eq ".croupier"
+        TaskManager.early_cutoff?.should be_true
+        TaskManager.mutexes.empty?.should be_true
+
+        # The hooks are gone: running a task must not fire them
+        Task.new(output: "out", inputs: ["seed"]) { "data" }
+        TaskManager.run_tasks
+        File.exists?("hook_fired").should be_false
+        File.exists?("progress_fired").should be_false
+      end
+    end
+
+    it "should stop the autorun fiber" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        Task.new(output: "out", inputs: ["seed"]) { "data" }
+
+        baseline = live_fiber_count
+        TaskManager.auto_run
+        sleep 0.2.seconds
+        # The autorun fiber (plus the watcher's) are running
+        during = live_fiber_count
+        during.should be > baseline
+
+        TaskManager.cleanup
+        TaskManager.@autorun_running.should be_false
+        sleep 0.2.seconds
+        # The autorun fiber and the watcher's reader are gone. (One
+        # inotify event-loop fiber stays parked on the library's own
+        # channel forever — an upstream leak croupier can't retire.)
+        live_fiber_count.should be < during
+      end
+    end
+  end
+
   describe "fiber hygiene" do
     it "should not leak worker fibers from parallel runs" do
       seeds = (0...20).map { |i| {"seed_#{i}" => "data"} of String => String }
