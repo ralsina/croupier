@@ -355,26 +355,41 @@ module Croupier
 
     # For inputs that are tasks, we check if they are stale
     # For inputs that are not tasks, they should exist as files
+    # or as keys in the k/v store
     # If any inputs don't fit those criteria, they are being
     # waited for.
-    def waiting_for
-      @inputs.reject do |input|
-        if TaskManager.tasks.has_key? input
-          !TaskManager.tasks[input].stale?
-        else
-          if input.lchop? "kv://"
-            !TaskManager.@_store.get(input.lchop("kv://")).nil?
-          else
-            File.exists? input
-          end
-        end
+
+    # Is this input satisfied (a fresh task, an existing file, or a
+    # key present in the k/v store)?
+    #
+    # The store is read through TaskManager.get so the @data_mutex
+    # guards against parallel workers writing it from other threads.
+    private def input_satisfied?(input) : Bool
+      if task = TaskManager.tasks[input]?
+        !task.stale?
+      elsif key = input.lchop? "kv://"
+        !TaskManager.get(key).nil?
+      else
+        File.exists? input
       end
+    end
+
+    # All inputs that are not satisfied yet.
+    def waiting_for
+      @inputs.reject { |input| input_satisfied?(input) }
+    end
+
+    # Early-exit version of waiting_for.empty? used by ready?, so
+    # readiness checks stop at the first blocked input instead of
+    # building the whole array.
+    def waiting? : Bool
+      @inputs.any? { |input| !input_satisfied?(input) }
     end
 
     # A task is ready if it is stale and not waiting for anything
     def ready?(run_all = false)
       (stale? || always_run? || run_all) &&
-        waiting_for.empty?
+        !waiting?
     end
 
     def to_s(io)

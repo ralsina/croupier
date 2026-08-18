@@ -548,6 +548,31 @@ describe "Task" do
         t.waiting_for.should eq ["output3"]
       end
     end
+
+    it "should wait for a missing kv:// input and release it when the key is set" do
+      with_scenario("empty") do
+        t = Task.new(output: "out", inputs: ["kv://foo"], proc: TaskProc.new { "" })
+
+        # Key not in the store: the task is blocked on it
+        t.waiting_for.should eq ["kv://foo"]
+        t.ready?.should be_false
+
+        TaskManager.set("foo", "bar")
+
+        # Key present: the kv input is satisfied
+        t.waiting_for.should eq [] of String
+        t.ready?.should be_true
+      end
+    end
+
+    it "should not consider an existing plain file input as a wait" do
+      with_scenario("empty", to_create: {"input" => "data"}) do
+        t = Task.new(output: "out", inputs: ["input"], proc: TaskProc.new { "" })
+
+        t.waiting_for.should eq [] of String
+        t.ready?.should be_true
+      end
+    end
   end
 
   describe "ready?" do
