@@ -51,9 +51,9 @@ def with_scenario(
           outputs: t["outputs"].as_a.map(&.to_s),
           inputs: t["inputs"].as_a.map(&.to_s),
           proc: _procs[t["procs"]],
-          always_run: t["always_run"].as_bool,
-          no_save: t["no_save"].as_bool,
-          id: t["id"].to_s,
+          always_run: t["always_run"]?.try(&.as_bool) || false,
+          no_save: t["no_save"]?.try(&.as_bool) || false,
+          id: t["id"]?.try(&.to_s),
         )
       end
     end

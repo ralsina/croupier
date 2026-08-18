@@ -12,70 +12,23 @@ def live_fiber_count : Int32
   count
 end
 
-def with_scenario(
-  name,
-  keep = [] of String,
-  to_create = {} of String => String,
-  procs = {} of String => TaskProc, &
-)
-  # Setup logging, helps coverage
-  logs = IO::Memory.new
-  Log.setup(:trace, Log::IOBackend.new(io: logs))
-
-  # Library of procs
-  x = 0
-  _procs = {
-    "dummy"   => TaskProc.new { "" },
-    "counter" => TaskProc.new {
-      x += 1
-      x.to_s
-    },
-    "output2" => TaskProc.new {
-      x += 1
-      File.write("output2", "foo")
-    },
-  }.merge procs
-
-  Dir.cd("spec/testcases/#{name}") do
-    # Clean up
-    File.delete?(".croupier")
-    Dir.glob("*").each do |f|
-      FileUtils.rm_rf(f) unless keep.includes?(f) || f == "tasks.yml"
-    end
-    TaskManager.cleanup
-
-    # Create files as requested in scenario
-    to_create.each do |k, v|
-      File.open(k, "w") { |io| io << v }
-    end
-
-    # Create tasks from tasks.yml
-    if File.exists?("tasks.yml")
-      tasks = YAML.parse(File.read("tasks.yml"))
-      tasks.as_h.values.each do |t|
-        Task.new(
-          outputs: t["outputs"].as_a.map(&.to_s),
-          inputs: t["inputs"].as_a.map(&.to_s),
-          proc: _procs[t["procs"]],
-          always_run: t["always_run"].as_bool,
-          no_save: t["no_save"].as_bool,
-          id: t["id"].to_s,
-        )
-      end
-    end
-    begin
-      yield
-    rescue ex
-      puts "Error: #{ex}"
-      raise ex
-    ensure
-      TaskManager.cleanup
-    end
-  end
-end
-
 describe "Task" do
   describe "serialization" do
+    it "should round-trip through YAML" do
+      with_scenario("empty") do
+        task = Task.new(output: "out", inputs: ["seed"], no_save: true, always_run: true)
+
+        restored = Task.from_yaml(task.to_yaml)
+
+        restored.@outputs.should eq ["out"]
+        restored.@inputs.should eq Set.new(["seed"])
+        restored.no_save?.should be_true
+        restored.always_run?.should be_true
+        # procs and runtime state are not serialized
+        restored.@procs.should be_empty
+      end
+    end
+
     it "should have a nice string representation" do
       with_scenario("basic") do
         id = "77012200e4c39aa279b0d3e16dca43a7b02eb4a5"
@@ -2931,6 +2884,37 @@ describe "TaskManager" do
         TaskManager.run_tasks
         File.exists?(".croupier").should be_true
         File.exists?(".croupier.tmp").should be_false
+      end
+    end
+  end
+
+  describe "progress_callback" do
+    it "should be called with the task id when a task runs" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        reported = [] of String
+        TaskManager.progress_callback = ->(id : String) { reported << id }
+        Task.new(output: "out", inputs: ["seed"]) { "data" }
+
+        TaskManager.run_tasks
+
+        reported.size.should eq 1
+        reported.first.should eq TaskManager.tasks["out"].id
+      end
+    end
+  end
+
+  describe "no_save with kv outputs" do
+    it "should let the proc store the kv data itself" do
+      with_scenario("empty") do
+        # A no_save task is responsible for saving its own outputs: for
+        # a kv:// output that means calling set() from the proc
+        Task.new(output: "kv://k", inputs: [] of String, no_save: true) {
+          TaskManager.set("k", "from proc")
+          nil
+        }
+        TaskManager.run_tasks
+
+        TaskManager.get("k").should eq "from proc"
       end
     end
   end
