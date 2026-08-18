@@ -903,12 +903,11 @@ module Croupier
 
     # Internal helper to run tasks serially
     def _run_tasks( # ameba:disable Metrics/CyclomaticComplexity
-      task_names,
-      run_all : Bool = false,
-      dry_run : Bool = false,
-      keep_going : Bool = false,
-      early_cutoff : Bool = true,
-    )
+task_names,
+                   run_all : Bool = false,
+                   dry_run : Bool = false,
+                   keep_going : Bool = false,
+                   early_cutoff : Bool = true,)
       mark_stale_inputs(run_all, task_names)
       propagate_staleness(run_all)
 
