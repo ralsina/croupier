@@ -7,12 +7,96 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-18
+
+Results of a full correctness-and-performance review of the codebase:
+24 issues filed, investigated and fixed (GH issues #23-#46).
+
 ### 🚀 Features
 
 - Add `TaskManager.add_input` for growing task dependencies between runs:
   thread-safe, invalidates the input/graph caches, documented as
   effective on the next run only (`tasks` and `Task#inputs` are now
   documented read-only during runs)
+- Tasks declared with the single-output block initializer accept a
+  `mutex:` parameter (the array form always did, though it never
+  actually locked; see below)
+- `TaskManager.swap_output_hash` records an output hash and returns
+  the previous one in a single locked step; `TaskManager.file_exists?`
+  is a per-run positive cache for file existence
+
+### 🐛 Bug Fixes
+
+- `run_tasks(targets)` no longer skips the topological sort when the
+  target list merely has the right size: `auto_run` could wedge in a
+  permanent retry loop, and unknown targets were silently dropped (#23)
+- Dry runs no longer persist input hashes, so they no longer consume
+  the changes they report on (#24)
+- Failed or blocked tasks no longer consume their input changes:
+  with `keep_going` they are retried on the next run instead of never
+  again (#25)
+- Dependents of failed tasks never run, in both runners: parallel
+  marked failed tasks done (dependents ran against missing outputs),
+  serial aborted the whole run on the first blocked task despite
+  `keep_going` (#26)
+- `waiting_for` reads the k/v store through the mutex-guarded
+  accessor instead of racing parallel workers on the raw store (#27)
+- The state file is written atomically (tmp + rename), carries a
+  schema version, and a corrupted file is recovered by rebuilding
+  instead of raising forever (#28)
+- Fast mode preserves recorded input hashes and detects inputs
+  modified mid-run (scan-start timestamps with a one-second grace
+  window) (#29)
+- Auto mode staleness is content-based: early cutoff works across
+  cycles and a task rewriting a watched input with identical content
+  no longer re-triggers forever (#30)
+- `auto_run` re-watches when master tasks create subtasks mid-session,
+  so changes to the new inputs are no longer invisible (#31)
+- Targeted runs report missing inputs as "Unknown inputs" up front
+  (auto mode keeps building whatever is buildable) and the auto retry
+  loop backs off to one attempt per second (#32)
+- `cleanup` stops the autorun fiber and resets session state (hooks,
+  mutexes, state file, early cutoff) (#33)
+- Merging tasks no longer silently drops the merged task's mutex and
+  subtask ids (differing mutexes are refused), and the block
+  initializer's `mutex:` parameter actually locks now (#34)
+- A multi-way merge that fails partway no longer corrupts the
+  registry: compatibility is validated across the whole set first (#35)
+- `add_input` from parallel workers is queued and applied at wave
+  boundaries instead of mutating input sets while the coordinator
+  iterates them (#36)
+- Task declaration semantics: input/output paths are normalized,
+  empty `kv://` keys are rejected, dotfiles count in directory
+  hashes, computed ids are 48 bits, explicit ids on output-ful tasks
+  are unique, and surplus proc results log a warning (#37)
+- `topological_sort` distinguishes cycles from unreachable vertices
+  and visits siblings in a deterministic order (#38)
+- k/v staleness is value-based: same-value `set`s don't re-stale
+  dependents, and one-time changes no longer re-stale them forever (#39)
+- Worker fibers terminate when their work queue drains instead of
+  parking forever (each parallel wave and input scan leaked fibers) (#40)
+
+### ⚡ Performance
+
+- Targeted runs scan only the executed tasks' inputs, instead of
+  re-hashing the whole registry (and consuming unrelated input
+  changes) (#42)
+- Read-through cache for the k/v store: hits do no IO under the data
+  mutex, which matters on slow or network filesystems (#41)
+- Single-pass staleness computation (the file/kv output partition is
+  fused with early exit) and one locked round-trip per output hash (#43)
+- Small wins: consumers index for `depends_on`, graph-rebuild flag off
+  the k/v store, streaming input hashing, dead work removed (#44)
+- Input file existence is cached per run; staleness scans are skipped
+  under `run_all`
+
+### ⚙️ Miscellaneous Tasks
+
+- Merge `perf/skip-scan-on-run-all`; delete nine branches already in
+  main via squash merges; TODO.md annotations updated (#45)
+- Spec coverage gaps closed: YAML round-trip, progress_callback,
+  no_save with kv outputs, and the `with_scenario` helper is
+  deduplicated (#46)
 
 ## [0.13.0] - 2026-08-14
 
