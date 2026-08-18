@@ -1,4 +1,5 @@
 require "yaml"
+require "log"
 
 module Croupier
   alias TaskProc = -> String? | Array(String)
@@ -98,16 +99,25 @@ module Croupier
       TaskManager.add_mutex(mutex) if mutex
     end
 
-    def initialize(
-      outputs : Array(String) = [] of String,
-      inputs : Array(String) = [] of String,
-      proc : TaskProc | Nil = nil,
-      no_save : Bool = false,
-      id : String | Nil = nil,
-      always_run : Bool = false,
-      mergeable : Bool = true,
-      master_task : Bool = false,
-    )
+    def initialize( # ameba:disable Metrics/CyclomaticComplexity
+outputs : Array(String) = [] of String,
+                   inputs : Array(String) = [] of String,
+                   proc : TaskProc | Nil = nil,
+                   no_save : Bool = false,
+                   id : String | Nil = nil,
+                   always_run : Bool = false,
+                   mergeable : Bool = true,
+                   master_task : Bool = false,)
+      # An empty kv:// key can never be satisfied (get("") on a store
+      # that never holds it): better to fail at declaration
+      raise "Task has an empty kv:// key" if outputs.includes?("kv://") || inputs.includes?("kv://")
+
+      # kv:// entries keep their prefix; everything else is a path and
+      # gets normalized, so "./x", "dir/../x" and "x" are the same
+      # graph vertex (and match the watcher's normalized event paths)
+      inputs = inputs.map { |path| path.starts_with?("kv://") ? path : Path[path].normalize.to_s }
+      outputs = outputs.map { |path| path.starts_with?("kv://") ? path : Path[path].normalize.to_s }
+
       if !(inputs.to_set & outputs.to_set).empty?
         raise "Cycle detected"
       end
@@ -115,7 +125,7 @@ module Croupier
       @procs << proc unless proc.nil?
       @outputs = outputs.uniq
       raise "Task has no outputs and no id" if id.nil? && @outputs.empty?
-      @id = id ? id : Digest::SHA1.hexdigest(@outputs.join(","))[..6]
+      @id = id ? id : Digest::SHA1.hexdigest(@outputs.join(","))[0, 12]
       @inputs = Set.new inputs
       @no_save = no_save
       @mergeable = mergeable
@@ -133,6 +143,18 @@ module Croupier
       # are not mergeable
       raise "Can't merge task #{self} with #{to_merge[..-2].map(&.to_s)}" \
         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
+      # An explicit id on an output-ful task must be unique among tasks
+      # that stay separate: subtask tracking matches tasks BY id, so a
+      # duplicate would make remove_subtasks delete unrelated tasks.
+      # (Output-less tasks may still merge under a shared id, and a
+      # collision with a merge target is fine: one task, one id.)
+      if id && !@outputs.empty?
+        if conflict = TaskManager.tasks.values.find { |t| t.id == id }
+          unless to_merge.includes?(conflict)
+            raise "Task id #{id} is already used by #{conflict}"
+          end
+        end
+      end
       # Check flag compatibility across the WHOLE set before the first
       # merge: merge mutates the live first task in place, so a reduce
       # that fails partway (3+ colliding tasks) would leave the earlier
@@ -230,6 +252,9 @@ module Croupier
       else
         # We have to save the files ourselves
         begin
+          if call_results.size > @outputs.size
+            Log.warn { "Task #{self} returned #{call_results.size} results for #{@outputs.size} outputs, discarding the extras" }
+          end
           @outputs.zip(call_results) do |output, call_result|
             raise "Task #{self} did not return any data for output #{output}" if call_result.nil?
             if k = output.lchop?("kv://")

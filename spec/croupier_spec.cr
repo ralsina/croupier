@@ -99,6 +99,84 @@ describe "Task" do
     end
   end
 
+  describe "task semantics small items" do
+    it "should normalize input and output paths" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        Task.new(output: "a_out", inputs: ["seed"]) { "a" }
+        # Unnormalized references to the same files must be the same
+        # graph vertices, so the dependency edge exists
+        Task.new(output: "b_out", inputs: ["./a_out", "dir/../seed"]) { "b" }
+
+        TaskManager.all_inputs.should contain("seed")
+        TaskManager.all_inputs.should_not contain("./a_out")
+
+        sorted = TaskManager.sorted_task_graph[1]
+        # The edge a_out -> b_out puts a_out first
+        producer_position = sorted.index("a_out") || sorted.size
+        consumer_position = sorted.index("b_out") || sorted.size
+        (producer_position < consumer_position).should be_true
+
+        # Directory inputs lose the trailing slash
+        Task.new(output: "c_out", inputs: ["dir/"]) { "c" }
+        TaskManager.all_inputs.should contain("dir")
+      end
+    end
+
+    it "should reject empty kv:// keys" do
+      with_scenario("empty") do
+        expect_raises(Exception, "empty kv:// key") do
+          Task.new(output: "kv://", inputs: [] of String) { "x" }
+        end
+        expect_raises(Exception, "empty kv:// key") do
+          Task.new(output: "ok", inputs: ["kv://"]) { "x" }
+        end
+      end
+    end
+
+    it "should hash dotfiles inside directory inputs" do
+      with_scenario("empty") do
+        Dir.mkdir("dir")
+        File.write("dir/.env", "one")
+        Task.new(output: "out", inputs: ["dir"]) { "x" }
+
+        first = TaskManager.scan_inputs["dir"]
+        File.write("dir/.env", "two")
+        TaskManager.scan_inputs["dir"].should_not eq first
+      end
+    end
+
+    it "should reject duplicate explicit ids on output-ful tasks" do
+      with_scenario("empty") do
+        Task.new(id: "dup", outputs: ["a"]) { "x" }
+        expect_raises(Exception, "already used") do
+          Task.new(id: "dup", outputs: ["b"]) { "x" }
+        end
+        # Output-less tasks may still merge under a shared id
+        Task.new(id: "shared")
+        Task.new(id: "shared")
+        TaskManager.tasks.keys.should contain("shared")
+      end
+    end
+
+    it "should use wider computed ids" do
+      with_scenario("empty") do
+        Task.new(output: "out1", inputs: [] of String) { "x" }
+        # 12 hex chars = 48 bits: no realistic birthday collisions
+        TaskManager.tasks["out1"].@id.size.should eq 12
+      end
+    end
+
+    it "should discard (with a warning) surplus proc results" do
+      with_scenario("empty") do
+        # Two results for one declared output: the extra is discarded
+        # and the declared output still gets the first result
+        Task.new(output: "out", inputs: [] of String) { ["first", "second"] }
+        TaskManager.run_tasks
+        File.read("out").should eq "first"
+      end
+    end
+  end
+
   describe "new" do
     it "should be possible to create a task and fetch it" do
       with_scenario("basic") do
@@ -336,7 +414,7 @@ describe "Task" do
           [] of String,
           b,
           no_save: true)
-        expect_raises(Exception, "Task 052cd9c::output2 did not generate output2") do
+        expect_raises(Exception, "Task 052cd9c6f04c::output2 did not generate output2") do
           t.run
         end
       end
@@ -346,7 +424,7 @@ describe "Task" do
       with_scenario("empty") do
         b = TaskProc.new { raise "foo" }
         t = Task.new("output2", proc: b)
-        expect_raises(Exception, "Task 052cd9c::output2 failed: foo") do
+        expect_raises(Exception, "Task 052cd9c6f04c::output2 failed: foo") do
           t.run
         end
       end
@@ -356,7 +434,7 @@ describe "Task" do
       with_scenario("empty") do
         t = Task.new("output2", proc: TaskProc.new { raise ArgumentError.new("bad argument") })
         ex = expect_raises(TaskFailure) { t.run }
-        ex.message.should eq("Task 052cd9c::output2 failed: bad argument")
+        ex.message.should eq("Task 052cd9c6f04c::output2 failed: bad argument")
         cause = ex.cause
         cause.should be_a(ArgumentError)
         cause.as(ArgumentError).message.should eq("bad argument")
@@ -369,7 +447,7 @@ describe "Task" do
       with_scenario("empty") do
         Task.new("output2", inputs: [] of String, proc: TaskProc.new { raise "foo" })
         Task.new("output3", inputs: ["output2"], proc: TaskProc.new { "" })
-        expect_raises(TaskFailure, "Task 052cd9c::output2 failed: foo") do
+        expect_raises(TaskFailure, "Task 052cd9c6f04c::output2 failed: foo") do
           TaskManager.run_tasks
         end
       end
@@ -1054,7 +1132,7 @@ describe "TaskManager" do
         with_scenario("empty") do
           b = TaskProc.new { raise "foo" }
           Task.new(["output2"], proc: b)
-          expect_raises(Exception, "Task 052cd9c::output2 failed: foo") do
+          expect_raises(Exception, "Task 052cd9c6f04c::output2 failed: foo") do
             TaskManager.run_tasks(parallel: parallel)
           end
         end
@@ -1072,7 +1150,7 @@ describe "TaskManager" do
               File.write("downstream_ran", "")
               ""
             })
-            expect_raises(Exception, "Task 052cd9c::output2 failed: foo") do
+            expect_raises(Exception, "Task 052cd9c6f04c::output2 failed: foo") do
               TaskManager.run_tasks
             end
             # The dependent of the failing task never executed

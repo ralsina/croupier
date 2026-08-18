@@ -605,8 +605,12 @@ module Croupier
     # trees can't collide by construction (the previous scheme folded raw
     # file bytes directly into the same context with no boundary).
     private def hash_directory(path : String) : String
-      # Glob the tree once and reuse the list.
-      entries = Dir.glob("#{path}/**/*").sort
+      # Glob the tree once and reuse the list. Hidden entries count:
+      # an added/removed/changed .env must change the digest.
+      entries = Dir.glob(
+        "#{path}/**/*",
+        match: File::MatchOptions.glob_default | File::MatchOptions::DotFiles
+      ).sort
 
       return Digest::SHA1.hexdigest(entries.join("\n")) if @fast_dirs
 
