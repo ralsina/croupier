@@ -104,20 +104,20 @@
 ## Codebase review findings (2026-08)
 
 Findings from a thorough review. The high/correctness items (#1, #2) and
-the clear performance wins (#5, #6, #7) are being addressed on feature
-branches; the rest are recorded here for later.
+the clear performance wins (#5, #6, #7) all landed on main via
+squash-merged PRs (#15–#20); the rest are recorded here for later.
 
 ### Bugs / correctness
 
 * `#1` `use_persistent_store` never assigns `@_store_path`, so the "can't
   change path" guard is dead and a second call will crash casting a
   `FileStore` back to `MemoryStore`. Only works today because tests call
-  `cleanup` between scenarios. *(fixed on branch)*
+  `cleanup` between scenarios. *(fixed in #15)*
 * `#2` `_dependencies_impl` and `depends_on_impl` cache the *accumulating*
   result set rather than each node's own closure, so memoized entries
   over-approximate on diamond/DAG shapes. Still safe (runs extra tasks,
   never too few) because `dependencies()` re-selects against the graph,
-  but the memoization is incorrect as a per-node cache. *(fixed on branch)*
+  but the memoization is incorrect as a per-node cache. *(fixed in #16)*
 * ~~`#3` `sorted_task_graph` reaches into `@graph.@vertice_dict`
   (crystalline private ivar). Works but couples us to crystalline
   internals; an upstream rename would break the build opaquely.~~
@@ -161,11 +161,11 @@ branches; the rest are recorded here for later.
 * `#6` `scan_inputs` re-hashes every input file on every run (non-fast
   mode). Reuse hashes when `mtime+size` is unchanged, dedupe the double
   `Dir.glob`, and hash files in parallel (fiber-per-file batch like the
-  task runner). *(addressed on branch)*
+  task runner). *(addressed in #19; mtime+size hash reuse still open)*
 * `#7` Early-cutoff notification in `_run_tasks` / `_run_tasks_parallel`
   and `find_and_mark_dependents_fresh` is O(V) per output → O(V²·outs)
   per run. Reuse the `reverse_deps` map already built in
-  `propagate_staleness`. *(addressed on branch)*
+  `propagate_staleness`. *(fixed in #18)*
 * ~~`#10` `_run_tasks_parallel` reallocates a `Channel` + `WaitGroup` per
   wave; reusing the channel across waves would reduce churn.~~
   *(measured 2026-08-14: a wave's throwaways cost ~10µs total, i.e.
@@ -184,6 +184,6 @@ branches; the rest are recorded here for later.
 
 * `#5` `spec/testcases/empty/` leaves `file1`–`file5` + `.croupier`
   artifacts; `.gitignore` only covers `input*`/`output*`. Broaden the
-  ignore. *(fixed on branch)*
+  ignore. *(fixed in #17)*
 * `~2000` lines in `croupier_spec.cr` — consider splitting by topic.
 * Typo in comment `croupier.cr:33`: "SAH1" → "SHA1". *(fixed)*
