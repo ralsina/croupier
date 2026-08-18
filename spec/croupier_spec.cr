@@ -1042,6 +1042,43 @@ describe "TaskManager" do
         end
       end
 
+      it "should not run dependents of a failed task" do
+        with_scenario("empty", to_create: {"seed" => "x"}) do
+          downstream_runs = 0
+          Task.new(output: "up", inputs: ["seed"]) { raise "boom" }
+          Task.new(output: "down", inputs: ["up"]) {
+            downstream_runs += 1
+            "d"
+          }
+          Task.new(output: "side", inputs: ["seed"]) { "s" }
+
+          # keep_going: the failure doesn't abort the run...
+          TaskManager.run_tasks(parallel: parallel, keep_going: true)
+
+          # ...but the dependent of the failed task must not run against
+          # the missing output
+          downstream_runs.should eq 0
+          File.exists?("down").should be_false
+
+          # Unrelated tasks still ran
+          File.exists?("side").should be_true
+        end
+      end
+
+      it "should abort with the task failure when not using keep_going" do
+        with_scenario("empty", to_create: {"seed" => "x"}) do
+          Task.new(output: "up", inputs: ["seed"]) { raise "boom" }
+          Task.new(output: "down", inputs: ["up"]) { "d" }
+
+          # The failure itself must surface, not a "waiting for" message
+          # about the dependent blocked behind it
+          expect_raises(Exception, /boom/) do
+            TaskManager.run_tasks(parallel: parallel)
+          end
+          File.exists?("down").should be_false
+        end
+      end
+
       it "should run tasks in dependency order even if targets are not sorted" do
         with_scenario("empty") do
           # Register the consumer first, so tasks.keys (same size as the

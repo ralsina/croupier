@@ -902,7 +902,7 @@ module Croupier
     end
 
     # Internal helper to run tasks serially
-    def _run_tasks(
+    def _run_tasks( # ameba:disable Metrics/CyclomaticComplexity
       task_names,
       run_all : Bool = false,
       dry_run : Bool = false,
@@ -927,18 +927,30 @@ module Croupier
         next if finished.includes?(task)
         next unless task.stale? || run_all
         Log.debug { "Running task for #{task.outputs}" }
-        raise "Can't run task for #{task.outputs}: Waiting for #{task.waiting_for}" unless task.waiting_for.empty? || dry_run
+        unless task.waiting_for.empty? || dry_run
+          if keep_going
+            # Blocked behind a failure: skip it and keep going with
+            # the rest, like the parallel runner does
+            Log.warn { "Skipping task for #{task.outputs}: Waiting for #{task.waiting_for}" }
+            next
+          end
+          raise "Can't run task for #{task.outputs}: Waiting for #{task.waiting_for}"
+        end
+        failed = false
         begin
           task.run unless dry_run
           succeeded << task unless dry_run
         rescue ex
+          failed = true
           Log.error { "Error running task for #{task.outputs}: #{ex}" }
           raise ex unless keep_going
         end
         finished << task
 
-        # Early cutoff: if outputs didn't change, notify dependent tasks
-        if early_cutoff && !task.outputs_changed?
+        # Early cutoff: if a SUCCESSFUL task's outputs didn't change,
+        # notify dependent tasks (a failed task's outputs didn't
+        # change either, but its dependents must stay blocked)
+        if !failed && early_cutoff && !task.outputs_changed?
           Log.debug { "Early cutoff: #{task.id} outputs unchanged, notifying dependents" }
           task.outputs.each do |output|
             # Look up dependents via the cached reverse-deps map instead
@@ -1010,6 +1022,13 @@ module Croupier
         batch = stale_tasks.select(&.ready?(run_all)).uniq!.shuffle
 
         if batch.size == 0
+          if keep_going
+            # Everything left is blocked behind a failure (failed
+            # tasks stay stale, so their dependents never become
+            # ready): nothing more this run can do
+            Log.warn { "No runnable tasks left: #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}" }
+            break
+          end
           # No tasks are ready
           raise "Can't run tasks: Waiting for #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}"
         end
@@ -1060,8 +1079,11 @@ module Croupier
               errors << failure.message.to_s
               Log.error { "Task #{task.outputs} failed: #{failure.message}" }
             end
-            # Task is done, do not run again
-            task.stale = false
+            # Task is done, do not run again. Only successful tasks
+            # turn fresh: a failed one stays stale so its dependents
+            # keep waiting for it instead of running against a missing
+            # or half-written output
+            task.stale = !error.nil?
             finished_tasks << task
 
             # Early cutoff: if outputs didn't change, notify dependent tasks
@@ -1087,8 +1109,12 @@ module Croupier
           @data_mutex.synchronize { @parallel_wave_active = false }
           apply_pending_inputs
         end
+
+        # Without keep_going a failure ends the run right away, with
+        # the failure itself — not a "waiting for" message about the
+        # dependents now blocked behind it
+        raise errors.join("\n") unless errors.empty? || keep_going
       end
-      raise errors.join("\n") unless errors.empty? unless keep_going
       # See _run_tasks: a dry run must not consume the input changes
       return if dry_run
       drop_unfinished_inputs(task_names, finished_tasks - failed_tasks)
