@@ -727,6 +727,24 @@ describe "TaskManager" do
         end
       end
 
+      it "should not consume other tasks' input changes on a targeted run" do
+        with_scenario("empty", to_create: {"a_in" => "1", "b_in" => "1"}) do
+          Task.new(output: "a_out", inputs: ["a_in"]) { File.read("a_in") }
+          Task.new(output: "b_out", inputs: ["b_in"]) { File.read("b_in") }
+
+          TaskManager.run_tasks(parallel: parallel)
+          File.read("b_out").should eq "1"
+
+          # Targeted run of a_out's closure must not touch b's state
+          File.write("b_in", "2")
+          TaskManager.run_tasks(["a_out"], parallel: parallel)
+
+          # A later full run must still see b_in as modified and rebuild
+          TaskManager.run_tasks(parallel: parallel)
+          File.read("b_out").should eq "2"
+        end
+      end
+
       it "should run tasks in dependency order even if targets are not sorted" do
         with_scenario("empty") do
           # Register the consumer first, so tasks.keys (same size as the

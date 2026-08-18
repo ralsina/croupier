@@ -426,7 +426,7 @@ module Croupier
     # mtime scan is skipped as pure overhead. Content mode still scans
     # because @this_run feeds save_run and skipping it would make the
     # next incremental run rebuild everything.
-    def mark_stale_inputs(run_all : Bool = false)
+    def mark_stale_inputs(run_all : Bool = false, targets : Array(String)? = nil)
       # New run: the positive file-existence cache may be stale
       @existing_files.clear
       if auto_mode?
@@ -453,16 +453,39 @@ module Croupier
         @last_run = {} of String => String
       end
 
+      # A targeted run only scans the inputs of the tasks it may
+      # execute, instead of re-hashing every input of every registered
+      # task: unrelated inputs are left as recorded by the previous
+      # run, so a change to them is still detected by the next run
+      # that includes their tasks.
+      scan_scope = if targets
+                     scope = Set(String).new
+                     targets.each do |name|
+                       if task = tasks[name]?
+                         scope.concat task.@inputs
+                       end
+                     end
+                     scope
+                   else
+                     all_inputs
+                   end
+
       if @fast_mode
         unless run_all
-          all_inputs.each do |file|
+          scan_scope.each do |file|
             if info = File.info?(file)
               @modified << file if last_run_date < info.modification_time
             end
           end
         end
       else
-        (@this_run = scan_inputs).each do |file, sha1|
+        scanned = scan_inputs(scan_scope)
+        # Base @this_run on @last_run so hashes of inputs outside the
+        # scan scope survive into the state file save (dropping them
+        # would make the next full run treat those inputs as modified
+        # and rebuild everything).
+        @this_run = @last_run.merge(scanned)
+        scanned.each do |file, sha1|
           @modified << file if last_run.fetch(file, "") != sha1
         end
       end
@@ -471,17 +494,19 @@ module Croupier
       @modified |= kv_modifications.to_set
     end
 
-    # Scan all inputs and return a hash with their sha1.
+    # Scan the given inputs (all of them by default) and return a hash
+    # with their sha1.
     #
     # Plain files and the contents of directory inputs are hashed in
     # parallel (a pool of worker fibers bounded by CPU count), since both
     # the disk read and the hashing are independent per file.
-    def scan_inputs
+    def scan_inputs(scope : Set(String) | Nil = nil)
       hash = {} of String => String
+      inputs = scope || all_inputs
 
       # Partition inputs into files (hashable in parallel) and directories.
       file_inputs = [] of String
-      all_inputs.each do |path|
+      inputs.each do |path|
         if File.file? path
           file_inputs << path
         elsif File.directory? path
@@ -767,7 +792,7 @@ module Croupier
       keep_going : Bool = false,
       early_cutoff : Bool = true,
     )
-      mark_stale_inputs(run_all)
+      mark_stale_inputs(run_all, task_names)
       propagate_staleness(run_all)
 
       finished = Set(Task).new
@@ -837,10 +862,9 @@ module Croupier
       keep_going : Bool = false,
       early_cutoff : Bool = true,
     )
-      mark_stale_inputs(run_all)
-      propagate_staleness(run_all)
-
       task_names = tasks.keys if task_names.empty?
+      mark_stale_inputs(run_all, task_names)
+      propagate_staleness(run_all)
       _tasks = task_names.map { |name| tasks[name] }
       finished_tasks = Set(Task).new
       failed_tasks = Set(Task).new
