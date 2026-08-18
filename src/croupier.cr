@@ -191,9 +191,18 @@ module Croupier
     # start. It invalidates the graph and input caches so that next run
     # actually sees the new dependency.
     #
+    # While a parallel wave is executing, the addition is queued and
+    # applied by the coordinating fiber at the wave barrier: mutating a
+    # task's input set while the coordinator iterates it (readiness
+    # sweeps, early-cutoff staleness recomputes) would be a data race.
+    # Outside waves it is applied immediately.
+    #
     # Returns true if the input was added, false if the task already had
     # it. Raises if `task_key` is not a registered task, or if the input
     # is one of the task's own keys (that would be a cycle).
+    @pending_inputs = [] of {String, String}
+    @parallel_wave_active = false
+
     def add_input(task_key : String, input : String) : Bool
       @data_mutex.synchronize do
         task = tasks[task_key]?
@@ -201,10 +210,34 @@ module Croupier
         raise "Cycle detected" if task.keys.includes?(input)
         return false if task.inputs.includes?(input)
 
-        task.inputs << input
-        invalidate_graph_cache
+        if @parallel_wave_active
+          @pending_inputs << {task_key, input}
+        else
+          task.inputs << input
+          invalidate_graph_cache
+        end
         true
       end
+    end
+
+    # Apply queued add_input calls. Runs on the coordinating fiber at
+    # wave boundaries, when no worker can mutate task inputs
+    # concurrently with the iteration below.
+    private def apply_pending_inputs
+      pending = @data_mutex.synchronize do
+        swapped = @pending_inputs
+        @pending_inputs = [] of {String, String}
+        swapped
+      end
+      return if pending.empty?
+      pending.each do |task_key, input|
+        if task = tasks[task_key]?
+          # Set#<< is idempotent: duplicates queued during the wave
+          # collapse on their own
+          task.inputs << input
+        end
+      end
+      invalidate_graph_cache
     end
 
     # Use a persistent k/v store in this path instead of
@@ -999,52 +1032,60 @@ module Croupier
         # each outcome. They touch no shared bookkeeping: task staleness
         # is a single atomic field, and the TaskManager data they write
         # goes through @data_mutex-guarded accessors.
-        num_workers.times do
-          spawn do
-            loop do
-              task = task_queue.receive?
-              break unless task # Queue is empty, exit worker
+        @data_mutex.synchronize { @parallel_wave_active = true }
+        begin
+          num_workers.times do
+            spawn do
+              loop do
+                task = task_queue.receive?
+                break unless task # Queue is empty, exit worker
 
-              error : Exception? = nil
-              begin
-                task.run unless dry_run
-              rescue ex
-                error = ex
+                error : Exception? = nil
+                begin
+                  task.run unless dry_run
+                rescue ex
+                  error = ex
+                end
+                results.send({task, error})
               end
-              results.send({task, error})
             end
           end
-        end
 
-        # Collect every outcome. This loop is the wave barrier and the
-        # only writer of the bookkeeping state.
-        batch.size.times do
-          task, error = results.receive
-          if failure = error
-            failed_tasks << task
-            errors << failure.message.to_s
-            Log.error { "Task #{task.outputs} failed: #{failure.message}" }
-          end
-          # Task is done, do not run again
-          task.stale = false
-          finished_tasks << task
+          # Collect every outcome. This loop is the wave barrier and the
+          # only writer of the bookkeeping state.
+          batch.size.times do
+            task, error = results.receive
+            if failure = error
+              failed_tasks << task
+              errors << failure.message.to_s
+              Log.error { "Task #{task.outputs} failed: #{failure.message}" }
+            end
+            # Task is done, do not run again
+            task.stale = false
+            finished_tasks << task
 
-          # Early cutoff: if outputs didn't change, notify dependent tasks
-          if error.nil? && early_cutoff && !task.outputs_changed?
-            Log.debug { "Early cutoff: #{task.id} outputs unchanged, notifying dependents" }
-            task.outputs.each do |output|
-              # Look up dependents via the cached reverse-deps map instead
-              # of scanning every task for each output.
-              @reverse_deps.fetch(output, nil).try &.each do |dependent_key|
-                if other_task = tasks[dependent_key]?
-                  if other_task.stale?
-                    Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
-                    other_task.mark_dependency_fresh(output)
+            # Early cutoff: if outputs didn't change, notify dependent tasks
+            if error.nil? && early_cutoff && !task.outputs_changed?
+              Log.debug { "Early cutoff: #{task.id} outputs unchanged, notifying dependents" }
+              task.outputs.each do |output|
+                # Look up dependents via the cached reverse-deps map instead
+                # of scanning every task for each output.
+                @reverse_deps.fetch(output, nil).try &.each do |dependent_key|
+                  if other_task = tasks[dependent_key]?
+                    if other_task.stale?
+                      Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
+                      other_task.mark_dependency_fresh(output)
+                    end
                   end
                 end
               end
             end
           end
+        ensure
+          # Workers are done: queued add_input calls can be applied on
+          # this fiber, where nothing iterates the input sets concurrently
+          @data_mutex.synchronize { @parallel_wave_active = false }
+          apply_pending_inputs
         end
       end
       raise errors.join("\n") unless errors.empty? unless keep_going
