@@ -1516,6 +1516,7 @@ describe "TaskManager" do
         TaskManager.modified.empty?.should be_true
         File.open(".croupier", "w") do |f|
           f.puts(%({
+              "__version": "1",
               "input": "thisiswrong",
               "input2": "62cdb7020ff920e5aa642c3d4066950dd1f01f4d",
               "output3": "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
@@ -1538,13 +1539,14 @@ describe "TaskManager" do
         File.write("output4", "")
         File.write("output5", "")
         File.write(".croupier", YAML.dump({
-          "input"   => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
-          "input2"  => "62cdb7020ff920e5aa642c3d4066950dd1f01f4d",
-          "output1" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
-          "output2" => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
-          "output3" => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-          "output4" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
-          "output5" => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+          "__version" => "1",
+          "input"     => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
+          "input2"    => "62cdb7020ff920e5aa642c3d4066950dd1f01f4d",
+          "output1"   => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+          "output2"   => "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15",
+          "output3"   => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+          "output4"   => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+          "output5"   => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
         }))
         TaskManager.tasks.size.should eq 5
         TaskManager.mark_stale_inputs
@@ -1893,7 +1895,7 @@ describe "TaskManager" do
         TaskManager.this_run = {"foo" => "bar"}
         TaskManager.next_run = {"bat" => "quux"}
         TaskManager.save_run
-        File.read(".croupier").should eq %(---\nfoo: bar\nbat: quux\n)
+        File.read(".croupier").should eq %(---\n__version: "1"\nfoo: bar\nbat: quux\n)
       end
     end
 
@@ -1901,6 +1903,7 @@ describe "TaskManager" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         TaskManager.run_tasks
         File.read(".croupier").should eq "---\n" +
+                                         "__version: \"1\"\n" +
                                          "input: 0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33\n" +
                                          "input2: 62cdb7020ff920e5aa642c3d4066950dd1f01f4d\n" +
                                          "output3: da39a3ee5e6b4b0d3255bfef95601890afd80709\n" +
@@ -2735,6 +2738,58 @@ describe "TaskManager" do
         File.read("file2").should eq "HELLO"
         File.read("file4").should eq "EARTH"
         File.read("file5").should eq "HELLO_EARTH"
+      end
+    end
+  end
+
+  describe "state file" do
+    it "should recover from a corrupted state file" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        runs = 0
+        Task.new(output: "out", inputs: ["seed"]) {
+          runs += 1
+          "d"
+        }
+        TaskManager.run_tasks
+        runs.should eq 1
+
+        # A crash mid-write leaves a truncated state file: the next run
+        # must recover by treating everything as modified, not raise
+        File.write(".croupier", "{{{ not yaml")
+        TaskManager.run_tasks
+        runs.should eq 2
+      end
+    end
+
+    it "should version the state file and discard older formats" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        runs = 0
+        Task.new(output: "out", inputs: ["seed"]) {
+          runs += 1
+          "d"
+        }
+        TaskManager.run_tasks
+        runs.should eq 1
+
+        # The saved state carries a schema version
+        YAML.parse(File.read(".croupier"))["__version"]?.should_not be_nil
+
+        # A state file without it (as written by older croupiers) is
+        # discarded even if the hashes look current: comparing hashes
+        # computed by a different scheme would silently skip rebuilds
+        state = {"seed" => Digest::SHA1.hexdigest(File.read("seed"))}
+        File.write(".croupier", YAML.dump(state))
+        TaskManager.run_tasks
+        runs.should eq 2
+      end
+    end
+
+    it "should not leave temporary files behind" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        Task.new(output: "out", inputs: ["seed"]) { "d" }
+        TaskManager.run_tasks
+        File.exists?(".croupier").should be_true
+        File.exists?(".croupier.tmp").should be_false
       end
     end
   end

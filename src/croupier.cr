@@ -543,9 +543,7 @@ module Croupier
 
       if File.exists? @state_file
         last_run_date = File.info(@state_file).modification_time
-        @last_run = File.open(@state_file) do |file|
-          YAML.parse(file).as_h.map { |k, v| [k.to_s, v.to_s] }.to_h
-        end
+        @last_run = load_state_file
       else
         last_run_date = Time.utc # Now
         @last_run = {} of String => String
@@ -735,11 +733,35 @@ module Croupier
       {% end %}
     end
 
-    # We ran all tasks, store the current state
+    # Version of the state-file schema, stored as __version. A
+    # mismatch (including files written before versioning existed)
+    # discards all recorded hashes: one full rebuild instead of
+    # silently comparing hashes computed by a different scheme (the
+    # directory digest already changed shape once).
+    STATE_VERSION = "1"
+
+    # We ran all tasks, store the current state. Written to a
+    # temporary file and renamed into place, so a crash mid-write
+    # can't leave a truncated state file behind.
     def save_run
-      File.open(@state_file, "w") do |file|
-        file << YAML.dump(this_run.merge next_run)
+      File.open("#{@state_file}.tmp", "w") do |file|
+        file << YAML.dump({"__version" => STATE_VERSION}.merge(this_run.merge(next_run)))
       end
+      File.rename("#{@state_file}.tmp", @state_file)
+    end
+
+    # Read the state file, guarding against corruption and schema
+    # drift: anything unexpected means we know nothing about the
+    # previous run, which makes every input look modified (a full
+    # rebuild) — safe, and self-healing on the next save.
+    private def load_state_file : Hash(String, String)
+      parsed = YAML.parse(File.read(@state_file)).as_h
+      return {} of String => String if parsed["__version"]?.try(&.to_s) != STATE_VERSION
+      parsed.reject! { |key, _| key.to_s == "__version" }
+        .map { |key, value| {key.to_s, value.to_s} }.to_h
+    rescue ex : YAML::ParseException
+      Log.warn { "State file #{@state_file} is corrupted (#{ex.message}), rebuilding everything" }
+      {} of String => String
     end
 
     # Propagate staleness through the task graph in a single forward pass.
