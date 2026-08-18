@@ -702,6 +702,32 @@ describe "TaskManager" do
         end
       end
 
+      it "should run tasks in dependency order even if targets are not sorted" do
+        with_scenario("empty") do
+          # Register the consumer first, so tasks.keys (same size as the
+          # registry) is NOT in topological order: that must not bypass
+          # the topological sort (issue #23)
+          Task.new(output: "downstream", inputs: ["upstream"]) { "downstream data" }
+          Task.new(output: "upstream", inputs: [] of String) { "upstream data" }
+
+          TaskManager.run_tasks(TaskManager.tasks.keys, parallel: parallel)
+
+          File.read("upstream").should eq "upstream data"
+          File.read("downstream").should eq "downstream data"
+        end
+      end
+
+      it "should reject unknown targets even when their count matches the registry size" do
+        with_scenario("empty") do
+          Task.new(output: "out", inputs: [] of String) { "data" }
+          # 1 target, 1 registered task: the size check alone would take
+          # the fast path and silently skip the unknown target (issue #23)
+          expect_raises(Exception, "Unknown output bogus") do
+            TaskManager.run_tasks(["bogus"], parallel: parallel)
+          end
+        end
+      end
+
       it "should run tasks downstream of an input-less task" do
         with_scenario("empty") do
           Task.new(output: "upstream", inputs: [] of String) { "upstream data" }

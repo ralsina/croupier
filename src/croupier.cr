@@ -656,9 +656,13 @@ module Croupier
       keep_going : Bool = false,
       early_cutoff : Bool? = nil,
     )
-      # Optimization: if targets already contains all tasks (from sorted_task_graph),
-      # skip the expensive dependencies() call since they're already in correct order
-      if targets.size == tasks.size
+      # Optimization: if targets already contains all tasks in sorted-graph
+      # order, skip the expensive dependencies() call. The element-wise
+      # comparison matters: matching only sizes would let an unsorted list
+      # of the same length (e.g. tasks.keys, which is registration order)
+      # bypass the topological sort, and unknown targets would be silently
+      # dropped instead of raising.
+      if targets == sorted_task_graph[1]
         Log.debug { "Skipping dependencies() call, targets already contain all #{targets.size} tasks" }
         task_names = targets
       else
