@@ -1041,6 +1041,17 @@ describe "TaskManager" do
         TaskManager.depends_on("input").should eq Set.new(["output3", "output4"])
       end
     end
+
+    it "should return the transitive dependents on a diamond" do
+      with_scenario("empty", to_create: {"i" => "data"}) do
+        Task.new(output: "o_a", inputs: ["i"]) { "a" }
+        Task.new(output: "o_b", inputs: ["i"]) { "b" }
+        Task.new(output: "o_c", inputs: ["o_a", "o_b"]) { "c" }
+
+        TaskManager.depends_on("i").should eq Set.new(["o_a", "o_b", "o_c"])
+        TaskManager.depends_on(["o_a", "o_b"]).should eq Set.new(["o_c"])
+      end
+    end
   end
 
   describe "scan_inputs" do
@@ -1982,8 +1993,7 @@ describe "TaskManager" do
         TaskManager.run_tasks
 
         # Check that graph rebuild flag was set
-        flag = TaskManager.get("__croupier_graph_rebuild_needed")
-        flag.should eq "true"
+        TaskManager.@graph_invalidated.should be_true
       end
     end
 

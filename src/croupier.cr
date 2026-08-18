@@ -160,9 +160,7 @@ module Croupier
         return false if task.inputs.includes?(input)
 
         task.inputs << input
-        # The no-store variant: the store write in invalidate_graph_cache
-        # would re-enter @data_mutex and deadlock.
-        invalidate_graph_cache_no_store
+        invalidate_graph_cache
         true
       end
     end
@@ -205,16 +203,12 @@ module Croupier
       invalidate_graph_cache
     end
 
-    # Invalidate the cached task graph
+    # Invalidate the cached task graph. Only touches in-memory state:
+    # @graph_invalidated is what auto_run consults, so there is no
+    # reason to round-trip a flag through the k/v store (which, with a
+    # persistent store, meant a disk write per invalidation and a disk
+    # read per auto cycle).
     def invalidate_graph_cache
-      @graph_invalidated = true
-      @all_inputs.clear
-      # Don't use set() here to avoid triggering auto_run loops
-      @_store.set("__croupier_graph_rebuild_needed", "true")
-    end
-
-    # Invalidate the graph cache without setting k/v (for internal use from Task.initialize)
-    def invalidate_graph_cache_no_store
       @graph_invalidated = true
       @all_inputs.clear
     end
@@ -266,8 +260,6 @@ module Croupier
         @graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
         @graph_sorted = [] of String
         @graph_invalidated = false
-        # Don't use set() here to avoid triggering auto_run loops
-        @_store.set("__croupier_graph_rebuild_needed", "false")
         # Clear all_inputs cache so it gets rebuilt with new subtask inputs
         @all_inputs.clear
 
@@ -377,7 +369,23 @@ module Croupier
     end
 
     def depends_on(inputs : Array(String))
-      depends_on_impl(inputs, {} of String => Set(String))
+      depends_on_impl(inputs, {} of String => Set(String), consumers_index)
+    end
+
+    # input -> tasks consuming it, built in one pass so depends_on
+    # doesn't rescan every registered task for every queried input.
+    private def consumers_index
+      consumers = Hash(String, Array(Task)).new
+      tasks.each_value do |task|
+        task.@inputs.each do |input|
+          if bucket = consumers[input]?
+            bucket << task
+          else
+            consumers[input] = [task]
+          end
+        end
+      end
+      consumers
     end
 
     # Memoized implementation of depends_on
@@ -385,7 +393,11 @@ module Croupier
     # consume it, plus their closures) is cached independently, so a
     # memoized entry never includes contributions from other inputs
     # processed earlier in the same call.
-    private def depends_on_impl(inputs : Array(String), memo : Hash(String, Set(String)))
+    private def depends_on_impl(
+      inputs : Array(String),
+      memo : Hash(String, Set(String)),
+      consumers : Hash(String, Array(Task)),
+    )
       result = Set(String).new
       inputs.each do |input|
         # Return cached result if available
@@ -397,11 +409,9 @@ module Croupier
         # Compute this input's *own* closure into a local set: for every
         # task that consumes `input`, add its outputs and their closures.
         node_result = Set(String).new
-        TaskManager.tasks.values.each do |t|
-          if t.@inputs.includes?(input)
-            node_result.concat t.outputs
-            node_result.concat(depends_on_impl(t.outputs, memo))
-          end
+        consumers.fetch(input, nil).try &.each do |task|
+          node_result.concat task.outputs
+          node_result.concat(depends_on_impl(task.outputs, memo, consumers))
         end
         memo[input] = node_result
         result.concat(node_result)
@@ -424,8 +434,6 @@ module Croupier
         # But we still need to update @this_run so hashes are saved to state file
         @this_run = scan_inputs
         # The watcher has already populated @modified with changed files
-        # Just ensure it's a Set
-        @modified = Set.new(@modified) unless @modified.is_a?(Set(String))
         return
       end
 
@@ -543,7 +551,7 @@ module Croupier
           loop do
             path = task_queue.receive?
             break unless path
-            result_queue.send({path, Digest::SHA1.hexdigest(File.read(path))})
+            result_queue.send({path, hash_file(path)})
           end
         end
       end
@@ -553,6 +561,21 @@ module Croupier
         hash[path] = sha1
       end
       hash
+    end
+
+    # Hash a file's contents by streaming it in chunks, so a large input
+    # doesn't have to be buffered in memory whole. An unreadable file
+    # still raises from File.open, same as File.read did.
+    private def hash_file(path : String) : String
+      File.open(path) do |file|
+        digest = Digest::SHA1.new
+        buffer = Bytes.new(64 * 1024)
+        while read = file.read(buffer)
+          break if read == 0
+          digest.update(buffer[0, read])
+        end
+        digest.hexfinal
+      end
     end
 
     # Resize the default fiber execution context so worker fibers spread
@@ -964,14 +987,11 @@ module Croupier
               sleep 0.01.seconds
               next if @queued_changes.empty? && @modified.empty?
               Log.info { "Detected changes in #{@queued_changes}" }
-              # Mark all targets as stale
-              targets.each { |t| tasks[t].stale = true }
+              # No need to mark targets stale here: propagate_staleness,
+              # called at the start of every run, resets every task's
+              # staleness from scratch.
               @modified += @queued_changes
               Log.debug { "Modified: #{@modified}" }
-              # Check for graph rebuild flag before running tasks
-              if TaskManager.get("__croupier_graph_rebuild_needed") == "true"
-                @graph_invalidated = true
-              end
               # Call the before_run_hook if set, passing the changed files
               before_run_hook.call(@modified.dup) unless @modified.empty?
               # Run tasks - if master tasks create new subtasks, the graph

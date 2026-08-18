@@ -137,7 +137,7 @@ module Croupier
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
 
       # Invalidate graph cache since we added/modified a task
-      TaskManager.invalidate_graph_cache_no_store
+      TaskManager.invalidate_graph_cache
     end
 
     def initialize(
