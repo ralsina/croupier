@@ -230,6 +230,30 @@ describe "Task" do
       end
     end
 
+    it "should leave the registry untouched when a multi-way merge fails" do
+      with_scenario("empty") do
+        e1_proc = TaskProc.new { "e1" }
+        e2_proc = TaskProc.new { "e2" }
+        e1 = Task.new("o1", [] of String, e1_proc, no_save: true)
+        e2 = Task.new("o2", [] of String, e2_proc, no_save: true)
+
+        # E1 and E2 are compatible with each other but not with the new
+        # task, so the reduce merges E1+E2 first (mutating E1 in place)
+        # and only then raises
+        expect_raises(Exception, "different no_save settings") do
+          Task.new(["o1", "o2"], [] of String, TaskProc.new { "n" }, no_save: false)
+        end
+
+        # The registry must be exactly as it was before the failed merge
+        TaskManager.tasks["o1"].should eq e1
+        TaskManager.tasks["o2"].should eq e2
+        e1.@outputs.should eq ["o1"]
+        e1.@inputs.should eq Set.new([] of String)
+        e1.@procs.should eq [e1_proc]
+        e2.@procs.should eq [e2_proc]
+      end
+    end
+
     it "should add the effects of the merged task to the first one" do
       with_scenario("empty") do
         proc1 = TaskProc.new { File.open("1", "w") << ""; "foo" }

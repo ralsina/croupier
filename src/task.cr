@@ -133,6 +133,19 @@ module Croupier
       # are not mergeable
       raise "Can't merge task #{self} with #{to_merge[..-2].map(&.to_s)}" \
         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
+      # Check flag compatibility across the WHOLE set before the first
+      # merge: merge mutates the live first task in place, so a reduce
+      # that fails partway (3+ colliding tasks) would leave the earlier
+      # merges applied and the registry corrupted. Same checks and
+      # messages as Task#merge, which still re-checks pairwise.
+      if to_merge.size > 1
+        first = to_merge.first
+        to_merge.each do |task|
+          raise "Cannot merge tasks with different no_save settings" unless task.no_save? == first.no_save?
+          raise "Cannot merge tasks with different always_run settings" unless task.always_run? == first.always_run?
+          raise "Cannot merge master task with non-master task" unless task.master_task? == first.master_task?
+        end
+      end
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
 
