@@ -282,6 +282,14 @@ module Croupier
           end
         end
 
+        # Register every mentioned vertex as a key so leaves show up
+        # with empty sets, matching the shape callers expect (the sort
+        # itself no longer registers vertices as a side effect of
+        # reading them)
+        @graph.values.flat_map(&.to_a).each do |vertex|
+          @graph[vertex]
+        end
+
         # Only return tasks, not inputs in the sorted graph
         @graph_sorted = topological_sort(@graph).select { |v| tasks.has_key? v }
       end

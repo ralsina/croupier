@@ -696,7 +696,17 @@ describe "TaskManager" do
         g, s = TaskManager.sorted_task_graph
         g.should eq expected
         s.size.should eq TaskManager.tasks.size
-        s.should eq ["output3", "output4", "output5", "output1", "output2"]
+        # The exact order among independent tasks is unspecified (it
+        # only needs to be deterministic); what matters is that every
+        # task comes after its dependencies
+        positions = s.map_with_index { |name, index| {name, index} }.to_h
+        TaskManager.tasks.each_value do |task|
+          task.inputs.each do |input|
+            if TaskManager.tasks.has_key?(input)
+              (positions[input] < positions[task.keys.first]).should be_true
+            end
+          end
+        end
       end
     end
 
@@ -707,6 +717,48 @@ describe "TaskManager" do
           TaskManager.sorted_task_graph
         end
       end
+    end
+  end
+
+  describe "topological_sort" do
+    it "reports unreachable vertices instead of claiming a cycle" do
+      graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
+      graph["start"] << "a"
+      # An acyclic island the DFS from "start" never sees
+      graph["island"] << "island2"
+
+      expect_raises(Exception, /unreachable.*island/i) do
+        topological_sort(graph)
+      end
+    end
+
+    it "still reports a cycle among unreachable vertices" do
+      graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
+      graph["start"] << "a"
+      graph["x"] << "y"
+      graph["y"] << "x"
+
+      expect_raises(Exception, "Cycle detected") do
+        topological_sort(graph)
+      end
+    end
+
+    it "accepts plain hashes without a default block" do
+      graph = {"start" => Set{"a"}} of String => Set(String)
+
+      topological_sort(graph).should contain "a"
+    end
+
+    it "visits siblings in a deterministic order" do
+      graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
+      graph["start"] << "b"
+      graph["start"] << "a"
+      graph["start"] << "c"
+
+      # Sorted adjacency: the exact sibling order is part of the
+      # contract, so a stdlib hash-layout change can't silently
+      # reshuffle serial run order
+      topological_sort(graph).should eq ["start", "a", "b", "c"]
     end
   end
 
@@ -950,12 +1002,17 @@ describe "TaskManager" do
           with_scenario("empty") do
             b = TaskProc.new { raise "foo" }
             Task.new(["output2"], proc: b)
-            Task.new(["output1"])
+            Task.new(["output1"], proc: TaskProc.new { "foo" })
+            # Downstream of the failure: must not run before output2
+            Task.new(["output3"], ["output2"] of String, TaskProc.new {
+              File.write("downstream_ran", "")
+              ""
+            })
             expect_raises(Exception, "Task 052cd9c::output2 failed: foo") do
               TaskManager.run_tasks
             end
-            # It should never have executed the second task
-            File.exists?("output1").should be_false
+            # The dependent of the failing task never executed
+            File.exists?("downstream_ran").should be_false
           end
         end
       end
