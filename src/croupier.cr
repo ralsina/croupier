@@ -1234,9 +1234,16 @@ task_names,
               # will be invalidated and we need to run again to execute them
               initial_task_count = tasks.size
               run_tasks(targets: targets, parallel: false)
-              # If new tasks were created (graph was invalidated), run again
+              # If new tasks were created (graph was invalidated), run
+              # again with the expanded graph
               if @graph_invalidated || tasks.size > initial_task_count
                 targets = tasks.keys
+                # And re-watch: the new subtasks' inputs were not
+                # known when watch() was last called, so changes to
+                # them would be invisible to the watcher
+                {% if flag?(:linux) %}
+                  watch(targets)
+                {% end %}
                 run_tasks(targets: targets, parallel: false)
               end
               # Only clean queued changes after a successful run

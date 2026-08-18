@@ -1622,6 +1622,36 @@ describe "TaskManager" do
   end
 
   describe "auto_run" do
+    it "should watch inputs of subtasks created during auto_run" do
+      with_scenario("empty", to_create: {"seed" => "one"}) do
+        # The master creates a subtask whose input does not exist yet
+        # when auto_run starts watching
+        Task.new(output: "master_out", inputs: ["seed"], master_task: true) do
+          File.write("sub_input", "1")
+          Task.new(output: "sub_out", inputs: ["sub_input"]) { File.read("sub_input") }
+          "master data"
+        end
+
+        TaskManager.auto_run
+        Fiber.yield
+        # A change to the master's input triggers a cycle that creates
+        # the subtask and runs it
+        File.write("seed", "two")
+        sleep 0.3.seconds
+        Fiber.yield
+        File.read("sub_out").should eq "1"
+
+        # The subtask's input was not known when auto_run started
+        # watching: without re-watching, changes to it are invisible
+        File.write("sub_input", "2")
+        sleep 0.3.seconds
+        Fiber.yield
+        File.read("sub_out").should eq "2"
+
+        TaskManager.auto_stop
+      end
+    end
+
     it "should run tasks when inputs change" do
       with_scenario("basic") do
         TaskManager.auto_run
