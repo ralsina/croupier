@@ -1012,6 +1012,36 @@ describe "TaskManager" do
         end
       end
 
+      it "should retry failed tasks on the next run when using keep_going" do
+        with_scenario("empty", to_create: {"seed" => "one"}) do
+          broken = false
+          runs = 0
+          Task.new(output: "out", inputs: ["seed"]) {
+            runs += 1
+            raise "boom" if broken
+            File.read("seed")
+          }
+
+          # First run succeeds and records the input hash
+          TaskManager.run_tasks(parallel: parallel)
+          runs.should eq 1
+
+          # Input changes and the task fails, but keep_going lets the
+          # run (and the state save) finish
+          File.write("seed", "two")
+          broken = true
+          TaskManager.run_tasks(parallel: parallel, keep_going: true)
+          runs.should eq 2
+
+          # Repaired: the next run must still see the input as
+          # modified (the failed run must not have consumed it)
+          broken = false
+          TaskManager.run_tasks(parallel: parallel)
+          runs.should eq 3
+          File.read("out").should eq "two"
+        end
+      end
+
       it "should run tasks in dependency order even if targets are not sorted" do
         with_scenario("empty") do
           # Register the consumer first, so tasks.keys (same size as the

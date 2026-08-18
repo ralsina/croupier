@@ -880,6 +880,7 @@ module Croupier
       propagate_staleness(run_all)
 
       finished = Set(Task).new
+      succeeded = Set(Task).new
 
       # Single pass: no intermediate name→task arrays, and staleness is
       # decided at visit time so tasks marked fresh by early cutoff are
@@ -896,6 +897,7 @@ module Croupier
         raise "Can't run task for #{task.outputs}: Waiting for #{task.waiting_for}" unless task.waiting_for.empty? || dry_run
         begin
           task.run unless dry_run
+          succeeded << task unless dry_run
         rescue ex
           Log.error { "Error running task for #{task.outputs}: #{ex}" }
           raise ex unless keep_going
@@ -923,7 +925,9 @@ module Croupier
       # A dry run reports what would happen without doing it: persisting
       # the scanned input hashes would consume the changes so the next
       # real run would find nothing to do.
-      save_run unless dry_run
+      return if dry_run
+      drop_unfinished_inputs(task_names, succeeded)
+      save_run
     end
 
     # Internal helper to run tasks concurrently.
@@ -1045,7 +1049,32 @@ module Croupier
       end
       raise errors.join("\n") unless errors.empty? unless keep_going
       # See _run_tasks: a dry run must not consume the input changes
-      save_run unless dry_run
+      return if dry_run
+      drop_unfinished_inputs(task_names, finished_tasks - failed_tasks)
+      save_run
+    end
+
+    # Revert the scanned input hashes of tasks that did not complete
+    # this run (failed, or blocked behind a failure) to what the
+    # previous run recorded: keeping their new hashes would tell the
+    # next run nothing changed, so they would never retry. Unchanged
+    # inputs of fresh-but-not-run tasks revert to identical values, so
+    # this never spuriously re-stales them; an input never recorded
+    # before is dropped so it reads as modified next time. Inputs
+    # shared with successfully-completed tasks may re-run those too:
+    # safe, just extra work.
+    private def drop_unfinished_inputs(task_names, succeeded : Set(Task))
+      task_names.each do |name|
+        next unless task = tasks[name]?
+        next if succeeded.includes?(task)
+        task.@inputs.each do |input|
+          if previous = last_run[input]?
+            this_run[input] = previous
+          else
+            this_run.delete(input)
+          end
+        end
+      end
     end
 
     @autorun_control = Channel(Bool).new
