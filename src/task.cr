@@ -160,8 +160,10 @@ outputs : Array(String) = [] of String,
       # duplicate would make remove_subtasks delete unrelated tasks.
       # (Output-less tasks may still merge under a shared id, and a
       # collision with a merge target is fine: one task, one id.)
+      # The check goes through TaskManager's id index: scanning every
+      # registered task made creation O(N^2) overall.
       if id && !@outputs.empty?
-        if conflict = TaskManager.tasks.values.find { |t| t.id == id }
+        if conflict = TaskManager.tasks_by_id[id]?
           unless to_merge.includes?(conflict)
             raise "Task id #{id} is already used by #{conflict}"
           end
@@ -183,6 +185,12 @@ outputs : Array(String) = [] of String,
       end
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
+      # Keep the id index in step: merged tasks share the survivor's
+      # id, and absorbed tasks drop out of the registry entirely, so
+      # their index entries must go or a later task reusing such an
+      # id would falsely conflict
+      to_merge.each { |t| TaskManager.tasks_by_id.delete(t.id) unless t == reduced }
+      TaskManager.tasks_by_id[reduced.id] = reduced
 
       # Invalidate graph cache since we added/modified a task
       TaskManager.invalidate_graph_cache

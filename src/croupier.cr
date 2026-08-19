@@ -52,6 +52,11 @@ module Croupier
     property before_run_hook : Proc(Set(String), Nil) = ->(_changes : Set(String)) { }
     # A hash of mutexes required by tasks
     property mutexes = {} of String => Sync::Mutex
+    # Task id -> task index so the per-creation duplicate-id check is
+    # O(1) instead of a linear scan over every registered task (which
+    # made creating N tasks O(N^2); a 4000-task site spent ~200ms in
+    # the scan alone)
+    property tasks_by_id = {} of String => Task
     @graph_invalidated : Bool = false
 
     def add_mutex(name : String)
@@ -99,10 +104,17 @@ module Croupier
     @store_cache = Hash(String, String).new
     @store_misses = Set(String).new
 
-    # Guards the shared data containers (@_store, modified, next_run,
-    # last_run), which parallel task workers mutate and read from
-    # multiple OS threads.
+    # Guards the shared data containers, which parallel task workers
+    # mutate and read from multiple OS threads. Split by concern so
+    # hot paths don't contend on one lock (see the 0.14 performance
+    # report): store trio, run hashes, modified set, existing-files
+    # cache each get their own; @data_mutex stays for the rare paths
+    # (mutex registry fallback, pending-input queue, wave flag).
     @data_mutex = Sync::Mutex.new
+    @store_lock = Sync::Mutex.new
+    @hashes_lock = Sync::Mutex.new
+    @modified_lock = Sync::Mutex.new
+    @files_lock = Sync::Mutex.new
 
     # Store a value, returning whether it CHANGED: a same-value set is a
     # no-op for staleness, so kv outputs holding identical values don't
@@ -110,18 +122,18 @@ module Croupier
     def set(key, value) : Bool
       Log.debug { "Setting k/v data for #{key}" }
       changed = false
-      @data_mutex.synchronize do
+      @store_lock.synchronize do
         changed = store_read(key) != value
         @_store.set(key, value)
         @store_cache[key] = value
         @store_misses.delete(key)
-        @modified << "kv://#{key}" if changed
       end
+      @modified_lock.synchronize { @modified << "kv://#{key}" } if changed
       changed
     end
 
     def get(key)
-      @data_mutex.synchronize { store_read(key) }
+      @store_lock.synchronize { store_read(key) }
     end
 
     # Unsynchronized read-through lookup (callers hold @data_mutex).
@@ -142,19 +154,19 @@ module Croupier
     # Record the hash of a task output for the next run's state file.
     # Thread-safe for parallel task workers.
     def record_output_hash(output : String, new_hash : String) : Nil
-      @data_mutex.synchronize { next_run[output] = new_hash }
+      @hashes_lock.synchronize { next_run[output] = new_hash }
     end
 
     # The hash recorded for `output` by the last completed run, if any.
     def previous_output_hash(output : String) : String | Nil
-      @data_mutex.synchronize { last_run[output]? }
+      @hashes_lock.synchronize { last_run[output]? }
     end
 
     # Record `new_hash` for `output` and return the hash the last run
     # recorded for it, in a single locked step: task workers call this
     # once per output instead of a record-then-previous round-trip.
     def swap_output_hash(output : String, new_hash : String) : String | Nil
-      @data_mutex.synchronize do
+      @hashes_lock.synchronize do
         previous = last_run[output]?
         next_run[output] = new_hash
         previous
@@ -163,7 +175,7 @@ module Croupier
 
     # Whether `key` (a file or kv:// key) was modified since the last run.
     def modified?(key : String) : Bool
-      @data_mutex.synchronize { modified.includes?(key) }
+      @modified_lock.synchronize { modified.includes?(key) }
     end
 
     # Files known to exist during the current run, so readiness sweeps
@@ -183,9 +195,9 @@ module Croupier
     # still found), and racing inserters of the same path are
     # idempotent.
     def file_exists?(path : String) : Bool
-      return true if @data_mutex.synchronize { @existing_files.includes?(path) }
+      return true if @files_lock.synchronize { @existing_files.includes?(path) }
       if File.exists?(path)
-        @data_mutex.synchronize { @existing_files << path }
+        @files_lock.synchronize { @existing_files << path }
         true
       else
         false
@@ -285,7 +297,11 @@ module Croupier
         tasks.each do |key, task|
           keys_to_delete << key if master.subtask_ids.includes?(task.id)
         end
-        keys_to_delete.each { |key| tasks.delete(key) }
+        keys_to_delete.each do |key|
+          if task = tasks.delete(key)
+            tasks_by_id.delete(task.id)
+          end
+        end
         master.subtask_ids.clear
       end
 
@@ -306,6 +322,7 @@ module Croupier
     def cleanup
       modified.clear
       tasks.clear
+      tasks_by_id.clear
       # Stop the autorun fiber first, so it doesn't fire runs against
       # the cleared manager halfway through cleanup
       auto_stop
@@ -1140,7 +1157,8 @@ task_names,
           raise "Can't run tasks: Waiting for #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}"
         end
 
-        # Use work-stealing approach for better load balancing
+        # Keep a small worker pool (each fiber is a stack the GC must
+        # scan, so thousands of fibers are counterproductive)
         num_workers = Math.min(System.cpu_count, batch.size)
         enable_parallelism(num_workers)
         task_queue = Channel(Task).new(batch.size)
@@ -1154,8 +1172,7 @@ task_names,
 
         Log.debug { "Starting work-stealing execution of #{batch.size} tasks with #{num_workers} workers" }
 
-        # Create worker fibers that pull tasks from the queue and report
-        # each outcome. They touch no shared bookkeeping: task staleness
+        # Worker fibers touch no shared bookkeeping: task staleness
         # is a single atomic field, and the TaskManager data they write
         # goes through @data_mutex-guarded accessors.
         @data_mutex.synchronize { @parallel_wave_active = true }
@@ -1179,6 +1196,7 @@ task_names,
 
           # Collect every outcome. This loop is the wave barrier and the
           # only writer of the bookkeeping state.
+          _consume_done = 0
           batch.size.times do
             task, error = results.receive
             if failure = error
