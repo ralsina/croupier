@@ -1075,13 +1075,17 @@ task_names,
         # notify dependent tasks (a failed task's outputs didn't
         # change either, but its dependents must stay blocked)
         if !failed && early_cutoff && !task.outputs_changed?
-          Log.debug { "Early cutoff: #{task.id} outputs unchanged, notifying dependents" }
+          notified = false
           task.outputs.each do |output|
             # Look up dependents via the cached reverse-deps map instead
             # of scanning every task for each output.
             @reverse_deps.fetch(output, nil).try &.each do |dependent_key|
               if other_task = tasks[dependent_key]?
                 if other_task.stale?
+                  unless notified
+                    Log.debug { "Early cutoff: #{task.id} outputs unchanged, notifying dependents" }
+                    notified = true
+                  end
                   Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
                   other_task.mark_dependency_fresh(output)
                 end
@@ -1213,13 +1217,17 @@ task_names,
 
             # Early cutoff: if outputs didn't change, notify dependent tasks
             if error.nil? && early_cutoff && !task.outputs_changed?
-              Log.debug { "Early cutoff: #{task.id} outputs unchanged, notifying dependents" }
+              notified = false
               task.outputs.each do |output|
                 # Look up dependents via the cached reverse-deps map instead
                 # of scanning every task for each output.
                 @reverse_deps.fetch(output, nil).try &.each do |dependent_key|
                   if other_task = tasks[dependent_key]?
                     if other_task.stale?
+                      unless notified
+                        Log.debug { "Early cutoff: #{task.id} outputs unchanged, notifying dependents" }
+                        notified = true
+                      end
                       Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
                       other_task.mark_dependency_fresh(output)
                     end
