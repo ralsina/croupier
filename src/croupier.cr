@@ -1422,6 +1422,16 @@ task_names,
 
         return unless watcher = @@watcher
 
+        # Prefix matching runs on every filesystem event, so the
+        # normalized forms (trailing slash, "dir/" matches everything
+        # under dir) are computed once here instead of allocating a
+        # string per watched input per event. Exact matches need no
+        # preprocessing: target_inputs is a Set, already O(1).
+        prefix_inputs = target_inputs.map do |input|
+          normalized = input.ends_with?("/") ? input : "#{input}/"
+          {normalized, input}
+        end
+
         # Define watch flags before event handler so it's accessible in the closure
         watch_flags = LibInotify::IN_DELETE |
                       LibInotify::IN_CREATE |
@@ -1469,14 +1479,13 @@ task_names,
             Log.debug { "Detected change in #{path} (exact match)" }
             matched = true
           else
-            target_inputs.each do |input|
-              # Check if path starts with input followed by a slash (or input is exactly the path)
-              # Need to handle trailing slash in input properly
-              input_normalized = input.ends_with?("/") ? input : "#{input}/"
-              if path.starts_with?(input_normalized) || path == input
-                # If we are watching a folder in path, add the folder to the queue
+            prefix_inputs.each do |normalized, input|
+              # If we are watching a folder in path, add the folder to
+              # the queue. A path equal to an input was already caught
+              # by the exact match above.
+              if path.starts_with?(normalized)
                 @queued_changes << input
-                Log.debug { "Detected change in #{input} (prefix match: #{path} starts with #{input_normalized})" }
+                Log.debug { "Detected change in #{input} (prefix match: #{path} starts with #{normalized})" }
                 matched = true
                 break
               end
