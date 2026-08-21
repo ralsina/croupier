@@ -7,6 +7,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-08-21
+
+### 🐛 Bug Fixes
+
+- Only log early cutoff when a dependent is actually notified
+
+### ⚡ Performance
+
+- Reduce @data_mutex traffic from the 0.14 contention report
+- Split @data_mutex by concern and index tasks by id
+- Micro-optimizations for hashing, k/v writes and inotify matching (#48)
+
 ## [0.14.0] - 2026-08-18
 
 Results of a full correctness-and-performance review of the codebase:
