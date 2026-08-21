@@ -271,7 +271,7 @@ outputs : Array(String) = [] of String,
           if !File.exists?(output)
             raise "Task #{self} did not generate #{output}"
           end
-          new_hash = Digest::SHA1.hexdigest(File.read(output))
+          new_hash = Croupier.hash_file(output)
           old_hash = TaskManager.swap_output_hash(output, new_hash)
           @outputs_changed = true if old_hash != new_hash
         end

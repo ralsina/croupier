@@ -17,6 +17,22 @@ module Croupier
 
   alias CallbackProc = Proc(String, Nil)
 
+  # SHA1 of a file's contents, streamed so large files are never
+  # buffered whole. Shared by Task#run (no_save output verification)
+  # and the manager's input scanner; an unreadable file still raises
+  # from File.open, same as File.read did.
+  def self.hash_file(path : String) : String
+    File.open(path) do |file|
+      digest = Digest::SHA1.new
+      buffer = Bytes.new(64 * 1024)
+      while read = file.read(buffer)
+        break if read == 0
+        digest.update(buffer[0, read])
+      end
+      digest.hexfinal
+    end
+  end
+
   # TaskManager is a singleton that keeps track of all tasks
   class TaskManagerType
     # Registry of all tasks.
@@ -124,9 +140,15 @@ module Croupier
       changed = false
       @store_lock.synchronize do
         changed = store_read(key) != value
-        @_store.set(key, value)
-        @store_cache[key] = value
-        @store_misses.delete(key)
+        # An unchanged write is skipped entirely: store_read answered
+        # from the cache or the backing store, and either way the disk
+        # already holds `value`, so with a persistent store this saves a
+        # rewrite per identical kv output per run.
+        if changed
+          @_store.set(key, value)
+          @store_cache[key] = value
+          @store_misses.delete(key)
+        end
       end
       @modified_lock.synchronize { @modified << "kv://#{key}" } if changed
       changed
@@ -747,7 +769,7 @@ module Croupier
 
       chunk_size = 64
       if file_inputs.size <= chunk_size
-        file_inputs.each { |path| hash[path] = hash_file(path) }
+        file_inputs.each { |path| hash[path] = Croupier.hash_file(path) }
         return hash
       end
 
@@ -768,7 +790,7 @@ module Croupier
             chunk = task_queue.receive?
             break unless chunk
             results = {} of String => String
-            chunk.each { |path| results[path] = hash_file(path) }
+            chunk.each { |path| results[path] = Croupier.hash_file(path) }
             result_queue.send(results)
           end
         end
@@ -778,21 +800,6 @@ module Croupier
         result_queue.receive.each { |path, sha1| hash[path] = sha1 }
       end
       hash
-    end
-
-    # Hash a file's contents by streaming it in chunks, so a large input
-    # doesn't have to be buffered in memory whole. An unreadable file
-    # still raises from File.open, same as File.read did.
-    private def hash_file(path : String) : String
-      File.open(path) do |file|
-        digest = Digest::SHA1.new
-        buffer = Bytes.new(64 * 1024)
-        while read = file.read(buffer)
-          break if read == 0
-          digest.update(buffer[0, read])
-        end
-        digest.hexfinal
-      end
     end
 
     # Resize the default fiber execution context so worker fibers spread
