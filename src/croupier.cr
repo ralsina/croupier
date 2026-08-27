@@ -728,7 +728,14 @@ module Croupier
     # newline-joined fields with a distinct separator so two different
     # trees can't collide by construction (the previous scheme folded raw
     # file bytes directly into the same context with no boundary).
-    private def hash_directory(path : String) : String
+    #
+    # Public because Task#run hashes no_save directory outputs with it:
+    # the digest MUST match what scan_inputs computes for the same
+    # directory when a later task consumes it as an input, or that
+    # dependent would re-run on every invocation. Uses only local
+    # channels (via hash_files_parallel), so it is safe to call from
+    # parallel task workers.
+    def hash_directory(path : String) : String
       # Glob the tree once and reuse the list. Hidden entries count:
       # an added/removed/changed .env must change the digest.
       entries = Dir.glob(

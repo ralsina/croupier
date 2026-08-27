@@ -1223,6 +1223,46 @@ describe "TaskManager" do
         end
       end
 
+      it "should support a no_save task with a directory output" do
+        with_scenario("empty", to_create: {"seed" => "one"}) do
+          producer_runs = 0
+          consumer_runs = 0
+          Task.new(output: "blog", inputs: ["seed"], no_save: true) {
+            producer_runs += 1
+            Dir.mkdir_p("blog")
+            File.write("blog/post.md", "hi")
+            ""
+          }
+          Task.new(output: "out.md", inputs: ["blog"]) {
+            consumer_runs += 1
+            File.read("blog/post.md")
+          }
+
+          # First run: the producer makes the directory, the consumer
+          # runs after it without the run failing on hashing the
+          # directory output
+          TaskManager.run_tasks(parallel: parallel)
+          producer_runs.should eq 1
+          consumer_runs.should eq 1
+          File.read("out.md").should eq "hi"
+
+          # Second run: the recorded directory digest matches what the
+          # input scan computes for "blog", so both tasks stay fresh
+          TaskManager.run_tasks(parallel: parallel)
+          producer_runs.should eq 1
+          consumer_runs.should eq 1
+
+          # Touching a file inside the directory re-stales the consumer
+          # (and only the consumer: the producer's own inputs didn't
+          # change)
+          File.write("blog/post.md", "changed")
+          TaskManager.run_tasks(parallel: parallel)
+          producer_runs.should eq 1
+          consumer_runs.should eq 2
+          File.read("out.md").should eq "changed"
+        end
+      end
+
       it "should fail if a proc raises an exception" do
         with_scenario("empty") do
           b = TaskProc.new { raise "foo" }

@@ -271,7 +271,10 @@ outputs : Array(String) = [] of String,
           if !File.exists?(output)
             raise "Task #{self} did not generate #{output}"
           end
-          new_hash = Croupier.hash_file(output)
+          # A directory output gets the same Merkle-tree digest the
+          # input scanner uses, so a dependent consuming it as an input
+          # compares matching hashes and stays fresh across runs
+          new_hash = File.directory?(output) ? TaskManager.hash_directory(output) : Croupier.hash_file(output)
           old_hash = TaskManager.swap_output_hash(output, new_hash)
           @outputs_changed = true if old_hash != new_hash
         end
