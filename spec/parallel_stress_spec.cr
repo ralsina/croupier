@@ -45,9 +45,8 @@ describe "Parallel stress" do
   end
 
   it "survives early-cutoff notifications across many workers" do
-    # Roots read a seed file so their staleness can flip to fresh once run
-    # (input-less tasks report stale forever — a separate pre-existing
-    # issue that would make the dependents unreachable).
+    # Roots read a seed file so they are skipped by normal runs but still
+    # execute under run_all, exercising the early-cutoff path.
     with_scenario("empty", to_create: {"seed" => "seed content"}) do
       root_count = 25
       dependent_count = 200
