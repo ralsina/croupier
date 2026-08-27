@@ -7,6 +7,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-08-27
+
+### 🐛 Bug Fixes
+
+- `no_save` tasks with a directory output no longer fail with
+  `read (<dir>): Is a directory`: directory outputs are hashed with the
+  same Merkle-tree digest used for directory inputs, so dependents of
+  the directory stay fresh across runs and re-stale only when its
+  contents change
+
 ## [0.14.1] - 2026-08-21
 
 ### 🐛 Bug Fixes
