@@ -20,7 +20,16 @@ describe "TaskManager" do
         Fiber.yield
         TaskManager.@queued_changes.should eq Set{"input"}
         File.open("input2", "w") << "foo"
-        sleep 0.1.seconds # FIXME: this should work with a yield
+        # The inotify event is delivered asynchronously by the kernel,
+        # so a single Fiber.yield can run before the watcher fiber is
+        # scheduled: wait (with a timeout) instead of sleeping a fixed
+        # time.
+        deadline = Time.monotonic + 2.seconds
+        until TaskManager.@queued_changes.includes?("input2")
+          Fiber.yield
+          sleep 1.millisecond
+          raise "inotify event for input2 never arrived" if Time.monotonic > deadline
+        end
         TaskManager.@queued_changes.should eq Set{"input", "input2"}
       end
     end

@@ -20,9 +20,19 @@ describe "TaskManager" do
   end
   describe "all_inputs" do
     it "should list all inputs for all tasks" do
-      # TODO: check inputs are not repeated
       with_scenario("basic") do
         TaskManager.all_inputs.should eq Set{"input", "output3", "input2"}
+      end
+    end
+
+    it "should not repeat inputs shared by several tasks" do
+      with_scenario("basic") do
+        Task.new(inputs: ["input"], output: "also_consumes_input") { "x" }
+        Task.new(inputs: ["input"], output: "and_this_one") { "y" }
+        # "input" is now consumed by three tasks: all_inputs is a Set,
+        # so it still counts once and the collection doesn't grow
+        TaskManager.all_inputs.should eq Set{"input", "output3", "input2"}
+        TaskManager.all_inputs.size.should eq 3
       end
     end
 
