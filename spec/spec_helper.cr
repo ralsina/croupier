@@ -2,6 +2,16 @@ require "spec"
 require "../src/croupier"
 require "file_utils"
 
+# Count live fibers via the stdlib's registry: terminated fibers are
+# removed from it, so worker fibers that exit after their work queue is
+# drained don't count, while fibers parked forever on a channel that is
+# never closed do.
+def live_fiber_count : Int32
+  count = 0
+  Fiber.each { count += 1 }
+  count
+end
+
 # Sets up a test scenario: enters the scenario directory, cleans up any
 # previous state (state file, generated files, TaskManager), creates the
 # requested files and tasks from the scenario's tasks.yml, runs the block,

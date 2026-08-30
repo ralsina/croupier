@@ -111,15 +111,16 @@ module Croupier
       TaskManager.add_mutex(mutex) if mutex
     end
 
-    def initialize( # ameba:disable Metrics/CyclomaticComplexity
-outputs : Array(String) = [] of String,
-                   inputs : Array(String) = [] of String,
-                   proc : TaskProc | Nil = nil,
-                   no_save : Bool = false,
-                   id : String | Nil = nil,
-                   always_run : Bool = false,
-                   mergeable : Bool = true,
-                   master_task : Bool = false,)
+    def initialize(
+      outputs : Array(String) = [] of String,
+      inputs : Array(String) = [] of String,
+      proc : TaskProc | Nil = nil,
+      no_save : Bool = false,
+      id : String | Nil = nil,
+      always_run : Bool = false,
+      mergeable : Bool = true,
+      master_task : Bool = false,
+    )
       # An empty kv:// key can never be satisfied (get("") on a store
       # that never holds it): better to fail at declaration
       raise "Task has an empty kv:// key" if outputs.includes?("kv://") || inputs.includes?("kv://")
@@ -127,8 +128,8 @@ outputs : Array(String) = [] of String,
       # kv:// entries keep their prefix; everything else is a path and
       # gets normalized, so "./x", "dir/../x" and "x" are the same
       # graph vertex (and match the watcher's normalized event paths)
-      inputs = inputs.map { |path| path.starts_with?("kv://") ? path : Path[path].normalize.to_s }
-      outputs = outputs.map { |path| path.starts_with?("kv://") ? path : Path[path].normalize.to_s }
+      inputs = normalize_paths(inputs)
+      outputs = normalize_paths(outputs)
 
       if !(inputs.to_set & outputs.to_set).empty?
         raise "Cycle detected"
@@ -147,42 +148,67 @@ outputs : Array(String) = [] of String,
       # We should merge every task we have output/id collision with
       # into one, and register it on every output/id of every one
       # of those tasks
-      to_merge = (keys.map { |k|
-        TaskManager.tasks.fetch(k, nil)
-      }).select(Task).uniq!
-      to_merge << self
+      to_merge = colliding_tasks
       # Refuse to merge if this task or any of the colliding ones
       # are not mergeable
       raise "Can't merge task #{self} with #{to_merge[..-2].map(&.to_s)}" \
         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
-      # An explicit id on an output-ful task must be unique among tasks
-      # that stay separate: subtask tracking matches tasks BY id, so a
-      # duplicate would make remove_subtasks delete unrelated tasks.
-      # (Output-less tasks may still merge under a shared id, and a
-      # collision with a merge target is fine: one task, one id.)
-      # The check goes through TaskManager's id index: scanning every
-      # registered task made creation O(N^2) overall.
-      if id && !@outputs.empty?
-        if conflict = TaskManager.tasks_by_id[id]?
-          unless to_merge.includes?(conflict)
-            raise "Task id #{id} is already used by #{conflict}"
-          end
-        end
+      check_explicit_id_conflict(id, to_merge)
+      check_merge_flag_compatibility(to_merge)
+      register_merged(to_merge)
+
+      # Invalidate graph cache since we added/modified a task
+      TaskManager.invalidate_graph_cache
+    end
+
+    # kv:// entries keep their prefix; everything else is a path and
+    # gets normalized, so "./x", "dir/../x" and "x" are the same
+    # graph vertex (and match the watcher's normalized event paths)
+    private def normalize_paths(paths : Array(String)) : Array(String)
+      paths.map { |path| path.starts_with?("kv://") ? path : Path[path].normalize.to_s }
+    end
+
+    # Every registered task this one collides with (by id or output),
+    # plus this task itself (the merge set always includes it).
+    private def colliding_tasks : Array(Task)
+      fetched = (keys.map { |k|
+        TaskManager.tasks.fetch(k, nil)
+      }).select(Task).uniq!
+      fetched << self
+      fetched
+    end
+
+    # An explicit id on an output-ful task must be unique among tasks
+    # that stay separate: subtask tracking matches tasks BY id, so a
+    # duplicate would make remove_subtasks delete unrelated tasks.
+    # (Output-less tasks may still merge under a shared id, and a
+    # collision with a merge target is fine: one task, one id.)
+    # The check goes through TaskManager's id index: scanning every
+    # registered task made creation O(N^2) overall.
+    private def check_explicit_id_conflict(id : String | Nil, to_merge : Array(Task))
+      return if id.nil? || @outputs.empty?
+      conflict = TaskManager.tasks_by_id[id]?
+      return if conflict.nil? || to_merge.includes?(conflict)
+      raise "Task id #{id} is already used by #{conflict}"
+    end
+
+    # Check flag compatibility across the WHOLE set before the first
+    # merge: merge mutates the live first task in place, so a reduce
+    # that fails partway (3+ colliding tasks) would leave the earlier
+    # merges applied and the registry corrupted. Same checks and
+    # messages as Task#merge, which still re-checks pairwise.
+    private def check_merge_flag_compatibility(to_merge : Array(Task))
+      return unless to_merge.size > 1
+      first = to_merge.first
+      to_merge.each do |task|
+        raise "Cannot merge tasks with different no_save settings" unless task.no_save? == first.no_save?
+        raise "Cannot merge tasks with different always_run settings" unless task.always_run? == first.always_run?
+        raise "Cannot merge master task with non-master task" unless task.master_task? == first.master_task?
+        raise "Cannot merge tasks with different mutexes" unless task.mutex == first.mutex
       end
-      # Check flag compatibility across the WHOLE set before the first
-      # merge: merge mutates the live first task in place, so a reduce
-      # that fails partway (3+ colliding tasks) would leave the earlier
-      # merges applied and the registry corrupted. Same checks and
-      # messages as Task#merge, which still re-checks pairwise.
-      if to_merge.size > 1
-        first = to_merge.first
-        to_merge.each do |task|
-          raise "Cannot merge tasks with different no_save settings" unless task.no_save? == first.no_save?
-          raise "Cannot merge tasks with different always_run settings" unless task.always_run? == first.always_run?
-          raise "Cannot merge master task with non-master task" unless task.master_task? == first.master_task?
-          raise "Cannot merge tasks with different mutexes" unless task.mutex == first.mutex
-        end
-      end
+    end
+
+    private def register_merged(to_merge : Array(Task))
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
       # Keep the id index in step: merged tasks share the survivor's
@@ -191,9 +217,6 @@ outputs : Array(String) = [] of String,
       # id would falsely conflict
       to_merge.each { |t| TaskManager.tasks_by_id.delete(t.id) unless t == reduced }
       TaskManager.tasks_by_id[reduced.id] = reduced
-
-      # Invalidate graph cache since we added/modified a task
-      TaskManager.invalidate_graph_cache
     end
 
     def initialize(
@@ -238,7 +261,24 @@ outputs : Array(String) = [] of String,
     end
 
     # Executes the proc for the task
-    def run # ameba:disable Metrics/CyclomaticComplexity
+    def run
+      call_results = call_procs
+
+      # Track if any output changed (for early cutoff optimization)
+      @outputs_changed = false
+
+      if @no_save
+        verify_no_save_outputs
+      else
+        save_outputs(call_results)
+      end
+      self.stale = false # Done, not stale anymore (staleness is a single atomic field)
+      TaskManager.progress_callback.call(id)
+    end
+
+    # Run every proc, locking the task's mutex (if any) around each
+    # call, and collect their results.
+    private def call_procs : Array(String | Nil)
       call_results = Array(String | Nil).new
       @procs.each do |proc|
         Fiber.yield
@@ -258,67 +298,71 @@ outputs : Array(String) = [] of String,
           call_results += result.as(Array(String))
         end
       end
+      call_results
+    end
 
-      # Track if any output changed (for early cutoff optimization)
-      @outputs_changed = false
-
-      if @no_save
-        # The task saved the data so we should not do it
-        # but we need to update hashes
-        @outputs.reject(&.empty?).each do |output|
-          # If the output is a kv:// url, we don't need to check if it exists
-          next if output.lchop?("kv://")
-          if !File.exists?(output)
-            raise "Task #{self} did not generate #{output}"
-          end
-          # A directory output gets the same Merkle-tree digest the
-          # input scanner uses, so a dependent consuming it as an input
-          # compares matching hashes and stays fresh across runs
-          new_hash = File.directory?(output) ? TaskManager.hash_directory(output) : Croupier.hash_file(output)
-          old_hash = TaskManager.swap_output_hash(output, new_hash)
-          @outputs_changed = true if old_hash != new_hash
+    # The task saved the data so we should not do it
+    # but we need to update hashes
+    private def verify_no_save_outputs
+      @outputs.reject(&.empty?).each do |output|
+        # If the output is a kv:// url, we don't need to check if it exists
+        next if output.lchop?("kv://")
+        if !File.exists?(output)
+          raise "Task #{self} did not generate #{output}"
         end
-      else
-        # We have to save the files ourselves
-        begin
-          if call_results.size > @outputs.size
-            Log.warn { "Task #{self} returned #{call_results.size} results for #{@outputs.size} outputs, discarding the extras" }
-          end
-          @outputs.zip(call_results) do |output, call_result|
-            raise "Task #{self} did not return any data for output #{output}" if call_result.nil?
-            if k = output.lchop?("kv://")
-              # If the output is a kv:// url, we save it in the k/v
-              # store; set reports whether the value actually changed,
-              # and the value's hash is recorded for the next run's
-              # state file exactly like a file output's
-              @outputs_changed = true if TaskManager.set(k, call_result)
-              TaskManager.record_output_hash(output, Digest::SHA1.hexdigest(call_result))
-            else
-              begin
-                Dir.mkdir_p(File.dirname output)
-              rescue ex : Exception
-                # This fails because the directory already exists.
-                # If there is a real problem creating it (such as permissions)
-                # then the File.open below will fail and we'll catch it there.
-              end
-              File.open(output, "w") do |io|
-                io << call_result
-              end
-              new_hash = Digest::SHA1.hexdigest(call_result)
-              old_hash = TaskManager.swap_output_hash(output, new_hash)
-              if old_hash != new_hash
-                @outputs_changed = true
-              else
-                Log.debug { "Task #{id} output #{output} unchanged (old=#{old_hash.inspect}, new=#{new_hash.inspect})" }
-              end
-            end
-          end
-        rescue IndexError
-          raise "Task #{self} did not return the correct number of outputs"
+        # A directory output gets the same Merkle-tree digest the
+        # input scanner uses, so a dependent consuming it as an input
+        # compares matching hashes and stays fresh across runs
+        new_hash = File.directory?(output) ? TaskManager.hash_directory(output) : Croupier.hash_file(output)
+        old_hash = TaskManager.swap_output_hash(output, new_hash)
+        @outputs_changed = true if old_hash != new_hash
+      end
+    end
+
+    # We have to save the files ourselves
+    private def save_outputs(call_results : Array(String | Nil))
+      if call_results.size > @outputs.size
+        Log.warn { "Task #{self} returned #{call_results.size} results for #{@outputs.size} outputs, discarding the extras" }
+      end
+      @outputs.zip(call_results) do |output, call_result|
+        raise "Task #{self} did not return any data for output #{output}" if call_result.nil?
+        if k = output.lchop?("kv://")
+          save_kv_output(k, output, call_result)
+        else
+          save_file_output(output, call_result)
         end
       end
-      self.stale = false # Done, not stale anymore (staleness is a single atomic field)
-      TaskManager.progress_callback.call(id)
+    rescue IndexError
+      raise "Task #{self} did not return the correct number of outputs"
+    end
+
+    # If the output is a kv:// url, we save it in the k/v
+    # store; set reports whether the value actually changed,
+    # and the value's hash is recorded for the next run's
+    # state file exactly like a file output's
+    private def save_kv_output(key : String, output : String, call_result : String)
+      @outputs_changed = true if TaskManager.set(key, call_result)
+      TaskManager.record_output_hash(output, Digest::SHA1.hexdigest(call_result))
+    end
+
+    private def save_file_output(output : String, call_result : String)
+      begin
+        Dir.mkdir_p(File.dirname output)
+      rescue ex : Exception
+        # This fails because the directory already exists.
+        # If there is a real problem creating it (such as permissions)
+        # then the File.open below will fail and we'll catch it there.
+      end
+      File.open(output, "w") do |io|
+        io << call_result
+      end
+      new_hash = Digest::SHA1.hexdigest(call_result)
+      old_hash = TaskManager.swap_output_hash(output, new_hash)
+      if old_hash != new_hash
+        @outputs_changed = true
+      else
+        Log.debug { "Task #{id} output #{output} unchanged (old=#{old_hash.inspect}, new=#{new_hash.inspect})" }
+      end
     end
 
     # Tasks are stale if:
