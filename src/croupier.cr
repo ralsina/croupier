@@ -142,6 +142,7 @@ module Croupier
       @store_cache.clear
       @store_misses.clear
       @fast_mode = false
+      @fast_dirs = false
       @auto_mode = false
       @graph_invalidated = false
       # Session-level state a run may have configured
