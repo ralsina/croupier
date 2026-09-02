@@ -1,4 +1,12 @@
 module Croupier
+  # Raised when a task can't run yet because an input is not
+  # satisfiable: it is neither a fresh task, an existing file, nor a
+  # kv:// key. In auto mode this is an expected transient state (inputs
+  # appear incrementally), so the autorun loop rescues this class and
+  # retries with backoff instead of logging a warning on every cycle.
+  class UnknownInputsError < Exception
+  end
+
   # TaskManagerType methods for the dependency graph, staleness
   # computation and dependency queries.
   class TaskManagerType
@@ -517,7 +525,7 @@ module Croupier
           !tasks.has_key?(input) &&
           !File.exists?(input)
       }
-      raise "Can't run: Unknown inputs #{bad_inputs.join(", ")}" \
+      raise UnknownInputsError.new("Can't run: Unknown inputs #{bad_inputs.join(", ")}") \
         unless bad_inputs.empty?
     end
   end

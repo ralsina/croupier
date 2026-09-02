@@ -103,7 +103,7 @@ module Croupier
             Log.warn { "Skipping task for #{task.outputs}: Waiting for #{task.waiting_for}" }
             next
           end
-          raise "Can't run task for #{task.outputs}: Waiting for #{task.waiting_for}"
+          raise UnknownInputsError.new("Can't run task for #{task.outputs}: Waiting for #{task.waiting_for}")
         end
         failed = false
         begin
@@ -191,7 +191,7 @@ module Croupier
             break
           end
           # No tasks are ready
-          raise "Can't run tasks: Waiting for #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}"
+          raise UnknownInputsError.new("Can't run tasks: Waiting for #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}")
         end
 
         errors.concat(run_wave(batch, dry_run, early_cutoff, finished_tasks, failed_tasks))

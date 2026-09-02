@@ -290,10 +290,10 @@ describe "TaskManager" do
       it "should report unknown inputs on a targeted run" do
         with_scenario("empty") do
           Task.new(output: "out", inputs: ["missing"]) { "x" }
-          # The specific message matters: auto_run's warn suppression
-          # matches it, so missing inputs stay quiet instead of
-          # logging a warning on every retry
-          expect_raises(Exception, "Can't run: Unknown inputs missing") do
+          # The exception class matters: auto_run's warn suppression
+          # rescues UnknownInputsError, so missing inputs stay quiet
+          # instead of logging a warning on every retry
+          expect_raises(Croupier::UnknownInputsError, "Can't run: Unknown inputs missing") do
             TaskManager.run_tasks(["out"])
           end
         end

@@ -97,7 +97,7 @@ module Croupier
                 # Sometimes we can't run because not all dependencies
                 # are there yet or whatever. We'll try again later
                 retry_delay = Math.min(retry_delay * 2, 1.0)
-                unless ex.message.to_s.starts_with?("Can't run: Unknown inputs")
+                unless ex.is_a?(UnknownInputsError)
                   Log.warn { "Automatic run failed (will retry): #{ex.message}" }
                 end
               end
