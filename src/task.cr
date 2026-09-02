@@ -10,6 +10,19 @@ module Croupier
   class TaskFailure < Exception
   end
 
+  # Raised at the end of a `keep_going` run in which some tasks failed.
+  # The run still completes everything it can and saves its state, but
+  # the caller gets a failure signal (e.g. to set an exit code).
+  # `#errors` carries every task failure, since `Exception#cause` can
+  # only chain one.
+  class RunFailure < Exception
+    getter errors : Array(Exception)
+
+    def initialize(@errors : Array(Exception))
+      super(errors.join("\n") { |failure| failure.message || failure.class.name })
+    end
+  end
+
   # A Task is an object that may generate output
   #
   # It has a `Proc` which is executed when the task is run

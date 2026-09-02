@@ -269,11 +269,13 @@ describe "TaskManager" do
           TaskManager.run_tasks(parallel: parallel)
           runs.should eq 1
 
-          # Input changes and the task fails, but keep_going lets the
-          # run (and the state save) finish
+          # Input changes and the task fails: keep_going lets the run
+          # (and the state save) finish, then reports the failure
           File.write("seed", "two")
           broken = true
-          TaskManager.run_tasks(parallel: parallel, keep_going: true)
+          expect_raises(Croupier::RunFailure, /boom/) do
+            TaskManager.run_tasks(parallel: parallel, keep_going: true)
+          end
           runs.should eq 2
 
           # Repaired: the next run must still see the input as
@@ -307,8 +309,11 @@ describe "TaskManager" do
           }
           Task.new(output: "side", inputs: ["seed"]) { "s" }
 
-          # keep_going: the failure doesn't abort the run...
-          TaskManager.run_tasks(parallel: parallel, keep_going: true)
+          # keep_going: the failure doesn't abort the run, it surfaces
+          # as a RunFailure once everything runnable has finished...
+          expect_raises(Croupier::RunFailure, /boom/) do
+            TaskManager.run_tasks(parallel: parallel, keep_going: true)
+          end
 
           # ...but the dependent of the failed task must not run against
           # the missing output
@@ -588,10 +593,39 @@ describe "TaskManager" do
         with_scenario("empty") do
           Task.new(["output2"], proc: TaskProc.new { raise "foo" })
           Task.new(["output1"], proc: TaskProc.new { "foo" })
-          # Even though a proc raises an exception, it's caught
-          TaskManager.run_tasks(parallel: parallel, keep_going: true)
-          # It should never have executed the second task
+          # Even though a proc raises an exception, the run completes;
+          # the failure is reported at the end as a RunFailure
+          expect_raises(Croupier::RunFailure, "foo") do
+            TaskManager.run_tasks(parallel: parallel, keep_going: true)
+          end
+          # The successful task still executed
           File.exists?("output1").should be_true
+        end
+      end
+
+      it "should report every failure with its cause at the end of a keep_going run" do
+        with_scenario("empty", to_create: {"seed" => "x"}) do
+          Task.new(output: "bad1", inputs: [] of String) { raise "boom1" }
+          Task.new(output: "bad2", inputs: [] of String) { raise "boom2" }
+          Task.new(output: "good", inputs: ["seed"]) { "fine" }
+
+          failure = expect_raises(Croupier::RunFailure) do
+            TaskManager.run_tasks(parallel: parallel, keep_going: true)
+          end
+          # Both failures are carried, in no particular order in
+          # parallel mode, each chaining its TaskFailure cause
+          failure.errors.size.should eq 2
+          messages = failure.errors.map(&.message)
+          messages.any? { |message| message.try(&.includes?("boom1")) }.should be_true
+          messages.any? { |message| message.try(&.includes?("boom2")) }.should be_true
+          failure.errors.each do |error|
+            cause = error.cause
+            cause.should_not be_nil
+            cause_message = cause.try(&.message)
+            cause_message.try(&.includes?("boom")).should be_true
+          end
+          # The successful task still ran
+          File.exists?("good").should be_true
         end
       end
 

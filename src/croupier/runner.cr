@@ -82,6 +82,7 @@ module Croupier
 
       finished = Set(Task).new
       succeeded = Set(Task).new
+      failures = [] of Exception
 
       # Single pass: no intermediate name→task arrays, and staleness is
       # decided at visit time so tasks marked fresh by early cutoff are
@@ -110,6 +111,7 @@ module Croupier
           succeeded << task unless dry_run
         rescue ex
           failed = true
+          failures << ex
           Log.error { "Error running task for #{task.outputs}: #{ex}" }
           raise ex unless keep_going
         end
@@ -129,6 +131,10 @@ module Croupier
       return if dry_run
       drop_unfinished_inputs(task_names, succeeded)
       save_run
+      # keep_going collected the failures instead of aborting; now that
+      # the run finished and its state is saved, report them so callers
+      # can tell the run failed (e.g. set an exit code)
+      raise RunFailure.new(failures) if keep_going && !failures.empty?
     end
 
     # Internal helper to run tasks concurrently.
@@ -156,7 +162,7 @@ module Croupier
       _tasks = task_names.map { |name| tasks[name] }
       finished_tasks = Set(Task).new
       failed_tasks = Set(Task).new
-      errors = [] of String
+      errors = [] of Exception
 
       loop do
         if run_all
@@ -193,12 +199,15 @@ module Croupier
         # Without keep_going a failure ends the run right away, with
         # the failure itself — not a "waiting for" message about the
         # dependents now blocked behind it
-        raise errors.join("\n") unless errors.empty? || keep_going
+        raise RunFailure.new(errors) unless errors.empty? || keep_going
       end
       # See _run_tasks: a dry run must not consume the input changes
       return if dry_run
       drop_unfinished_inputs(task_names, finished_tasks - failed_tasks)
       save_run
+      # keep_going collected the failures instead of aborting; report
+      # them once the run finished and its state is saved
+      raise RunFailure.new(errors) if keep_going && !errors.empty?
     end
 
     # One parallel wave: run `batch` on a small worker pool and collect
@@ -213,8 +222,8 @@ module Croupier
       early_cutoff : Bool,
       finished_tasks : Set(Task),
       failed_tasks : Set(Task),
-    ) : Array(String)
-      errors = [] of String
+    ) : Array(Exception)
+      errors = [] of Exception
       # Keep a small worker pool (each fiber is a stack the GC must
       # scan, so thousands of fibers are counterproductive)
       num_workers = Math.min(System.cpu_count, batch.size)
@@ -255,7 +264,10 @@ module Croupier
           task, error = results.receive
           if failure = error
             failed_tasks << task
-            errors << failure.message.to_s
+            # Keep the exception itself (not just its message) so the
+            # RunFailure raised at the end of a keep_going run can
+            # chain every cause
+            errors << failure
             Log.error { "Task #{task.outputs} failed: #{failure.message}" }
           end
           # Task is done, do not run again. Only successful tasks

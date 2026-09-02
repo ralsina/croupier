@@ -85,8 +85,10 @@ describe "Work-Stealing Algorithm" do
         Task.new(output: "bad", inputs: [] of String) { raise "Intentional failure" }
         Task.new(output: "good2", inputs: [] of String) { "good2" }
 
-        # Should not raise when keep_going is true
-        TaskManager.run_tasks(parallel: true, run_all: true, keep_going: true)
+        # keep_going: the run completes, the failure surfaces at the end
+        expect_raises(Croupier::RunFailure, /Intentional failure/) do
+          TaskManager.run_tasks(parallel: true, run_all: true, keep_going: true)
+        end
 
         # Good tasks should complete
         File.exists?("good1").should be_true
