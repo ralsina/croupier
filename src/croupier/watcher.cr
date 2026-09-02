@@ -71,79 +71,89 @@ module Croupier
           loop do
             select
             when @autorun_control.receive
-              Log.info { "Stopping automatic run" }
-              @autorun_control.close
-              @autorun_running = false
-              if watcher = @@watcher
-                watcher.close # Stop watchers
-              end
+              stop_autorun
               break
             else
-              begin
-                # Sleep early is better for race conditions in tests
-                # If we sleep late, it's likely that we'll get the
-                # stop order and break the loop without running, so we
-                # can't see the side effects without sleeping in the
-                # tests.
-                sleep retry_delay.seconds
-                changes = queued_changes_snapshot
-                next if changes.empty? && @modified.empty?
-                Log.info { "Detected changes in #{changes}" }
-                # No need to mark targets stale here: propagate_staleness,
-                # called at the start of every run, resets every task's
-                # staleness from scratch.
-                @modified += changes
-                Log.debug { "Modified: #{@modified}" }
-                # Call the before_run_hook if set, passing the changed files
-                before_run_hook.call(@modified.dup) unless @modified.empty?
-                # Run tasks - if master tasks create new subtasks, the graph
-                # will be invalidated and we need to run again to execute them
-                initial_task_count = tasks.size
-                run_tasks(targets: targets, parallel: false)
-                # If new tasks were created (graph was invalidated), run
-                # again with the expanded graph
-                if @graph_invalidated || tasks.size > initial_task_count
-                  targets = tasks.keys
-                  # And re-watch: the new subtasks' inputs were not
-                  # known when watch() was last called, so changes to
-                  # them would be invisible to the watcher
-                  watch(targets)
-                  run_tasks(targets: targets, parallel: false)
-                end
-                # Only clean the changes processed this cycle after a
-                # successful run: events that arrived while the run
-                # executed stay queued for the next one
-                @modified.clear
-                unqueue_changes(changes)
-                # Fold this cycle's hashes into @last_run: the non-auto
-                # path reloads them from the state file every run, but
-                # the auto branch never refreshes @last_run, so without
-                # this every cycle looks like the first one (no early
-                # cutoff, and unchanged rewrites keep re-staling their
-                # dependents). this_run holds the scanned input hashes,
-                # next_run the recorded output hashes
-                @data_mutex.synchronize { last_run.merge!(this_run).merge!(next_run) }
-                retry_delay = 0.01
-              rescue ex
-                # Sometimes we can't run because not all dependencies
-                # are there yet or whatever. We'll try again later
-                retry_delay = Math.min(retry_delay * 2, 1.0)
-                unless ex.is_a?(UnknownInputsError)
-                  Log.warn { "Automatic run failed (will retry): #{ex.message}" }
-                end
-              end
+              retry_delay, targets = autorun_cycle(targets, retry_delay)
             end
           end
         end
       end
-    {% else %}
-      # Non-Linux stub for auto_run
-      def auto_run(targets : Array(String) = [] of String)
-        raise "auto_run is only supported on Linux. File watching requires inotify, which is Linux-specific."
-      end
-    {% end %}
 
-    {% if flag?(:linux) %}
+      # Handle the stop order (runs on the autorun fiber): close the
+      # control channel so the stopping fiber's receive? returns, and
+      # shut the watcher down.
+      private def stop_autorun : Nil
+        Log.info { "Stopping automatic run" }
+        @autorun_control.close
+        @autorun_running = false
+        if watcher = @@watcher
+          watcher.close # Stop watchers
+        end
+      end
+
+      # One iteration of the autorun loop: process queued changes,
+      # re-run tasks, expand the graph if master tasks added subtasks,
+      # and fold the cycle's hashes into last_run. The non-auto path
+      # reloads those hashes from the state file every run, but the
+      # auto branch never refreshes last_run, so without the fold every
+      # cycle looks like the first one (no early cutoff, and unchanged
+      # rewrites keep re-staling their dependents). this_run holds the
+      # scanned input hashes, next_run the recorded output hashes.
+      #
+      # Returns the updated retry delay and target list (the targets
+      # may grow when the graph grew).
+      private def autorun_cycle(targets : Array(String), retry_delay : Float64) : {Float64, Array(String)}
+        # Sleep early is better for race conditions in tests
+        # If we sleep late, it's likely that we'll get the
+        # stop order and break the loop without running, so we
+        # can't see the side effects without sleeping in the
+        # tests.
+        sleep retry_delay.seconds
+        changes = queued_changes_snapshot
+        return {retry_delay, targets} if changes.empty? && @modified.empty?
+        begin
+          Log.info { "Detected changes in #{changes}" }
+          # No need to mark targets stale here: propagate_staleness,
+          # called at the start of every run, resets every task's
+          # staleness from scratch.
+          @modified += changes
+          Log.debug { "Modified: #{@modified}" }
+          # Call the before_run_hook if set, passing the changed files
+          before_run_hook.call(@modified.dup) unless @modified.empty?
+          # Run tasks - if master tasks create new subtasks, the graph
+          # will be invalidated and we need to run again to execute them
+          initial_task_count = tasks.size
+          run_tasks(targets: targets, parallel: false)
+          # If new tasks were created (graph was invalidated), run
+          # again with the expanded graph
+          if @graph_invalidated || tasks.size > initial_task_count
+            targets = tasks.keys
+            # And re-watch: the new subtasks' inputs were not
+            # known when watch() was last called, so changes to
+            # them would be invisible to the watcher
+            watch(targets)
+            run_tasks(targets: targets, parallel: false)
+          end
+          # Drop only the changes processed this cycle, then the
+          # modified set: a successful run consumed them
+          unqueue_changes(changes)
+          @modified.clear
+          # In auto mode this fiber is the only writer of the run-hash
+          # trio (tasks run serially on it), so the merge needs no lock
+          last_run.merge!(this_run).merge!(next_run)
+          {0.01, targets}
+        rescue ex
+          # Sometimes we can't run because not all dependencies
+          # are there yet or whatever. We'll try again later
+          delay = Math.min(retry_delay * 2, 1.0)
+          unless ex.is_a?(UnknownInputsError)
+            Log.warn { "Automatic run failed (will retry): #{ex.message}" }
+          end
+          {delay, targets}
+        end
+      end
+
       # Filesystem watcher
       @@watcher : Inotify::Watcher | Nil = nil
 
@@ -174,18 +184,58 @@ module Croupier
           {normalized, input}
         end
 
-        # Define watch flags before event handler so it's accessible in the closure
-        watch_flags = LibInotify::IN_DELETE |
-                      LibInotify::IN_CREATE |
-                      LibInotify::IN_MODIFY |
-                      LibInotify::IN_MOVED_TO |
-                      LibInotify::IN_CLOSE_WRITE |
-                      LibInotify::IN_ATTRIB
-        # NOT watching IN_DELETE_SELF, IN_MOVE_SELF because
-        # when those are triggered we have no input file to
-        # process.
+        watcher.on_event(&event_handler(watcher, target_inputs, prefix_inputs))
+        watch_inputs(watcher, target_inputs)
+      end
 
-        event_handler = ->(event : Inotify::Event) do
+      # inotify flags shared by every watched path.
+      #
+      # NOT watching IN_DELETE_SELF, IN_MOVE_SELF because
+      # when those are triggered we have no input file to
+      # process.
+      private def watch_flags
+        LibInotify::IN_DELETE |
+          LibInotify::IN_CREATE |
+          LibInotify::IN_MODIFY |
+          LibInotify::IN_MOVED_TO |
+          LibInotify::IN_CLOSE_WRITE |
+          LibInotify::IN_ATTRIB
+      end
+
+      # Attach the event handler, then watch every input; an input
+      # that doesn't exist yet is covered by watching its parent
+      # directory, so its creation is seen.
+      private def watch_inputs(watcher : Inotify::Watcher, target_inputs : Set(String)) : Nil
+        target_inputs.each do |input|
+          # Don't watch for changes in k/v store
+          next if input.lchop?("kv://")
+          if File.exists? input
+            watcher.watch input, watch_flags
+            Log.info { "Watching: #{input}" }
+          else
+            # It's a file that doesn't exist. To detect it
+            # being created, we watch the parent directory
+            # if we are not already watching it.
+            path = (Path[input].parent).to_s
+            if !watcher.watching.includes?(path)
+              watcher.watch path, watch_flags
+              Log.info { "Watching parent: #{path}" }
+            end
+          end
+        end
+
+        Log.info { "Watching: #{watcher.watching.inspect}" }
+      end
+
+      # The inotify event handler: re-watch files replaced by editors
+      # (IN_IGNORED), and queue changes matching a watched input,
+      # exactly or by directory prefix.
+      private def event_handler(
+        watcher : Inotify::Watcher,
+        target_inputs : Set(String),
+        prefix_inputs : Array({String, String}),
+      ) : Proc(Inotify::Event, Nil)
+        ->(event : Inotify::Event) do
           # Path of the changed file; when the event carries no name
           # there is nothing to match, so fall back to the bare path
           # ("" if absent) which matches no input below
@@ -242,27 +292,6 @@ module Croupier
 
           Log.debug { "Event NOT matched for path=#{path}, target_inputs=#{target_inputs.inspect}" } unless matched
         end
-        watcher.on_event(&event_handler)
-
-        target_inputs.each do |input|
-          # Don't watch for changes in k/v store
-          next if input.lchop?("kv://")
-          if File.exists? input
-            watcher.watch input, watch_flags
-            Log.info { "Watching: #{input}" }
-          else
-            # It's a file that doesn't exist. To detect it
-            # being created, we watch the parent directory
-            # if we are not already watching it.
-            path = (Path[input].parent).to_s
-            if !watcher.watching.includes?(path)
-              watcher.watch path, watch_flags
-              Log.info { "Watching parent: #{path}" }
-            end
-          end
-        end
-
-        Log.info { "Watching: #{watcher.watching.inspect}" }
       end
     {% end %}
   end
