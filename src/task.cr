@@ -346,13 +346,10 @@ module Croupier
     end
 
     private def save_file_output(output : String, call_result : String)
-      begin
-        Dir.mkdir_p(File.dirname output)
-      rescue ex : Exception
-        # This fails because the directory already exists.
-        # If there is a real problem creating it (such as permissions)
-        # then the File.open below will fail and we'll catch it there.
-      end
+      # mkdir_p is idempotent, so an existing directory is not an
+      # error; a real failure (e.g. permissions) raises from here
+      # instead of being misdiagnosed
+      Dir.mkdir_p(File.dirname output)
       File.open(output, "w") do |io|
         io << call_result
       end
