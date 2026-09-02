@@ -282,20 +282,22 @@ module Croupier
       call_results = Array(String | Nil).new
       @procs.each do |proc|
         Fiber.yield
+        mtx = mutex
+        result = nil
         begin
-          TaskManager.lock_mutex(mutex.as(String)) unless mutex.nil?
+          TaskManager.lock_mutex(mtx) unless mtx.nil?
           result = proc.call
         rescue ex
           raise TaskFailure.new("Task #{self} failed: #{ex}", cause: ex)
         ensure
-          TaskManager.unlock_mutex(mutex.as(String)) unless mutex.nil?
+          TaskManager.unlock_mutex(mtx) unless mtx.nil?
         end
         if result.nil?
           call_results << nil
         elsif result.is_a?(String)
           call_results << result
         else
-          call_results += result.as(Array(String))
+          call_results.concat(result)
         end
       end
       call_results
