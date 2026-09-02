@@ -10,7 +10,6 @@ can be used for [dataflow programming](https://en.wikipedia.org/wiki/Dataflow_pr
 
 [![Tests](https://github.com/ralsina/croupier/actions/workflows/ci.yml/badge.svg)](https://github.com/ralsina/croupier/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/ralsina/croupier/branch/main/graph/badge.svg?token=YW23EDL5T5)](https://codecov.io/gh/ralsina/croupier)
-[![Mutation Tests](https://github.com/ralsina/croupier/actions/workflows/mutation.yml/badge.svg)](https://github.com/ralsina/croupier/actions/workflows/mutation.yml)
 
 ## What does it mean
 
