@@ -53,10 +53,22 @@ module Croupier
     # Registry of modified files, which will make tasks stale
     property modified = Set(String).new
     # SHA1 of files from last run
+    #
+    # Concurrency contract shared by last_run / this_run / next_run:
+    # task workers only touch them through the @hashes_lock accessors
+    # in hash_state.cr (record_output_hash, swap_output_hash); every
+    # other read or write happens on the coordinating fiber (the
+    # run_tasks caller in serial mode, the wave-barrier fiber in
+    # parallel mode, the autorun fiber in auto mode), so those sites
+    # are deliberately lock-free.
     property last_run = {} of String => String
     # SHA1 of files as of starting this run
+    #
+    # See last_run for the concurrency contract.
     property this_run = {} of String => String
     # SHA1 of input files as of ending this run
+    #
+    # See last_run for the concurrency contract.
     property next_run = {} of String => String
     # If true, only compare file dates
     property? fast_mode : Bool = false
