@@ -238,8 +238,13 @@ module Croupier
       @last_scan_time = parsed["__scan_time"]?.try &.to_s.to_f?
       parsed.reject! { |key, _| {"__version", "__scan_time"}.includes?(key.to_s) }
         .map { |key, value| {key.to_s, value.to_s} }.to_h
-    rescue ex : YAML::ParseException
-      Log.warn { "State file #{@state_file} is corrupted (#{ex.message}), rebuilding everything" }
+    rescue ex : Exception
+      # Anything unexpected while reading the state file — invalid
+      # YAML, valid YAML that isn't a mapping (a scalar or a list),
+      # an unreadable file — means we know nothing about the previous
+      # run, same as the corruption and schema-drift cases above:
+      # a full rebuild, self-healed on the next save
+      Log.warn { "State file #{@state_file} is unusable (#{ex.message}), rebuilding everything" }
       {} of String => String
     end
   end

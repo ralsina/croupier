@@ -644,6 +644,29 @@ describe "TaskManager" do
       end
     end
 
+    it "should recover from a state file holding valid YAML that is not a mapping" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        runs = 0
+        Task.new(output: "out", inputs: ["seed"]) {
+          runs += 1
+          "d"
+        }
+        TaskManager.run_tasks
+        runs.should eq 1
+
+        # A scalar is valid YAML but not a state file: loading it must
+        # self-heal (full rebuild) instead of crashing with a cast error
+        File.write(".croupier", "just a scalar\n")
+        TaskManager.run_tasks
+        runs.should eq 2
+
+        # Same for a list
+        File.write(".croupier", "- a\n- b\n")
+        TaskManager.run_tasks
+        runs.should eq 3
+      end
+    end
+
     it "should version the state file and discard older formats" do
       with_scenario("empty", to_create: {"seed" => "x"}) do
         runs = 0
