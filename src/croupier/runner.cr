@@ -96,31 +96,18 @@ module Croupier
         next if finished.includes?(task)
         next unless task.stale? || run_all
         Log.debug { "Running task for #{task.outputs}" }
-        unless task.waiting_for.empty? || dry_run
-          if keep_going
-            # Blocked behind a failure: skip it and keep going with
-            # the rest, like the parallel runner does
-            Log.warn { "Skipping task for #{task.outputs}: Waiting for #{task.waiting_for}" }
-            next
-          end
-          raise UnknownInputsError.new("Can't run task for #{task.outputs}: Waiting for #{task.waiting_for}")
-        end
-        failed = false
-        begin
-          task.run unless dry_run
-          succeeded << task unless dry_run
-        rescue ex
-          failed = true
-          failures << ex
-          Log.error { "Error running task for #{task.outputs}: #{ex}" }
-          raise ex unless keep_going
+        next unless runnable?(task, keep_going, dry_run)
+        failure = run_one(task, dry_run, succeeded)
+        if failure
+          failures << failure
+          raise failure unless keep_going
         end
         finished << task
 
         # Early cutoff: if a SUCCESSFUL task's outputs didn't change,
         # notify dependent tasks (a failed task's outputs didn't
         # change either, but its dependents must stay blocked)
-        if !failed && early_cutoff && !task.outputs_changed?
+        if failure.nil? && early_cutoff && !task.outputs_changed?
           notify_dependents_unchanged(task)
         end
       end
@@ -135,6 +122,31 @@ module Croupier
       # the run finished and its state is saved, report them so callers
       # can tell the run failed (e.g. set an exit code)
       raise RunFailure.new(failures) if keep_going && !failures.empty?
+    end
+
+    # Whether `task` can run now: it either has every input satisfied,
+    # or the run tolerates waiting (dry run) / absorbs it (keep_going
+    # warns and skips). Raises otherwise: a blocked task with no
+    # keep_going has no useful failure of its own to report.
+    private def runnable?(task : Task, keep_going : Bool, dry_run : Bool) : Bool
+      return true if task.waiting_for.empty? || dry_run
+      raise UnknownInputsError.new("Can't run task for #{task.outputs}: Waiting for #{task.waiting_for}") unless keep_going
+      # Blocked behind a failure: skip it and keep going with
+      # the rest, like the parallel runner does
+      Log.warn { "Skipping task for #{task.outputs}: Waiting for #{task.waiting_for}" }
+      false
+    end
+
+    # Run one task and return the failure, if any, instead of raising
+    # it, so the runner can decide to collect (keep_going) or raise.
+    # Successful tasks join `succeeded`.
+    private def run_one(task : Task, dry_run : Bool, succeeded : Set(Task)) : Exception?
+      task.run unless dry_run
+      succeeded << task unless dry_run
+      nil
+    rescue ex
+      Log.error { "Error running task for #{task.outputs}: #{ex}" }
+      ex
     end
 
     # Internal helper to run tasks concurrently.
@@ -165,33 +177,9 @@ module Croupier
       errors = [] of Exception
 
       loop do
-        if run_all
-          stale_tasks = _tasks.reject { |t|
-            finished_tasks.includes?(t) || failed_tasks.includes?(t)
-          }
-        else
-          stale_tasks = _tasks.select(&.stale?).reject { |t|
-            finished_tasks.includes?(t) || failed_tasks.includes?(t)
-          }
-        end
-
-        break if stale_tasks.empty?
-
-        # The uniq is because a task may be repeated in the
-        # task graph because of multiple outputs. We don't
-        # want to run it twice.
-        batch = stale_tasks.select(&.ready?(run_all)).uniq!.shuffle
-
-        if batch.size == 0
-          if keep_going
-            # Everything left is blocked behind a failure (failed
-            # tasks stay stale, so their dependents never become
-            # ready): nothing more this run can do
-            Log.warn { "No runnable tasks left: #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}" }
-            break
-          end
-          # No tasks are ready
-          raise UnknownInputsError.new("Can't run tasks: Waiting for #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}")
+        batch = next_batch(_tasks, run_all, finished_tasks, failed_tasks, keep_going)
+        if batch.nil?
+          break
         end
 
         errors.concat(run_wave(batch, dry_run, early_cutoff, finished_tasks, failed_tasks))
@@ -208,6 +196,42 @@ module Croupier
       # keep_going collected the failures instead of aborting; report
       # them once the run finished and its state is saved
       raise RunFailure.new(errors) if keep_going && !errors.empty?
+    end
+
+    # The next batch of runnable tasks, or nil when the run is over:
+    # every stale task finished, or (with keep_going) everything left
+    # is blocked behind a failure. Raises when tasks remain but none
+    # can run and failures are not being absorbed.
+    private def next_batch(
+      candidates : Array(Task),
+      run_all : Bool,
+      finished_tasks : Set(Task),
+      failed_tasks : Set(Task),
+      keep_going : Bool,
+    ) : Array(Task)?
+      done = finished_tasks | failed_tasks
+      stale_tasks = if run_all
+                      candidates.reject { |task| done.includes?(task) }
+                    else
+                      candidates.select(&.stale?).reject { |task| done.includes?(task) }
+                    end
+      return nil if stale_tasks.empty?
+
+      # The uniq is because a task may be repeated in the
+      # task graph because of multiple outputs. We don't
+      # want to run it twice.
+      batch = stale_tasks.select(&.ready?(run_all)).uniq!.shuffle
+      return batch unless batch.empty?
+
+      if keep_going
+        # Everything left is blocked behind a failure (failed
+        # tasks stay stale, so their dependents never become
+        # ready): nothing more this run can do
+        Log.warn { "No runnable tasks left: #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}" }
+        return nil
+      end
+      # No tasks are ready
+      raise UnknownInputsError.new("Can't run tasks: Waiting for #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}")
     end
 
     # One parallel wave: run `batch` on a small worker pool and collect
