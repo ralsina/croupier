@@ -240,4 +240,42 @@ describe "TaskManager" do
       end
     end
   end
+
+  describe "hash_directory" do
+    it "walks the same entries the previous glob-based scan did" do
+      with_scenario("empty") do
+        Dir.mkdir_p("tree/nested/deeper")
+        Dir.mkdir_p("tree/.hiddendir")
+        File.write("tree/file.txt", "one")
+        File.write("tree/nested/.dotfile", "two")
+        File.write("tree/nested/deeper/x[1].txt", "three")
+        File.write("tree/.hiddendir/y", "four")
+
+        # In fast_dirs mode the digest is the bare entry list, so this
+        # asserts the walked list equals the glob reference exactly
+        # (same files, subdirectories, dotfiles and nesting)
+        expected = Dir.glob(
+          "tree/**/*",
+          match: File::MatchOptions.glob_default | File::MatchOptions::DotFiles
+        ).sort
+        TaskManager.fast_dirs = true
+        TaskManager.hash_directory("tree").should eq Digest::SHA1.hexdigest(expected.join("\n"))
+      end
+    end
+
+    it "treats glob metacharacters in the directory name literally" do
+      with_scenario("empty") do
+        Dir.mkdir_p("assets[2]")
+        File.write("assets[2]/file", "one")
+        digest = TaskManager.hash_directory("assets[2]")
+
+        # The digest must reflect the real contents: as a pattern,
+        # "assets[2]" only matches a directory named "assets2" (which
+        # doesn't exist), so the old glob-based scan hashed an empty
+        # entry list and never saw the file change
+        File.write("assets[2]/file", "two")
+        TaskManager.hash_directory("assets[2]").should_not eq digest
+      end
+    end
+  end
 end

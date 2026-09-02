@@ -111,12 +111,15 @@ module Croupier
     # channels (via hash_files_parallel), so it is safe to call from
     # parallel task workers.
     def hash_directory(path : String) : String
-      # Glob the tree once and reuse the list. Hidden entries count:
-      # an added/removed/changed .env must change the digest.
-      entries = Dir.glob(
-        "#{path}/**/*",
-        match: File::MatchOptions.glob_default | File::MatchOptions::DotFiles
-      ).sort
+      # Walk the tree once and reuse the list. Hidden entries count:
+      # an added/removed/changed .env must change the digest. The tree
+      # is traversed explicitly instead of interpolating `path` into a
+      # glob pattern: metacharacters in a path's own name (a directory
+      # literally named "assets[2]") must be taken literally, not
+      # interpreted as a pattern.
+      entries = [] of String
+      collect_directory_entries(path, entries)
+      entries.sort!
 
       return Digest::SHA1.hexdigest(entries.join("\n")) if @fast_dirs
 
@@ -135,6 +138,20 @@ module Croupier
           ctx.update(file_hashes[f])
           ctx.update("\n")
         end
+      end
+    end
+
+    # Every path under `dir` (files and subdirectories, dotfiles
+    # included, `dir` itself excluded, symlinked directories not
+    # followed) appended to `entries`, matching what
+    # Dir.glob("#{dir}/**/*", DotFiles) used to return. The entry list
+    # is the basis of the directory digest, so its shape must not
+    # change: that would silently re-stale every directory input.
+    private def collect_directory_entries(dir : String, entries : Array(String)) : Nil
+      Dir.each_child(dir) do |child|
+        entry = File.join(dir, child)
+        entries << entry
+        collect_directory_entries(entry, entries) if File.directory?(entry) && !File.symlink?(entry)
       end
     end
 
