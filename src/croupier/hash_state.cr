@@ -8,11 +8,6 @@ module Croupier
       @hashes_lock.synchronize { next_run[output] = new_hash }
     end
 
-    # The hash recorded for `output` by the last completed run, if any.
-    def previous_output_hash(output : String) : String | Nil
-      @hashes_lock.synchronize { last_run[output]? }
-    end
-
     # Record `new_hash` for `output` and return the hash the last run
     # recorded for it, in a single locked step: task workers call this
     # once per output instead of a record-then-previous round-trip.
