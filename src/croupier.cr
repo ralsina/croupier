@@ -135,7 +135,10 @@ module Croupier
       @graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
       @graph_sorted = [] of String
       @reverse_deps.clear
-      @queued_changes.clear
+      # Locked: the inotify callback fiber may still be running while
+      # cleanup starts (auto_stop closes the watcher from the autorun
+      # fiber, which takes a moment)
+      clear_queued_changes
       @existing_files.clear
       @_store_path = nil
       @_store = Kiwi::MemoryStore.new

@@ -3,6 +3,13 @@ module Croupier
   class TaskManagerType
     # Files with changes detected in auto_run
     @queued_changes : Set(String) = Set(String).new
+    # Guards @queued_changes. The inotify callback runs on the library's
+    # own fiber, and hashing inputs resizes the default execution
+    # context to several OS threads, so the callback fiber and the
+    # autorun fiber can genuinely run in parallel even though auto mode
+    # executes tasks serially. A Set is not thread-safe: every access
+    # from either fiber goes through this lock.
+    @queued_changes_lock = Sync::Mutex.new
 
     @autorun_control = Channel(Bool).new
     # Whether the autorun fiber is live: auto_stop's send would block
@@ -16,6 +23,27 @@ module Croupier
       @autorun_control.receive?
       @autorun_control = Channel(Bool).new
       @autorun_running = false
+    end
+
+    # Snapshot of the queued changes, safe to call from the inotify
+    # callback fiber or the autorun fiber.
+    private def queued_changes_snapshot : Set(String)
+      @queued_changes_lock.synchronize { @queued_changes.dup }
+    end
+
+    # Queue one changed path (called from the inotify callback fiber).
+    private def queue_change(path : String) : Nil
+      @queued_changes_lock.synchronize { @queued_changes << path }
+    end
+
+    # Remove the paths processed this cycle from the queue, so events
+    # that arrived while the run executed stay queued for the next one.
+    private def unqueue_changes(paths : Set(String)) : Nil
+      @queued_changes_lock.synchronize { paths.each { |path| @queued_changes.delete(path) } }
+    end
+
+    private def clear_queued_changes : Nil
+      @queued_changes_lock.synchronize { @queued_changes.clear }
     end
 
     {% if flag?(:linux) %}
@@ -58,12 +86,13 @@ module Croupier
                 # can't see the side effects without sleeping in the
                 # tests.
                 sleep retry_delay.seconds
-                next if @queued_changes.empty? && @modified.empty?
-                Log.info { "Detected changes in #{@queued_changes}" }
+                changes = queued_changes_snapshot
+                next if changes.empty? && @modified.empty?
+                Log.info { "Detected changes in #{changes}" }
                 # No need to mark targets stale here: propagate_staleness,
                 # called at the start of every run, resets every task's
                 # staleness from scratch.
-                @modified += @queued_changes
+                @modified += changes
                 Log.debug { "Modified: #{@modified}" }
                 # Call the before_run_hook if set, passing the changed files
                 before_run_hook.call(@modified.dup) unless @modified.empty?
@@ -81,9 +110,11 @@ module Croupier
                   watch(targets)
                   run_tasks(targets: targets, parallel: false)
                 end
-                # Only clean queued changes after a successful run
+                # Only clean the changes processed this cycle after a
+                # successful run: events that arrived while the run
+                # executed stay queued for the next one
                 @modified.clear
-                @queued_changes.clear
+                unqueue_changes(changes)
                 # Fold this cycle's hashes into @last_run: the non-auto
                 # path reloads them from the state file every run, but
                 # the auto branch never refreshes @last_run, so without
@@ -155,8 +186,14 @@ module Croupier
         # process.
 
         event_handler = ->(event : Inotify::Event) do
-          # It's a file we care about, add it to the queue
-          path = event.path && event.name ? Path["#{event.path}/#{event.name}"].normalize.to_s : (event.path || "nil")
+          # Path of the changed file; when the event carries no name
+          # there is nothing to match, so fall back to the bare path
+          # ("" if absent) which matches no input below
+          path = if event.path && event.name
+                   Path["#{event.path}/#{event.name}"].normalize.to_s
+                 else
+                   event.path || ""
+                 end
 
           # Debug logging
           Log.debug do
@@ -186,7 +223,7 @@ module Croupier
           # If path matches a watched path, add it to the queue
           matched = false
           if target_inputs.includes? path
-            @queued_changes << path
+            queue_change(path)
             Log.debug { "Detected change in #{path} (exact match)" }
             matched = true
           else
@@ -195,7 +232,7 @@ module Croupier
               # the queue. A path equal to an input was already caught
               # by the exact match above.
               if path.starts_with?(normalized)
-                @queued_changes << input
+                queue_change(input)
                 Log.debug { "Detected change in #{input} (prefix match: #{path} starts with #{normalized})" }
                 matched = true
                 break
