@@ -138,7 +138,7 @@ describe "TaskManager" do
       graph["island"] << "island2"
 
       expect_raises(Exception, /unreachable.*island/i) do
-        topological_sort(graph)
+        Croupier.topological_sort(graph)
       end
     end
 
@@ -149,14 +149,14 @@ describe "TaskManager" do
       graph["y"] << "x"
 
       expect_raises(Exception, "Cycle detected") do
-        topological_sort(graph)
+        Croupier.topological_sort(graph)
       end
     end
 
     it "accepts plain hashes without a default block" do
       graph = {"start" => Set{"a"}} of String => Set(String)
 
-      topological_sort(graph).should contain "a"
+      Croupier.topological_sort(graph).should contain "a"
     end
 
     it "visits siblings in a deterministic order" do
@@ -168,7 +168,7 @@ describe "TaskManager" do
       # Sorted adjacency: the exact sibling order is part of the
       # contract, so a stdlib hash-layout change can't silently
       # reshuffle serial run order
-      topological_sort(graph).should eq ["start", "a", "b", "c"]
+      Croupier.topological_sort(graph).should eq ["start", "a", "b", "c"]
     end
   end
 

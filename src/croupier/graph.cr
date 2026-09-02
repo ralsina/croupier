@@ -154,7 +154,7 @@ module Croupier
         end
 
         # Only return tasks, not inputs in the sorted graph
-        @graph_sorted = topological_sort(@graph).select { |v| tasks.has_key? v }
+        @graph_sorted = Croupier.topological_sort(@graph).select { |v| tasks.has_key? v }
       end
       return @graph, @graph_sorted
     end
