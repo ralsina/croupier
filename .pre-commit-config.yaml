@@ -14,8 +14,17 @@ repos:
       rev: 3.0.0
       hooks:
           - id: shellcheck
-          - id: markdownlint
-            exclude: '^(content|CHANGES\.md)'
+    - repo: local
+      hooks:
+          - id: markdownlint-cli2
+            name: markdownlint-cli2
+            description: Lint markdown files with markdownlint-cli2
+            entry: markdownlint-cli2
+            language: node
+            additional_dependencies:
+                - markdownlint-cli2@0.23.2
+            types: [markdown]
+            exclude: '^(content/|CHANGES\.md|examples/ssg/content/)'
     - repo: https://github.com/mrtazz/checkmake
       rev: 0.2.2
       hooks:

@@ -104,19 +104,20 @@ Croupier supports hierarchical tasks through the **master/subtask pattern**. Thi
 ### What are Master Tasks?
 
 A **master task** is a special type of task that:
-- Has `master_task: true` in its definition
-- Runs on every build (typically with `always_run: true`)
-- Dynamically creates, removes, or manages **subtasks** based on runtime conditions
-- Has no outputs of its own (returns `nil`)
+
+* Has `master_task: true` in its definition
+* Runs on every build (typically with `always_run: true`)
+* Dynamically creates, removes, or manages **subtasks** based on runtime conditions
+* Has no outputs of its own (returns `nil`)
 
 ### When to Use Master/Subtask Pattern
 
 The master/subtask pattern is ideal when:
 
-- You have a variable number of similar tasks (e.g., processing files in a directory)
-- Tasks need to be created dynamically based on folder contents
-- You want to avoid manually defining a task for each file
-- The set of tasks changes frequently (files added/removed)
+* You have a variable number of similar tasks (e.g., processing files in a directory)
+* Tasks need to be created dynamically based on folder contents
+* You want to avoid manually defining a task for each file
+* The set of tasks changes frequently (files added/removed)
 
 ### Example: Static Site Generator
 
@@ -181,15 +182,15 @@ Croupier::TaskManager.run_tasks
 
 ### Key Methods
 
-- **`register_subtask(master_id, subtask)`**: Register a newly created subtask with a master task
-- **`remove_subtasks(master_id)`**: Remove all subtasks belonging to a master task
-- **`invalidate_graph_cache`**: Force the task graph to rebuild (called automatically when subtasks are added/removed)
+* **`register_subtask(master_id, subtask)`**: Register a newly created subtask with a master task
+* **`remove_subtasks(master_id)`**: Remove all subtasks belonging to a master task
+* **`invalidate_graph_cache`**: Force the task graph to rebuild (called automatically when subtasks are added/removed)
 
 ### Important Notes
 
 1. **Double Execution**: When using master tasks, call `run_tasks` twice:
-   - First run: Master task executes and creates/removes subtasks
-   - Second run: Newly created subtasks execute
+   * First run: Master task executes and creates/removes subtasks
+   * Second run: Newly created subtasks execute
 
    In auto mode, this is handled automatically - Croupier detects when the task graph changes and runs tasks again as needed.
 

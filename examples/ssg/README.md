@@ -24,11 +24,13 @@ This example shows how to use master tasks to dynamically create and manage subt
 ## Installation
 
 1. Install dependencies:
+
    ```bash
    shards install
    ```
 
 2. Build the binary:
+
    ```bash
    shards build
    # or
@@ -52,6 +54,7 @@ This example shows how to use master tasks to dynamically create and manage subt
 ```
 
 In auto mode, the SSG will:
+
 1. Build the site initially
 2. Watch the `content/` folder for changes
 3. Automatically rebuild when:
@@ -64,7 +67,7 @@ Press `Ctrl+C` to stop watching.
 
 ### Command-line options
 
-```
+```text
 Usage: ssg [options]
     -a, --auto      Watch for changes and rebuild automatically
     -h, --help      Show this help
@@ -75,7 +78,7 @@ Usage: ssg [options]
 
 The generated HTML files will be in the `output/` directory:
 
-```
+```text
 output/
 ├── index.html       (from content/index.md)
 ├── about.html       (from content/about.md)
@@ -186,7 +189,7 @@ end
 
 ## Project Structure
 
-```
+```text
 ssg/
 ├── shard.yml           # Project dependencies
 ├── src/
@@ -213,6 +216,7 @@ Edit the `HTML_TEMPLATE` constant in `src/ssg.cr` to customize the generated HTM
 ### Change Styling
 
 The default uses PicoCSS via CDN. You can:
+
 - Use a different CSS framework
 - Add custom styles in the `<style>` tag
 - Link to an external stylesheet
@@ -220,6 +224,7 @@ The default uses PicoCSS via CDN. You can:
 ### Add Processing Steps
 
 Modify the `render_markdown` function to add:
+
 - Syntax highlighting for code blocks
 - Image optimization
 - Table of contents generation

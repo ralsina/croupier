@@ -1,0 +1,13 @@
+// Configuration for markdownlint-cli2 (see https://github.com/DavidAnson/markdownlint-cli2)
+//
+// No "globs" here on purpose: the pre-commit hook passes the files to
+// lint explicitly, and a "**/*.md" glob would walk the vendored shards
+// under lib/ and examples/ssg/lib/ (100k+ files, OOM).
+{
+    "config": {
+        "default": true,
+        // Long lines are intentional throughout the docs (URLs, badges,
+        // prose the author prefers not to rewrap)
+        "MD013": false
+    }
+}

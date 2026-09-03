@@ -39,7 +39,6 @@ what's necessary based on file/content changes.
 
 - `make mutation` - Run mutation testing
 
-
 **Cleanup:**
 
 - `make clean` - Remove build artifacts, lib/, coverage/, shard.lock

@@ -18,7 +18,7 @@ Traditional build systems require you to manually define a task for each file. W
 
 ## Architecture
 
-```
+```text
 content/
 ├── index.md      ──┐
 ├── about.md      ──┤
