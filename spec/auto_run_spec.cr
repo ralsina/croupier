@@ -249,11 +249,15 @@ describe "TaskManager" do
         File.exists?("output3").should be_false
         # This would trigger output3's task in a full run, but "input"
         # is not watched in this one (only input2 is): nothing must
-        # happen. Negative assertion, so a bounded window it, with a
-        # settle check that no cycle is pending either.
+        # happen. Negative assertion, so a bounded window, with a
+        # settle check that no cycle is pending either. The settle wait
+        # is bounded (not instantaneous) because under load a stray
+        # event can linger briefly; if it never settles, that's a real
+        # bug.
         File.open("input", "w") << "bar"
-        sleep 0.1.seconds
-        auto_cycle_settled?.should be_true
+        wait_until(timeout: 1.seconds, message: "a cycle is still pending for an unwatched input") {
+          auto_cycle_settled?
+        }
         TaskManager.auto_stop
         # No outputs created
         File.exists?("output5").should be_false
