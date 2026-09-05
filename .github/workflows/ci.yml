@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Install Crystal
         uses: crystal-lang/install-crystal@v1
       - name: Run tests
@@ -18,3 +18,16 @@ jobs:
           shards install --without-development
           crystal tool format --check
           crystal spec -v
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download source
+        uses: actions/checkout@v4
+      - name: Install Crystal
+        uses: crystal-lang/install-crystal@v1
+      - name: Lint Crystal
+        run: |
+          shards install
+          bin/ameba
+      - name: Lint markdown
+        run: npx -y markdownlint-cli2@0.23.2
