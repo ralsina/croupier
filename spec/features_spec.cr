@@ -735,18 +735,39 @@ describe "TaskManager" do
         # Dirty up everything a session can carry
         TaskManager.state_file = "custom_state"
         TaskManager.early_cutoff = false
+        TaskManager.fast_mode = true
+        TaskManager.fast_dirs = true
+        TaskManager.auto_mode = true
         TaskManager.add_mutex("db")
         TaskManager.before_run_hook = ->(_changes : Set(String)) { File.write("hook_fired", "") }
         TaskManager.progress_callback = ->(_id : String) { File.write("progress_fired", "") }
+        # And the caches and run state
+        TaskManager.set("k", "v")
+        TaskManager.modified << "ghost"
+        Task.new(output: "out", inputs: ["seed"]) { "data" }
+        TaskManager.run_tasks
+        # The dirty run fired the still-installed hooks; remove their
+        # markers so the post-cleanup check below starts clean
+        File.delete?("progress_fired")
+        File.delete?("hook_fired")
 
         TaskManager.cleanup
 
         TaskManager.state_file.should eq ".croupier"
         TaskManager.early_cutoff?.should be_true
+        # Every mode flag must reset: a stale one silently changes the
+        # behavior of the next session (this bit fast_dirs once)
+        TaskManager.fast_mode?.should be_false
+        TaskManager.fast_dirs?.should be_false
+        TaskManager.auto_mode?.should be_false
         TaskManager.mutexes.empty?.should be_true
+        TaskManager.modified.empty?.should be_true
+        TaskManager.@existing_files.empty?.should be_true
+        TaskManager.@store_cache.empty?.should be_true
+        TaskManager.@all_inputs.empty?.should be_true
 
         # The hooks are gone: running a task must not fire them
-        Task.new(output: "out", inputs: ["seed"]) { "data" }
+        Task.new(output: "out2", inputs: ["seed"]) { "data" }
         TaskManager.run_tasks
         File.exists?("hook_fired").should be_false
         File.exists?("progress_fired").should be_false
