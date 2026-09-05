@@ -23,7 +23,7 @@ what's necessary based on file/content changes.
 
 - `make test` - Run tests with verbose output and error traces
 
-- `crystal spec spec/croupier_spec.cr` - Run specific test file
+- `crystal spec spec/task_spec.cr` - Run a specific test file
 
 **Linting and Formatting:**
 
@@ -33,11 +33,9 @@ what's necessary based on file/content changes.
 
 - `make lint` - Run both formatting and linting with fixes
 
-**Coverage and Analysis:**
+**Coverage:**
 
 - `make coverage` - Generate test coverage report (opens in browser)
-
-- `make mutation` - Run mutation testing
 
 **Cleanup:**
 
@@ -47,11 +45,12 @@ what's necessary based on file/content changes.
 
 **Core Components:**
 
-- **TaskManager** (`src/croupier.cr:21-540`): Singleton that manages the task graph,
-  tracks file changes, handles execution modes (serial/parallel/auto), and maintains
-  k/v store
+- **TaskManager** (`src/croupier.cr` plus `src/croupier/graph.cr`, `runner.cr`,
+  `watcher.cr`, `hash_state.cr` and `kv_store.cr`): Singleton that manages the
+  task graph, tracks file changes, handles execution modes (serial/parallel/auto),
+  and maintains k/v store
 
-- **Task** (`src/task.cr:12-283`): Represents individual tasks with inputs/outputs,
+- **Task** (`src/task.cr`): Represents individual tasks with inputs/outputs,
   procs, and execution logic. Supports task merging when outputs conflict
 
 - **Topological Sort** (`src/topo_sort.cr`): Implements dependency resolution for

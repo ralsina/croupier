@@ -47,7 +47,7 @@ Croupier guarantees the following:
 
 * If `task1` has never run before, it *will run* and create `fileA`
 * If `task1` has run before and `input.txt` has not changed, it *will not run*.
-* If `task1` has run before and ìnput.txt` has changed, it *will run*
+* If `task1` has run before and `input.txt` has changed, it *will run*
 * If `task1` runs, `task2` *will run* and create `fileB`
 * `task1` will run *before* `task2`
 
