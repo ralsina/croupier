@@ -228,10 +228,9 @@ describe "TaskManager" do
 
         # Trigger a change
         File.open("input", "w") << "modified"
-        sleep 0.05.seconds
+        wait_until(message: "before_run_hook never called") { hook_called }
 
         # Hook should have been called with the changed file
-        hook_called.should be_true
         hook_changes.should contain "input"
 
         TaskManager.auto_stop

@@ -378,14 +378,12 @@ describe "TaskManager" do
 
         # Now test auto mode - start watching for changes to content files
         TaskManager.auto_run
-        sleep 0.1.seconds
 
         # Modify a file
         File.write("content/test.md", "Modified content")
-        sleep 0.2.seconds
-
-        # File should be regenerated
-        File.read("output/test.html").should eq "Modified content"
+        wait_until(message: "content file never regenerated") {
+          File.read("output/test.html") == "Modified content"
+        }
 
         TaskManager.auto_stop
       end
@@ -761,18 +759,16 @@ describe "TaskManager" do
 
         baseline = live_fiber_count
         TaskManager.auto_run
-        sleep 0.2.seconds
         # The autorun fiber (plus the watcher's) are running
+        wait_until(message: "autorun fibers never started") { live_fiber_count > baseline }
         during = live_fiber_count
-        during.should be > baseline
 
         TaskManager.cleanup
         TaskManager.@autorun_running.should be_false
-        sleep 0.2.seconds
         # The autorun fiber and the watcher's reader are gone. (One
         # inotify event-loop fiber stays parked on the library's own
         # channel forever — an upstream leak croupier can't retire.)
-        live_fiber_count.should be < during
+        wait_until(message: "autorun fibers never stopped") { live_fiber_count < during }
       end
     end
   end
@@ -789,8 +785,15 @@ describe "TaskManager" do
         # and live as long as the process)
         TaskManager.run_tasks(parallel: true)
         5.times { TaskManager.scan_inputs }
-        sleep 0.1.seconds
-        baseline = live_fiber_count
+        # Worker fibers exit once their (closed) queue drains: wait
+        # until the count is stable across a few yields, that is the
+        # floor the second round must return to
+        baseline = 0
+        wait_until(message: "fiber count never stabilized") {
+          baseline = live_fiber_count
+          3.times { Fiber.yield; sleep 1.millisecond }
+          live_fiber_count == baseline
+        }
 
         # A second round of the same width must not grow the fiber
         # count: worker fibers that drained their (closed) queue exit,
@@ -800,9 +803,7 @@ describe "TaskManager" do
         seeds.each_key { |k| File.write(k, "changed") }
         TaskManager.run_tasks(parallel: true)
         5.times { TaskManager.scan_inputs }
-        sleep 0.1.seconds
-
-        live_fiber_count.should eq baseline
+        wait_until(message: "worker fibers never exited") { live_fiber_count == baseline }
       end
     end
   end
