@@ -28,6 +28,7 @@ jobs:
       - name: Lint Crystal
         run: |
           shards install
+          mkdir -p bin
           crystal build lib/ameba/bin/ameba.cr -o bin/ameba
           bin/ameba
       - name: Lint markdown
