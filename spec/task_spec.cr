@@ -453,9 +453,14 @@ describe "Task" do
       with_scenario("empty") do
         Task.new("output2", inputs: [] of String, proc: TaskProc.new { raise "foo" })
         Task.new("output3", inputs: ["output2"], proc: TaskProc.new { "" })
-        expect_raises(TaskFailure, "Task 052cd9c6f04c::output2 failed: foo") do
+        # run_tasks wraps the failure in a RunFailure; the TaskFailure
+        # (with the proc's exception as its cause) is carried in #errors
+        failure = expect_raises(RunFailure, "Task 052cd9c6f04c::output2 failed: foo") do
           TaskManager.run_tasks
         end
+        failure.errors.size.should eq 1
+        failure.errors.first.should be_a(TaskFailure)
+        failure.errors.first.cause.should_not be_nil
       end
     end
 
