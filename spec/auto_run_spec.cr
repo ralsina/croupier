@@ -16,20 +16,16 @@ describe "TaskManager" do
       with_scenario("basic", to_create: {"input" => "foo"}) do
         TaskManager.watch
         File.open("input", "w") << "bar"
-        # We need to yield or else the watch callbacks never run
-        Fiber.yield
-        TaskManager.@queued_changes.should eq Set{"input"}
-        File.open("input2", "w") << "foo"
         # The inotify event is delivered asynchronously by the kernel,
         # so a single Fiber.yield can run before the watcher fiber is
-        # scheduled: wait (with a timeout) instead of sleeping a fixed
-        # time.
-        deadline = Time.monotonic + 2.seconds
-        until TaskManager.@queued_changes.includes?("input2")
-          Fiber.yield
-          sleep 1.millisecond
-          raise "inotify event for input2 never arrived" if Time.monotonic > deadline
-        end
+        # scheduled: wait (with a timeout) for the event to land.
+        wait_until(message: "inotify event for input never arrived") {
+          TaskManager.@queued_changes.includes?("input")
+        }
+        File.open("input2", "w") << "foo"
+        wait_until(message: "inotify event for input2 never arrived") {
+          TaskManager.@queued_changes.includes?("input2")
+        }
         TaskManager.@queued_changes.should eq Set{"input", "input2"}
       end
     end
@@ -50,10 +46,14 @@ describe "TaskManager" do
   describe "auto_run" do
     it "should not re-run dependents when outputs are unchanged" do
       with_scenario("empty", to_create: {"seed" => "one"}) do
+        producer_runs = 0
         dependent_runs = 0
         # The producer re-runs every cycle (always_run) but always
         # writes the same content: its dependent must not re-run
-        Task.new(output: "up", inputs: ["seed"], always_run: true) { "same" }
+        Task.new(output: "up", inputs: ["seed"], always_run: true) {
+          producer_runs += 1
+          "same"
+        }
         Task.new(output: "down", inputs: ["up"]) {
           dependent_runs += 1
           "d"
@@ -63,15 +63,19 @@ describe "TaskManager" do
         Fiber.yield
 
         File.write("seed", "two")
-        sleep 0.3.seconds
-        Fiber.yield
+        wait_until(message: "first producer cycle never ran") {
+          producer_runs == 1 && auto_cycle_settled?
+        }
         dependent_runs.should eq 1
 
         File.write("seed", "three")
-        sleep 0.3.seconds
-        Fiber.yield
+        wait_until(message: "second producer cycle never ran") {
+          producer_runs == 2 && auto_cycle_settled?
+        }
         # Early cutoff must work across auto cycles: "up" was
-        # rewritten with identical content
+        # rewritten with identical content. Once a cycle settled, no
+        # further run can happen without a new event, so this is
+        # deterministic.
         dependent_runs.should eq 1
 
         TaskManager.auto_stop
@@ -93,16 +97,15 @@ describe "TaskManager" do
         # A change to the master's input triggers a cycle that creates
         # the subtask and runs it
         File.write("seed", "two")
-        sleep 0.3.seconds
-        Fiber.yield
+        wait_until(message: "subtask never ran") {
+          File.exists?("sub_out") && auto_cycle_settled?
+        }
         File.read("sub_out").should eq "1"
 
         # The subtask's input was not known when auto_run started
         # watching: without re-watching, changes to it are invisible
         File.write("sub_input", "2")
-        sleep 0.3.seconds
-        Fiber.yield
-        File.read("sub_out").should eq "2"
+        wait_until(message: "subtask never re-ran") { File.read("sub_out") == "2" }
 
         TaskManager.auto_stop
       end
@@ -117,14 +120,10 @@ describe "TaskManager" do
         File.exists?("output3").should be_false
         # We create input, which is output3's dependency
         File.open("input", "w") << "bar"
-        sleep 0.1.seconds # Give auto_run time to detect the change
-        Fiber.yield
-        # Now output3 should exist since it only depends on input
-        File.exists?("output3").should be_true
+        wait_until(message: "output3 never built") { File.exists?("output3") }
         # We create input2, which is output5's dependency
         File.open("input2", "w") << "bar"
-        sleep 0.1.seconds # Give auto_run time to detect the change
-        Fiber.yield
+        wait_until(message: "output5 never built") { File.exists?("output5") }
         TaskManager.auto_stop
         # And now output3 should exist
         File.exists?("output3").should be_true
@@ -139,13 +138,10 @@ describe "TaskManager" do
         TaskManager.auto_run
         Fiber.yield
         File.open("i", "w") << "foo"
-        sleep 0.1.seconds # Give auto_run time to detect the change
-        # We need to yield or else the watch callbacks never run
-        Fiber.yield
+        wait_until(message: "task never ran") { x > 0 }
+        TaskManager.auto_stop
         # auto_run logs all errors and continues, because it's
         # normal to have failed runs in auto mode
-        TaskManager.auto_stop
-        # It should have run
         (x > 0).should be_true
       end
     end
@@ -172,8 +168,7 @@ describe "TaskManager" do
         TaskManager.auto_run
         Fiber.yield
         File.open("i", "w") << "foo"
-        sleep 0.1.seconds # Give auto_run time to detect the change
-        Fiber.yield
+        wait_until(message: "task never ran") { x == 1 }
         TaskManager.auto_stop
         # It should only have ran once
         x.should eq 1
@@ -188,8 +183,7 @@ describe "TaskManager" do
         TaskManager.auto_run
         Fiber.yield
         File.open("i", "w") << "foo"
-        sleep 0.1.seconds # Give auto_run time to detect the change
-        Fiber.yield
+        wait_until(message: "task never ran") { x == 1 }
         TaskManager.auto_stop
         # It should only have ran once
         x.should eq 1
@@ -214,7 +208,7 @@ describe "TaskManager" do
 
         # This triggers building output3
         File.open("input", "w") << "bar"
-        Fiber.yield
+        wait_until(message: "output3 never built") { File.exists?("output3") }
         TaskManager.auto_stop
         # At this point output3 exists, output1 doesn't
         File.exists?("output1").should be_false
@@ -229,17 +223,16 @@ describe "TaskManager" do
         File.exists?("output3").should be_false
         # This triggers building output3
         File.open("input", "w") << "bar1"
-        # The timing here is tricky, we need to wait longer
-        # than the watch interval, but not too long because
-        # that makes the test slow
-        sleep 0.02.seconds
-        File.exists?("output3").should be_true
+        wait_until(message: "output3 never built") {
+          File.exists?("output3") && auto_cycle_settled?
+        }
         # We delete things, and then trigger another build
         File.delete("output3")
         File.delete("input")
         File.open("input", "w") << "bar2"
-        Fiber.yield
-        sleep 0.02.seconds
+        wait_until(message: "output3 never rebuilt") {
+          File.exists?("output3") && auto_cycle_settled?
+        }
         TaskManager.auto_stop
         File.exists?("output3").should be_true
       end
@@ -248,13 +241,16 @@ describe "TaskManager" do
     it "should not be triggered by deps for not specified targets" do
       with_scenario("basic") do
         TaskManager.auto_run(targets: ["output5"])
-        sleep 0.2.seconds
         # At this point output5 doesn't exist
         File.exists?("output5").should be_false
         File.exists?("output3").should be_false
-        # This triggers output3, which is not requested
+        # This would trigger output3's task in a full run, but "input"
+        # is not watched in this one (only input2 is): nothing must
+        # happen. Negative assertion, so a bounded window it, with a
+        # settle check that no cycle is pending either.
         File.open("input", "w") << "bar"
-        Fiber.yield
+        sleep 0.1.seconds
+        auto_cycle_settled?.should be_true
         TaskManager.auto_stop
         # No outputs created
         File.exists?("output5").should be_false
@@ -280,10 +276,9 @@ describe "TaskManager" do
         TaskManager.auto_run
         x.should eq 0
         TaskManager.set("foo", "bar2")
-        sleep 0.02.seconds
-        x.should eq 1
+        wait_until(message: "task never ran after kv change") { x == 1 }
         TaskManager.set("foo", "bar3")
-        sleep 0.02.seconds
+        wait_until(message: "task never re-ran after second kv change") { x == 2 }
         TaskManager.auto_stop
         # With the auto mode fix, both changes are detected (not just the first)
         x.should eq 2
@@ -294,10 +289,8 @@ describe "TaskManager" do
       with_scenario("a_dir") do
         File.exists?("output3").should be_false
         TaskManager.auto_run
-        sleep 0.02.seconds
         Dir.mkdir("a_dir")
-        sleep 0.02.seconds
-        File.exists?("output3").should be_true
+        wait_until(message: "output3 never built") { File.exists?("output3") }
         TaskManager.auto_stop
       end
     end
@@ -306,11 +299,9 @@ describe "TaskManager" do
       with_scenario("a_dir") do
         Dir.mkdir("a_dir")
         TaskManager.auto_run
-        sleep 0.02.seconds
         File.exists?("output3").should be_false
         File.open("a_dir/input", "w") << "bar"
-        sleep 0.02.seconds
-        File.exists?("output3").should be_true
+        wait_until(message: "output3 never built") { File.exists?("output3") }
         TaskManager.auto_stop
       end
     end
@@ -319,13 +310,11 @@ describe "TaskManager" do
       with_scenario("a_dir") do
         Dir.mkdir("a_dir")
         TaskManager.auto_run
-        sleep 0.02.seconds
         File.exists?("output3").should be_false
         # Create a nested subdirectory with a file
         Dir.mkdir("a_dir/subdir")
         File.open("a_dir/subdir/input", "w") << "bar"
-        sleep 0.02.seconds
-        File.exists?("output3").should be_true
+        wait_until(message: "output3 never built") { File.exists?("output3") }
         TaskManager.auto_stop
       end
     end
@@ -341,13 +330,10 @@ describe "TaskManager" do
         initial_content = File.read("output3")
         # Now watch for changes
         TaskManager.auto_run
-        sleep 0.02.seconds
         # Modify the nested file
         File.open("a_dir/subdir/input", "w") << "modified"
-        sleep 0.02.seconds
         # Task should have run again, content should change
-        new_content = File.read("output3")
-        new_content.should_not eq initial_content
+        wait_until(message: "output3 never rebuilt") { File.read("output3") != initial_content }
         TaskManager.auto_stop
       end
     end
@@ -363,13 +349,10 @@ describe "TaskManager" do
         initial_content = File.read("output3")
         # Now watch for changes
         TaskManager.auto_run
-        sleep 0.02.seconds
         # Delete the nested file
         File.delete("a_dir/subdir/input")
-        sleep 0.02.seconds
         # Task should have run again, content should change
-        new_content = File.read("output3")
-        new_content.should_not eq initial_content
+        wait_until(message: "output3 never rebuilt") { File.read("output3") != initial_content }
         TaskManager.auto_stop
       end
     end
