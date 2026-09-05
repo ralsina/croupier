@@ -455,11 +455,15 @@ module Croupier
 
       # Propagate staleness through the graph
       # If a task is stale, all tasks that depend on it are also stale
-      # We use a worklist algorithm for efficiency
+      # We use a worklist algorithm for efficiency. An index cursor
+      # instead of shift(): popping from the array front is O(n) per
+      # visit, which quietly turned the O(V+E) walk into O(V*E) on
+      # wide graphs.
       worklist = stale_tasks.to_a
-
-      while !worklist.empty?
-        stale_output = worklist.shift
+      cursor = 0
+      while cursor < worklist.size
+        stale_output = worklist[cursor]
+        cursor += 1
 
         reverse_deps[stale_output].each do |dependent|
           unless stale_tasks.includes?(dependent)
