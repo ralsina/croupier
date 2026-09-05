@@ -100,7 +100,11 @@ module Croupier
         failure = run_one(task, dry_run, succeeded)
         if failure
           failures << failure
-          raise failure unless keep_going
+          # A failure ends the run right away (state is not saved),
+          # with the failure itself — not a "waiting for" message
+          # about the dependents now blocked behind it. RunFailure
+          # keeps serial and parallel runs uniform for callers.
+          raise RunFailure.new(failures) unless keep_going
         end
         finished << task
 

@@ -10,11 +10,11 @@ module Croupier
   class TaskFailure < Exception
   end
 
-  # Raised at the end of a `keep_going` run in which some tasks failed.
-  # The run still completes everything it can and saves its state, but
-  # the caller gets a failure signal (e.g. to set an exit code).
-  # `#errors` carries every task failure, since `Exception#cause` can
-  # only chain one.
+  # Raised when a run has failing tasks. Without `keep_going` the run
+  # aborts on the first failure (state is not saved); with
+  # `keep_going: true` the run completes everything it can and saves
+  # its state, then this is raised at the end. `#errors` carries every
+  # task failure, since `Exception#cause` can only chain one.
   class RunFailure < Exception
     getter errors : Array(Exception)
 

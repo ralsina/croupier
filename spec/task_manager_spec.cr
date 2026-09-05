@@ -325,16 +325,20 @@ describe "TaskManager" do
         end
       end
 
-      it "should abort with the task failure when not using keep_going" do
+      it "should abort with a RunFailure when not using keep_going" do
         with_scenario("empty", to_create: {"seed" => "x"}) do
           Task.new(output: "up", inputs: ["seed"]) { raise "boom" }
           Task.new(output: "down", inputs: ["up"]) { "d" }
 
-          # The failure itself must surface, not a "waiting for" message
-          # about the dependent blocked behind it
-          expect_raises(Exception, /boom/) do
+          # The failure must surface (message and chained cause), not a
+          # "waiting for" message about the dependent blocked behind it,
+          # and as a RunFailure so callers can rescue uniformly across
+          # serial and parallel runs
+          failure = expect_raises(Croupier::RunFailure, /boom/) do
             TaskManager.run_tasks(parallel: parallel)
           end
+          failure.errors.size.should eq 1
+          failure.errors.first.cause.should_not be_nil
           File.exists?("down").should be_false
         end
       end
