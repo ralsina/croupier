@@ -314,21 +314,33 @@ module Croupier
         # against the last completed cycle; unscanned entries (deleted
         # files, kv keys set outside this flow) are kept as modified.
         @this_run = scan_inputs
-        @modified = @modified.select { |path|
-          if hash = @this_run[path]?
-            last_run.fetch(path, "") != hash
-          else
-            true
-          end
-        }.to_set
+        # Keep only changes the last completed cycle doesn't already
+        # know about. Mutated in place under the lock: reassigning the
+        # set would race readers holding the old reference
+        @modified_lock.synchronize do
+          kept = @modified.select { |path|
+            if hash = @this_run[path]?
+              last_run.fetch(path, "") != hash
+            else
+              true
+            end
+          }
+          @modified.clear
+          kept.each { |path| @modified << path }
+        end
         return
       end
 
       # Preserve k/v store modifications before clearing
       # K/v modifications are added via set() and need to survive the clear
       # so that propagate_staleness() can detect tasks that depend on them
-      kv_modifications = @modified.select(&.starts_with?("kv://"))
-      @modified.clear
+      # (both happen under the lock: set() marks modified from parallel
+      # task workers)
+      kv_modifications = @modified_lock.synchronize do
+        kv = @modified.select(&.starts_with?("kv://"))
+        @modified.clear
+        kv
+      end
 
       # When this run's scan starts: recorded in the state file so the
       # NEXT fast-mode run compares input mtimes against this moment
@@ -396,14 +408,18 @@ module Croupier
                      else
                        last_run_date.to_unix_f
                      end
-      scan_scope.each do |file|
-        if info = File.info?(file)
-          @modified << file if info.modification_time.to_unix_f > scan_started
+      @modified_lock.synchronize do
+        scan_scope.each do |file|
+          if info = File.info?(file)
+            @modified << file if info.modification_time.to_unix_f > scan_started
+          end
         end
       end
       # Fast mode can't hash values, so k/v modifications are still
       # detected through set()'s flags and must survive the clear
-      @modified |= kv_modifications.to_set
+      @modified_lock.synchronize do
+        kv_modifications.each { |key| @modified << key }
+      end
     end
 
     private def mark_stale_inputs_content_mode(
@@ -416,8 +432,10 @@ module Croupier
       # would make the next full run treat those inputs as modified
       # and rebuild everything).
       @this_run = @last_run.merge(scanned)
-      scanned.each do |file, sha1|
-        @modified << file if last_run.fetch(file, "") != sha1
+      @modified_lock.synchronize do
+        scanned.each do |file, sha1|
+          @modified << file if last_run.fetch(file, "") != sha1
+        end
       end
       # k/v modifications are hash-detected like files here; set()'s
       # flags from before the run (or from the previous run) are
@@ -513,7 +531,7 @@ module Croupier
         end
 
         # Check if inputs are modified
-        modified_inputs = task.inputs.any? { |i| modified.includes?(i) }
+        modified_inputs = task.inputs.any? { |i| modified?(i) }
         if modified_inputs
           stale_tasks << output
           next

@@ -50,7 +50,14 @@ module Croupier
     # between runs, use `add_input` instead of mutating `tasks` or
     # `Task#inputs` directly.
     property tasks = {} of String => Croupier::Task
-    # Registry of modified files, which will make tasks stale
+    # Registry of modified files, which will make tasks stale.
+    #
+    # Unlike the run-hash trio below, this set IS touched from parallel
+    # task workers: kv:// writes (set) and modified? are public API for
+    # task procs. Every internal access therefore goes through
+    # @modified_lock (including in cleanup, which can race a live
+    # autorun cycle). The property is public for user code and tests,
+    # but mutating it directly from a running task proc races.
     property modified = Set(String).new
     # SHA1 of files from last run
     #
@@ -137,7 +144,7 @@ module Croupier
       # Stop the autorun fiber first, so it doesn't fire runs against
       # the cleared manager halfway through cleanup
       auto_stop
-      modified.clear
+      @modified_lock.synchronize { modified.clear }
       tasks.clear
       tasks_by_id.clear
       last_run.clear

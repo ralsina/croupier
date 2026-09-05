@@ -111,16 +111,23 @@ module Croupier
         # tests.
         sleep retry_delay.seconds
         changes = queued_changes_snapshot
-        return {retry_delay, targets} if changes.empty? && @modified.empty?
+        # modified is checked under the lock: task procs may mark kv
+        # keys modified from parallel workers
+        modified_pending = @modified_lock.synchronize { !@modified.empty? }
+        return {retry_delay, targets} if changes.empty? && !modified_pending
         begin
           Log.info { "Detected changes in #{changes}" }
           # No need to mark targets stale here: propagate_staleness,
           # called at the start of every run, resets every task's
           # staleness from scratch.
-          @modified += changes
-          Log.debug { "Modified: #{@modified}" }
-          # Call the before_run_hook if set, passing the changed files
-          before_run_hook.call(@modified.dup) unless @modified.empty?
+          hook_changes = @modified_lock.synchronize do
+            @modified += changes
+            @modified.dup
+          end
+          Log.debug { "Modified: #{hook_changes}" }
+          # Call the before_run_hook if set, passing the changed files.
+          # User code must not run under a library lock
+          before_run_hook.call(hook_changes) unless hook_changes.empty?
           # Run tasks - if master tasks create new subtasks, the graph
           # will be invalidated and we need to run again to execute them
           initial_task_count = tasks.size
@@ -138,7 +145,7 @@ module Croupier
           # Drop only the changes processed this cycle, then the
           # modified set: a successful run consumed them
           unqueue_changes(changes)
-          @modified.clear
+          @modified_lock.synchronize { @modified.clear }
           # In auto mode this fiber is the only writer of the run-hash
           # trio (tasks run serially on it), so the merge needs no lock
           last_run.merge!(this_run).merge!(next_run)
