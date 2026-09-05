@@ -166,21 +166,21 @@ describe "TaskManager" do
     end
 
     it "accepts plain hashes without a default block" do
-      graph = {"start" => Set{"a"}} of String => Set(String)
+      graph = {Croupier::ROOT_VERTEX => Set{"a"}} of String => Set(String)
 
       Croupier.topological_sort(graph).should contain "a"
     end
 
     it "visits siblings in a deterministic order" do
       graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
-      graph["start"] << "b"
-      graph["start"] << "a"
-      graph["start"] << "c"
+      graph[Croupier::ROOT_VERTEX] << "b"
+      graph[Croupier::ROOT_VERTEX] << "a"
+      graph[Croupier::ROOT_VERTEX] << "c"
 
       # Sorted adjacency: the exact sibling order is part of the
       # contract, so a stdlib hash-layout change can't silently
       # reshuffle serial run order
-      Croupier.topological_sort(graph).should eq ["start", "a", "b", "c"]
+      Croupier.topological_sort(graph).should eq [Croupier::ROOT_VERTEX, "a", "b", "c"]
     end
   end
 
