@@ -24,7 +24,6 @@ repos:
             additional_dependencies:
                 - markdownlint-cli2@0.23.2
             types: [markdown]
-            exclude: '^(content/|CHANGES\.md|examples/ssg/content/)'
     - repo: https://github.com/mrtazz/checkmake
       rev: 0.2.2
       hooks:
