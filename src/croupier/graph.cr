@@ -128,17 +128,18 @@ module Croupier
 
         # All inputs are vertices
         all_inputs.each do |input|
-          # The start node is just a convenience root for non-task inputs
-          @graph["start"] << input unless tasks.has_key? input
+          # The virtual root (ROOT_VERTEX) is a convenience node for
+          # non-task inputs
+          @graph[Croupier::ROOT_VERTEX] << input unless tasks.has_key? input
         end
 
         # Add vertices and edges for tasks: tasks with no inputs hang
-        # off the start node, each input gets an edge into the task.
+        # off the virtual root, each input gets an edge into the task.
         # Every vertex (including tasks without outputs, keyed by id)
         # is registered on first touch by the hash's default block.
         tasks.each do |output, task|
           if task.@inputs.empty?
-            @graph["start"] << output
+            @graph[Croupier::ROOT_VERTEX] << output
           end
           task.@inputs.each do |input|
             @graph[input] << output

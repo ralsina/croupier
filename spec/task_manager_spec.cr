@@ -93,14 +93,14 @@ describe "TaskManager" do
   describe "sorted_task_graph" do
     it "should create a topologically sorted task graph" do
       expected = {
-        "start"   => Set{"input", "input2", "output1", "output2"},
-        "input"   => Set{"output3"},
-        "input2"  => Set{"output5"},
-        "output1" => Set(String).new,
-        "output2" => Set(String).new,
-        "output3" => Set{"output4"},
-        "output4" => Set(String).new,
-        "output5" => Set(String).new,
+        Croupier::ROOT_VERTEX => Set{"input", "input2", "output1", "output2"},
+        "input"               => Set{"output3"},
+        "input2"              => Set{"output5"},
+        "output1"             => Set(String).new,
+        "output2"             => Set(String).new,
+        "output3"             => Set{"output4"},
+        "output4"             => Set(String).new,
+        "output5"             => Set(String).new,
       }
       with_scenario("basic") do
         g, s = TaskManager.sorted_task_graph
@@ -126,6 +126,18 @@ describe "TaskManager" do
         expect_raises(Exception, "Cycle detected") do
           TaskManager.sorted_task_graph
         end
+      end
+    end
+
+    it "should not confuse a task output named start with the graph root" do
+      with_scenario("empty") do
+        Task.new(output: "start", inputs: [] of String) { "s" }
+        Task.new(output: "end", inputs: ["start"]) { "e" }
+
+        _, sorted = TaskManager.sorted_task_graph
+        # The root used to be literally "start": a task by that name
+        # became the root vertex instead of hanging off it
+        sorted.should eq ["start", "end"]
       end
     end
   end

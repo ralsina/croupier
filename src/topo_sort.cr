@@ -2,9 +2,16 @@
 # Thanks Blckknght!
 
 module Croupier
+  # Virtual root vertex of the task graph. It contains a NUL byte,
+  # which no file path (and no sane task id) can contain, so a real
+  # vertex can never collide with it — it used to be literally
+  # "start", and a task named "start" would become the root of the
+  # whole graph.
+  ROOT_VERTEX = "\0start"
+
   # Sort the vertices of `g` (an adjacency hash, vertex => the vertices it
-  # points at) starting from the "start" root, so every vertex comes after
-  # the vertices pointing at it.
+  # points at) starting from the virtual root (ROOT_VERTEX), so every vertex
+  # comes after the vertices pointing at it.
   #
   # Neighbors are visited in sorted order, so the order among independent
   # vertices is deterministic instead of following hash-table layout.
@@ -14,7 +21,7 @@ module Croupier
     seen = Set(String).new
     stack = Array(String).new
     order = Array(String).new
-    q = ["start"]
+    q = [ROOT_VERTEX]
     while !q.empty?
       v = q.pop
       if !seen.includes?(v)
@@ -29,11 +36,11 @@ module Croupier
       end
     end
     result = stack + order.reverse
-    # The DFS visits every vertex reachable from "start". Anything never
-    # seen (as a key or inside an adjacency list) is not reachable: that
-    # is either an acyclic island (a wiring mistake like a missing
-    # "start" edge) or an actual cycle. Report which, instead of calling
-    # both a cycle.
+    # The DFS visits every vertex reachable from ROOT_VERTEX. Anything
+    # never seen (as a key or inside an adjacency list) is not
+    # reachable: that is either an acyclic island (a wiring mistake
+    # like a missing root edge) or an actual cycle. Report which,
+    # instead of calling both a cycle.
     all_vertices = Set(String).new
     g.each do |vertex, neighbors|
       all_vertices << vertex
@@ -44,7 +51,7 @@ module Croupier
       if cyclic?(unvisited.to_a, g)
         raise "Cycle detected"
       end
-      raise "Unreachable from start: #{unvisited.to_a.sort.join(", ")}"
+      raise "Unreachable from root: #{unvisited.to_a.sort.join(", ")}"
     end
     result
   end
