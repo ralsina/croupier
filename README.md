@@ -293,6 +293,35 @@ x.should eq 1
 File.exists?("t1").should eq true
 ```
 
+## When Tasks Fail
+
+When a task's proc raises, the task fails with a `Croupier::TaskFailure`
+that keeps the original exception available as its `#cause`.
+
+A failed run surfaces as `Croupier::RunFailure`:
+
+* Without `keep_going`, the run aborts on the first failure and its
+  state is not saved. The `RunFailure` carries that single failure.
+* With `keep_going: true`, the run completes everything it can and
+  saves its state, then raises `RunFailure` at the end. Its `#errors`
+  array carries every failure, each with the original exception as its
+  `#cause`.
+
+```crystal
+begin
+  TaskManager.run_tasks(keep_going: true)
+rescue failure : Croupier::RunFailure
+  failure.errors.each { |e| Log.error { e.message } }
+  exit 1
+end
+```
+
+Tasks that can't run because an input is missing (neither a task
+output, an existing file, nor a `kv://` key) raise
+`Croupier::UnknownInputsError`. In auto mode these are expected
+(inputs appear incrementally) and retried with backoff. Failed tasks
+leave their inputs marked as modified, so the next run retries them.
+
 ## Development
 
 Let's try to keep test coverage good :-)
