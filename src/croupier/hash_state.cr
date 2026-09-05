@@ -137,11 +137,13 @@ module Croupier
     end
 
     # Every path under `dir` (files and subdirectories, dotfiles
-    # included, `dir` itself excluded, symlinked directories not
-    # followed) appended to `entries`, matching what
-    # Dir.glob("#{dir}/**/*", DotFiles) used to return. The entry list
-    # is the basis of the directory digest, so its shape must not
-    # change: that would silently re-stale every directory input.
+    # included, `dir` itself excluded) appended to `entries`. A
+    # symlinked `dir` IS followed, so its real contents are hashed;
+    # symlinked directories inside the tree are not descended into
+    # (the old glob's follow_symlinks: false behavior). The entry
+    # list is the basis of the directory digest, so its shape is
+    # pinned by specs: changing it would silently re-stale every
+    # directory input.
     private def collect_directory_entries(dir : String, entries : Array(String)) : Nil
       Dir.each_child(dir) do |child|
         entry = File.join(dir, child)

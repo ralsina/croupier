@@ -277,5 +277,20 @@ describe "TaskManager" do
         TaskManager.hash_directory("assets[2]").should_not eq digest
       end
     end
+
+    it "hashes the contents of a directory input reached through a symlink" do
+      with_scenario("empty") do
+        Dir.mkdir_p("real")
+        File.write("real/file", "one")
+        File.symlink("real", "link")
+
+        # In fast_dirs mode the digest is the bare entry list, so this
+        # pins the walked list: a symlinked root is followed and its
+        # real contents hashed (the old glob-based scan saw an empty
+        # tree here, because it refused to descend the symlink)
+        TaskManager.fast_dirs = true
+        TaskManager.hash_directory("link").should eq Digest::SHA1.hexdigest("link/file")
+      end
+    end
   end
 end
