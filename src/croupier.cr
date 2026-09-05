@@ -134,12 +134,12 @@ module Croupier
 
     # Remove all tasks and everything else (good for tests)
     def cleanup
-      modified.clear
-      tasks.clear
-      tasks_by_id.clear
       # Stop the autorun fiber first, so it doesn't fire runs against
       # the cleared manager halfway through cleanup
       auto_stop
+      modified.clear
+      tasks.clear
+      tasks_by_id.clear
       last_run.clear
       this_run.clear
       next_run.clear
