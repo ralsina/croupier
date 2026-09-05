@@ -14,7 +14,7 @@ describe "TaskManager" do
 
     it "should include registered tasks" do
       with_scenario("basic") do
-        TaskManager.tasks.has_key?("output1").should eq true
+        TaskManager.tasks.has_key?("output1").should be_true
       end
     end
   end
@@ -860,12 +860,14 @@ describe "TaskManager" do
         # Make sure no files are modified
         TaskManager.modified.empty?.should be_true
         File.open(".croupier", "w") do |f|
-          f.puts(%({
-              "__version": "1",
-              "input": "thisiswrong",
-              "input2": "62cdb7020ff920e5aa642c3d4066950dd1f01f4d",
-              "output3": "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
-          }))
+          f.puts(<<-STATE)
+            {
+                "__version": "1",
+                "input": "thisiswrong",
+                "input2": "62cdb7020ff920e5aa642c3d4066950dd1f01f4d",
+                "output3": "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
+            }
+            STATE
         end
 
         TaskManager.mark_stale_inputs

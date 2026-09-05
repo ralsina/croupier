@@ -11,7 +11,7 @@ module Croupier
     # Record `new_hash` for `output` and return the hash the last run
     # recorded for it, in a single locked step: task workers call this
     # once per output instead of a record-then-previous round-trip.
-    def swap_output_hash(output : String, new_hash : String) : String | Nil
+    def swap_output_hash(output : String, new_hash : String) : String?
       @hashes_lock.synchronize do
         previous = last_run[output]?
         next_run[output] = new_hash
@@ -256,7 +256,7 @@ module Croupier
     # When the run being loaded started its scan (unix_f), recorded so
     # fast mode compares mtimes against the previous run's scan start;
     # nil for state files written before it was recorded
-    @last_scan_time : Float64 | Nil = nil
+    @last_scan_time : Float64? = nil
     # Scan start of the run in progress; written to the state file
     @scan_started : Float64 = 0.0
 

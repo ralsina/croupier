@@ -3,7 +3,7 @@ module Croupier
   class TaskManagerType
     # Key/Value store
     @_store : Kiwi::Store = Kiwi::MemoryStore.new
-    @_store_path : String | Nil = nil
+    @_store_path : String? = nil
 
     # Read-through cache for the k/v store: with a persistent
     # (FileStore) store, every staleness check is a SHA1 of the key
@@ -44,11 +44,11 @@ module Croupier
     end
 
     # Unsynchronized read-through lookup (callers hold @data_mutex).
-    private def store_read(key) : String | Nil
+    private def store_read(key) : String?
       if value = @store_cache[key]?
         return value
       end
-      return nil if @store_misses.includes?(key)
+      return if @store_misses.includes?(key)
       value = @_store.get(key)
       if value.nil?
         @store_misses << key

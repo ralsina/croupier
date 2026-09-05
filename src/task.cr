@@ -110,7 +110,7 @@ module Croupier
       outputs : Array(String) = [] of String,
       inputs : Array(String) = [] of String,
       no_save : Bool = false,
-      id : String | Nil = nil,
+      id : String? = nil,
       always_run : Bool = false,
       mergeable : Bool = true,
       mutex : String? = nil,
@@ -127,9 +127,9 @@ module Croupier
     def initialize(
       outputs : Array(String) = [] of String,
       inputs : Array(String) = [] of String,
-      proc : TaskProc | Nil = nil,
+      proc : TaskProc? = nil,
       no_save : Bool = false,
-      id : String | Nil = nil,
+      id : String? = nil,
       always_run : Bool = false,
       mergeable : Bool = true,
       master_task : Bool = false,
@@ -198,7 +198,7 @@ module Croupier
     # collision with a merge target is fine: one task, one id.)
     # The check goes through TaskManager's id index: scanning every
     # registered task made creation O(N^2) overall.
-    private def check_explicit_id_conflict(id : String | Nil, to_merge : Array(Task))
+    private def check_explicit_id_conflict(id : String?, to_merge : Array(Task))
       return if id.nil? || @outputs.empty?
       conflict = TaskManager.tasks_by_id[id]?
       return if conflict.nil? || to_merge.includes?(conflict)
@@ -233,10 +233,10 @@ module Croupier
     end
 
     def initialize(
-      output : String | Nil = nil,
+      output : String? = nil,
       inputs : Array(String) = [] of String,
       no_save : Bool = false,
-      id : String | Nil = nil,
+      id : String? = nil,
       always_run : Bool = false,
       mergeable : Bool = true,
       mutex : String? = nil,
@@ -252,11 +252,11 @@ module Croupier
 
     # Create a task with zero or one outputs. Overload for convenience.
     def initialize(
-      output : String | Nil = nil,
+      output : String? = nil,
       inputs : Array(String) = [] of String,
-      proc : TaskProc | Nil = nil,
+      proc : TaskProc? = nil,
       no_save : Bool = false,
-      id : String | Nil = nil,
+      id : String? = nil,
       always_run : Bool = false,
       mergeable : Bool = true,
       master_task : Bool = false,
@@ -291,8 +291,8 @@ module Croupier
 
     # Run every proc, locking the task's mutex (if any) around each
     # call, and collect their results.
-    private def call_procs : Array(String | Nil)
-      call_results = Array(String | Nil).new
+    private def call_procs : Array(String?)
+      call_results = Array(String?).new
       @procs.each do |proc|
         Fiber.yield
         mtx = mutex
@@ -335,7 +335,7 @@ module Croupier
     end
 
     # We have to save the files ourselves
-    private def save_outputs(call_results : Array(String | Nil))
+    private def save_outputs(call_results : Array(String?))
       if call_results.size > @outputs.size
         Log.warn { "Task #{self} returned #{call_results.size} results for #{@outputs.size} outputs, discarding the extras" }
       end
@@ -406,15 +406,13 @@ module Croupier
     end
 
     # Tri-state staleness property: nil=unknown, true=stale, false=fresh.
-    def stale : Bool | Nil
-      case @staleness.get
-      when Staleness::Stale then true
-      when Staleness::Fresh then false
-      else                       nil
-      end
+    def stale : Bool?
+      return true if @staleness.get.stale?
+      return false if @staleness.get.fresh?
+      nil # Unknown
     end
 
-    def stale=(value : Bool | Nil)
+    def stale=(value : Bool?)
       @staleness.set(
         case value
         when nil  then Staleness::Unknown

@@ -16,3 +16,33 @@ Documentation/DocumentationAdmonition:
 Excluded:
   - lib/**/**
   - examples/ssg/lib/**/**
+  - examples/ssg/src/**/**
+
+# ameba 1.7.0 rules that fight the codebase's established idioms,
+# disabled with rationale instead of churning hundreds of lines:
+Style/ArrayLiteralSyntax:
+  Description: Prefers Array(T).new over [] of T
+  Enabled: false # `[] of T` is idiomatic Crystal and used everywhere
+Style/HashLiteralSyntax:
+  Description: Prefers Hash(K, V).new over {} of K => V
+  Enabled: false # same as above
+Style/CallParentheses:
+  Description: Requires parentheses in method calls
+  Enabled: false # omitted parens (`File.exists? input`) are house style
+Style/MultilineCurlyBlock:
+  Description: Prefers do/end for multiline blocks
+  Enabled: false # `{ }` multiline blocks are used pervasively
+Style/VerboseNilType:
+  Description: Prefers T? over T | Nil
+  Enabled: false # explicit unions are the house style
+
+# Strict typing is for the library code, not the specs
+Typing/MethodReturnTypeRestriction:
+  Excluded:
+    - spec/**/**
+Typing/ProcLiteralReturnTypeRestriction:
+  Excluded:
+    - spec/**/**
+Typing/MethodParameterTypeRestriction:
+  Excluded:
+    - spec/**/**

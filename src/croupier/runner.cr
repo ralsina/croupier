@@ -116,15 +116,24 @@ module Croupier
         end
       end
 
-      # A dry run reports what would happen without doing it: persisting
-      # the scanned input hashes would consume the changes so the next
-      # real run would find nothing to do.
+      finish_run(task_names, succeeded, failures, keep_going, dry_run)
+    end
+
+    # Shared epilogue of both runners: a dry run must not persist the
+    # scanned input hashes (that would consume the changes so the next
+    # real run would find nothing to do); a real run saves its state
+    # and then reports collected failures, so callers can tell the run
+    # failed (e.g. set an exit code).
+    private def finish_run(
+      task_names,
+      succeeded : Set(Task),
+      failures : Array(Exception),
+      keep_going : Bool,
+      dry_run : Bool,
+    ) : Nil
       return if dry_run
       drop_unfinished_inputs(task_names, succeeded)
       save_run
-      # keep_going collected the failures instead of aborting; now that
-      # the run finished and its state is saved, report them so callers
-      # can tell the run failed (e.g. set an exit code)
       raise RunFailure.new(failures) if keep_going && !failures.empty?
     end
 
@@ -193,13 +202,7 @@ module Croupier
         # dependents now blocked behind it
         raise RunFailure.new(errors) unless errors.empty? || keep_going
       end
-      # See _run_tasks: a dry run must not consume the input changes
-      return if dry_run
-      drop_unfinished_inputs(task_names, finished_tasks - failed_tasks)
-      save_run
-      # keep_going collected the failures instead of aborting; report
-      # them once the run finished and its state is saved
-      raise RunFailure.new(errors) if keep_going && !errors.empty?
+      finish_run(task_names, finished_tasks - failed_tasks, errors, keep_going, dry_run)
     end
 
     # The next batch of runnable tasks, or nil when the run is over:
@@ -219,7 +222,7 @@ module Croupier
                     else
                       candidates.select(&.stale?).reject { |task| done.includes?(task) }
                     end
-      return nil if stale_tasks.empty?
+      return if stale_tasks.empty?
 
       # The uniq is because a task may be repeated in the
       # task graph because of multiple outputs. We don't
@@ -232,7 +235,7 @@ module Croupier
         # tasks stay stale, so their dependents never become
         # ready): nothing more this run can do
         Log.warn { "No runnable tasks left: #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}" }
-        return nil
+        return
       end
       # No tasks are ready
       raise UnknownInputsError.new("Can't run tasks: Waiting for #{stale_tasks.map(&.waiting_for).uniq!.join(", ")}")

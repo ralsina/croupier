@@ -193,7 +193,7 @@ module Croupier
           raise "Unknown output #{output}"
         end
       end
-      result = self._dependencies outputs
+      result = _dependencies outputs
       sorted_task_graph[1].select(->(v : String) { result.includes? v })
     end
 

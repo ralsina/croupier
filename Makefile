@@ -19,7 +19,9 @@ bin/run_tests: src/*.cr spec/*.cr
 	crystal build -o bin/run_tests src/run_tests.cr
 lint:
 	crystal tool format src/*.cr spec/*.cr
-	bin/ameba --all --fix
+	# Not --all: that force-enables ameba's disabled-by-default rules
+	# (280 opinionated new ones in 1.7.0) on top of the configured set
+	bin/ameba --fix
 clean:
 	rm -rf lib/ bin/ coverage/ shard.lock
 	git clean -f
