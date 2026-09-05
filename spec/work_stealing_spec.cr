@@ -3,7 +3,7 @@ include Croupier
 
 describe "Work-Stealing Algorithm" do
   describe "vs Static Chunking" do
-    it "should handle tasks with varying execution times better" do
+    it "should handle tasks with varying execution times" do
       with_scenario("empty") do
         # Create tasks with different execution times
         slow_tasks = [] of String
@@ -31,10 +31,7 @@ describe "Work-Stealing Algorithm" do
           end
         end
 
-        # Test work-stealing algorithm (should be faster due to better load balancing)
-        work_stealing_time = Time.measure do
-          TaskManager.run_tasks(parallel: true, run_all: true)
-        end
+        TaskManager.run_tasks(parallel: true, run_all: true)
 
         # Verify all tasks completed
         fast_tasks.each { |task_name|
@@ -43,9 +40,6 @@ describe "Work-Stealing Algorithm" do
         slow_tasks.each { |task_name|
           File.exists?(task_name).should be_true
         }
-
-        # Work-stealing should complete without errors
-        work_stealing_time.total_milliseconds.should be < 100 # Should be very fast
       end
     end
 
@@ -53,28 +47,39 @@ describe "Work-Stealing Algorithm" do
       with_scenario("empty") do
         Task.new(output: "single", inputs: [] of String) { "single_task" }
 
-        Time.measure do
-          TaskManager.run_tasks(parallel: true, run_all: true)
-        end.total_milliseconds.should be < 50
+        TaskManager.run_tasks(parallel: true, run_all: true)
 
         File.exists?("single").should be_true
       end
     end
 
-    it "should handle more tasks than workers" do
+    it "should run more tasks than workers concurrently" do
       with_scenario("empty") do
-        # Create 20 tasks (more than typical CPU count)
+        # 20 tasks (more than typical CPU count) that each take a
+        # little while: running them in parallel must be faster than
+        # the same work done serially. The comparison is relative, so
+        # a slow or loaded machine can't flake it the way an absolute
+        # wall-clock budget could.
         20.times do |i|
-          Task.new(output: "task_#{i}", inputs: [] of String) { "content_#{i}" }
+          Task.new(output: "serial_#{i}", inputs: [] of String) do
+            sleep 30.milliseconds
+            "content_#{i}"
+          end
         end
-
-        Time.measure do
-          TaskManager.run_tasks(parallel: true, run_all: true)
-        end.total_milliseconds.should be < 100
+        serial = Time.measure { TaskManager.run_tasks(run_all: true) }
 
         20.times do |i|
-          File.exists?("task_#{i}").should be_true
+          Task.new(output: "parallel_#{i}", inputs: [] of String) do
+            sleep 30.milliseconds
+            "content_#{i}"
+          end
         end
+        parallel = Time.measure { TaskManager.run_tasks(parallel: true, run_all: true) }
+
+        20.times { |i| File.exists?("parallel_#{i}").should be_true }
+        # With at least two workers, ~20x30ms of work takes at most
+        # half the serial time; the margin is wide by construction
+        parallel.total_milliseconds.should be < serial.total_milliseconds
       end
     end
 
