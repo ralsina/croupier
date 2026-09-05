@@ -18,6 +18,18 @@ describe "TaskManager" do
       end
     end
 
+    it "should record a real scan time in auto mode too" do
+      with_scenario("empty", to_create: {"input" => "data"}) do
+        # Auto mode used to leave @scan_started at 0.0, so a later
+        # fast-mode run compared mtimes against zero and rebuilt
+        # everything once
+        TaskManager.auto_mode = true
+        TaskManager.mark_stale_inputs
+        TaskManager.save_run
+        YAML.parse(File.read(".croupier"))["__scan_time"].to_s.to_f.should be > 0
+      end
+    end
+
     it "should save all inputs and outputs on a full run" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         TaskManager.run_tasks

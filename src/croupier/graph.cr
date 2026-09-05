@@ -302,6 +302,11 @@ module Croupier
       # New run: the positive file-existence cache may be stale
       @existing_files.clear
       if auto_mode?
+        # Record when this run's scan starts, like the non-auto path
+        # below: a later fast-mode run compares mtimes against this
+        # timestamp, and a zero would make every input look modified
+        # (one spurious full rebuild when auto and fast mode mix)
+        @scan_started = Time.utc.to_unix_f
         # In auto mode, the watcher tells us WHAT to look at, but events
         # fire on rewrites even when the content is identical (a task
         # that regenerates a watched input unchanged retriggers itself
