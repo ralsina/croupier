@@ -12,6 +12,30 @@ def live_fiber_count : Int32
   count
 end
 
+# Wait until the block returns true, yielding to other fibers while
+# waiting (that is how the watcher and autorun fibers get scheduled)
+# and raising after `timeout`. Replaces fixed sleeps in asynchronous
+# specs: how long a change takes to be detected depends on machine
+# load, but the condition itself is deterministic.
+def wait_until(timeout : Time::Span = 5.seconds, message : String = "condition never became true", &) : Nil
+  deadline = Time.instant + timeout
+  until yield
+    Fiber.yield
+    sleep 1.millisecond
+    if Time.instant > deadline
+      raise "#{message} within #{timeout.total_milliseconds}ms"
+    end
+  end
+end
+
+# True when an auto mode cycle has nothing left to process: no queued
+# watcher events and an empty modified set means any cycle in flight
+# finished its run, and nothing more can happen until a new filesystem
+# event or kv:// write arrives.
+def auto_cycle_settled? : Bool
+  TaskManager.@queued_changes.empty? && TaskManager.modified.empty?
+end
+
 # Sets up a test scenario: enters the scenario directory, cleans up any
 # previous state (state file, generated files, TaskManager), creates the
 # requested files and tasks from the scenario's tasks.yml, runs the block,
