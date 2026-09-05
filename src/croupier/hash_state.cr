@@ -222,14 +222,18 @@ module Croupier
 
     # We ran all tasks, store the current state. Written to a
     # temporary file and renamed into place, so a crash mid-write
-    # can't leave a truncated state file behind.
+    # can't leave a truncated state file behind. The temp name carries
+    # the PID: two croupier processes sharing a directory would
+    # otherwise race on the same temp file and one could rename a
+    # half-written state into place.
     def save_run
       state = {"__version"   => STATE_VERSION,
                "__scan_time" => @scan_started.to_s}.merge(this_run.merge(next_run))
-      File.open("#{@state_file}.tmp", "w") do |file|
+      temp_file = "#{@state_file}.tmp.#{Process.pid}"
+      File.open(temp_file, "w") do |file|
         file << YAML.dump(state)
       end
-      File.rename("#{@state_file}.tmp", @state_file)
+      File.rename(temp_file, @state_file)
     end
 
     # Read the state file, guarding against corruption and schema
