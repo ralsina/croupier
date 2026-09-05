@@ -277,6 +277,23 @@ describe "TaskManager" do
       end
     end
 
+    it "raises instead of hanging when an input is unreadable in a parallel scan" do
+      with_scenario("empty") do
+        # >64 file inputs forces hash_files_parallel off its inline
+        # path: a worker used to die on the unreadable file and the
+        # run hung forever waiting on the results queue
+        70.times do |i|
+          File.write("f#{i}", "x#{i}")
+          File.chmod("f0", 0o000) if i == 0
+        end
+        Task.new(output: "out", inputs: (0...70).map { |i| "f#{i}" }) { "o" }
+
+        expect_raises(File::Error) do
+          TaskManager.run_tasks
+        end
+      end
+    end
+
     it "hashes the contents of a directory input reached through a symlink" do
       with_scenario("empty") do
         Dir.mkdir_p("real")

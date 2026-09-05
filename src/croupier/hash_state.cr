@@ -173,11 +173,11 @@ module Croupier
       num_workers = Math.min(System.cpu_count, chunks.size)
       enable_parallelism(num_workers)
       task_queue = Channel(Array(String)).new(chunks.size)
-      result_queue = Channel(Hash(String, String)).new(chunks.size)
+      result_queue = Channel({Hash(String, String), Exception?}).new(chunks.size)
 
       chunks.each { |chunk| task_queue.send(chunk) }
-      # Close the queue so workers exit (receive? returns nil) instead of
-      # parking forever on the drained channel
+      # Close the queue so workers exit (receive? returns nil) instead
+      # of parking forever on the drained channel
       task_queue.close
 
       num_workers.times do
@@ -186,15 +186,28 @@ module Croupier
             chunk = task_queue.receive?
             break unless chunk
             results = {} of String => String
-            chunk.each { |path| results[path] = Croupier.hash_file(path) }
-            result_queue.send(results)
+            error = nil
+            # A worker that died here (unreadable file, deleted between
+            # the File.file? check and the hash) would park the
+            # collector below on result_queue.receive forever: report
+            # the failure through the queue instead, like run_wave does
+            begin
+              chunk.each { |path| results[path] = Croupier.hash_file(path) }
+            rescue ex
+              error = ex
+            end
+            result_queue.send({results, error})
           end
         end
       end
 
+      first_error = nil
       chunks.size.times do
-        result_queue.receive.each { |path, sha1| hash[path] = sha1 }
+        results, error = result_queue.receive
+        results.each { |path, sha1| hash[path] = sha1 }
+        first_error ||= error
       end
+      raise first_error if first_error
       hash
     end
 
