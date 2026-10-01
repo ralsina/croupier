@@ -9,6 +9,8 @@ require "./croupier/watcher"
 require "digest/sha1"
 {% if flag?(:linux) %}
   require "inotify"
+{% elsif flag?(:darwin) %}
+  require "./croupier/kqueue_watcher"
 {% end %}
 require "kiwi/file_store"
 require "kiwi/memory_store"
@@ -154,7 +156,7 @@ module Croupier
       @graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
       @graph_sorted = [] of String
       @reverse_deps.clear
-      # Locked: the inotify callback fiber may still be running while
+      # Locked: the filesystem watcher may still be running while
       # cleanup starts (auto_stop closes the watcher from the autorun
       # fiber, which takes a moment)
       clear_queued_changes
@@ -173,16 +175,7 @@ module Croupier
       mutexes.clear
       @progress_callback = ->(_id : String) { }
       @before_run_hook = ->(_changes : Set(String)) { }
-      {% if flag?(:linux) %}
-        return unless watcher = @@watcher
-        begin
-          watcher.close
-        rescue ex : Inotify::Error
-          # Ignore "Bad file descriptor" errors during cleanup
-          # This can happen when the watcher is already closed or invalid
-        end
-        @@watcher = nil
-      {% end %}
+      close_watcher
     end
   end
 
