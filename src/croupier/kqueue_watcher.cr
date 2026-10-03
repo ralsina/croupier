@@ -171,18 +171,29 @@
         @root_exists[root] = root_exists
       end
 
+      # Root plus, if it is a directory, every entry under it
+      # (dotfiles included). The tree is walked explicitly with
+      # Dir.each_child instead of interpolating root into a glob
+      # pattern: metacharacters in a path's own name (a directory
+      # literally named "assets[2]") must be taken literally, not
+      # interpreted as a pattern — the same fix hash_state.cr's
+      # collect_directory_entries made for directory hashing. A
+      # symlinked root IS followed (matching the previous glob);
+      # symlinked directories inside the tree are not descended
+      # into (the glob's follow_symlinks: false behavior).
       private def watch_paths(root : String, root_exists : Bool) : Array(String)
-        if root_exists
-          paths = [root]
-          if File.directory?(root)
-            match = File::MatchOptions.glob_default | File::MatchOptions::DotFiles
-            Dir.glob(Path[root, "**", "*"].to_s, match: match) do |path|
-              paths << path
-            end
-          end
-          paths
-        else
-          [existing_parent(root)]
+        return [existing_parent(root)] unless root_exists
+
+        paths = [root]
+        collect_watch_paths(root, paths) if File.directory?(root)
+        paths
+      end
+
+      private def collect_watch_paths(dir : String, paths : Array(String)) : Nil
+        Dir.each_child(dir) do |child|
+          entry = File.join(dir, child)
+          paths << entry
+          collect_watch_paths(entry, paths) if File.directory?(entry) && !File.symlink?(entry)
         end
       end
 
