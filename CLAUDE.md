@@ -29,7 +29,7 @@ what's necessary based on file/content changes.
 
 - `crystal tool format src/*.cr spec/*.cr` - Format code
 
-- `bin/ameba --all --fix` - Run linter with auto-fix
+- `bin/ameba --fix` - Run linter with auto-fix (no `--all`: it force-enables the rules ameba 1.7.0 ships disabled by default)
 
 - `make lint` - Run both formatting and linting with fixes
 
