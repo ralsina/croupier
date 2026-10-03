@@ -1,4 +1,5 @@
 # Croupier describes a task graph and lets you operate on them
+require "./croupier/errors"
 require "./task"
 require "./topo_sort"
 require "./croupier/kv_store"

@@ -1,12 +1,4 @@
 module Croupier
-  # Raised when a task can't run yet because an input is not
-  # satisfiable: it is neither a fresh task, an existing file, nor a
-  # kv:// key. In auto mode this is an expected transient state (inputs
-  # appear incrementally), so the autorun loop rescues this class and
-  # retries with backoff instead of logging a warning on every cycle.
-  class UnknownInputsError < Exception
-  end
-
   # TaskManagerType methods for the dependency graph, staleness
   # computation and dependency queries.
   class TaskManagerType
@@ -34,8 +26,8 @@ module Croupier
     def add_input(task_key : String, input : String) : Bool
       @data_mutex.synchronize do
         task = tasks[task_key]?
-        raise "Unknown task #{task_key}" unless task
-        raise "Cycle detected" if task.keys.includes?(input)
+        raise UnknownTaskError.new("Unknown task #{task_key}") unless task
+        raise CycleError.new("Cycle detected: #{input} is a key of task #{task_key} itself") if task.keys.includes?(input)
         return false if task.inputs.includes?(input)
 
         if @parallel_wave_active
@@ -175,7 +167,7 @@ module Croupier
     def inputs(targets : Array(String))
       result = Set(String).new
       targets.each do |target|
-        raise "Unknown target #{target}" unless tasks.has_key? target
+        raise UnknownTaskError.new("Unknown target #{target}") unless tasks.has_key? target
       end
 
       dependencies(targets).each do |task|
@@ -190,7 +182,7 @@ module Croupier
     def dependencies(outputs : Array(String))
       outputs.each do |output|
         if !tasks.has_key?(output)
-          raise "Unknown output #{output}"
+          raise UnknownTaskError.new("Unknown output #{output}")
         end
       end
       result = _dependencies outputs

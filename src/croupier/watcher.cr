@@ -52,7 +52,7 @@ module Croupier
       # Only want dependencies that are not tasks
       inputs = inputs(targets)
       Log.info { "Auto_run: targets=#{targets.inspect}, inputs=#{inputs.inspect}" }
-      raise "No inputs to watch, can't auto_run" if inputs.empty?
+      raise UsageError.new("No inputs to watch, can't auto_run") if inputs.empty?
 
       # Auto_run always runs serially to avoid watcher thread safety issues
       # File watching and parallel execution don't mix well due to
@@ -343,7 +343,7 @@ module Croupier
       end
 
       def watch(targets : Array(String) = [] of String) : Nil
-        raise "auto_run is supported only on Linux and macOS"
+        raise UsageError.new("auto_run is supported only on Linux and macOS")
       end
     {% end %}
   end

@@ -62,7 +62,7 @@ module Croupier
     # the default memory store
     def use_persistent_store(path : String)
       return if path == @_store_path
-      raise "Can't change persistent k/v store path" unless @_store_path.nil?
+      raise UsageError.new("Can't change persistent k/v store path") unless @_store_path.nil?
       new_store = Kiwi::FileStore.new(path)
       # Convert from MemoryStore to FileStore, copying any data set so far
       old_store = @_store.as(Kiwi::MemoryStore)
