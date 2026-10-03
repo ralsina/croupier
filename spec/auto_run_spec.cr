@@ -149,6 +149,34 @@ describe "TaskManager" do
       end
     end
 
+    it "should log non-transient failures as bugs and keep watching" do
+      with_scenario("empty") do
+        logs = IO::Memory.new
+        Log.setup(:debug, Log::IOBackend.new(io: logs))
+        hook_calls = 0
+        # A raw exception from user code: a before_run_hook is the
+        # only way to inject one into autorun_cycle, task proc
+        # failures arrive wrapped in RunFailure
+        TaskManager.before_run_hook = ->(_changes : Set(String)) {
+          hook_calls += 1
+          raise "hook bug" if hook_calls == 1
+        }
+        x = 0
+        counter = TaskProc.new { x += 1; x.to_s }
+        Task.new(output: "t1", inputs: ["i"], proc: counter)
+        TaskManager.auto_run
+        Fiber.yield
+        File.open("i", "w") << "foo"
+        # The loop survives the bug: the retry after the raising
+        # cycle still runs the task
+        wait_until(message: "task never ran after the hook bug") { x >= 1 }
+        TaskManager.auto_stop
+        # And the bug was loud: error level, not the routine
+        # missing-input warning
+        logs.to_s.should match /ERROR.*hook bug/
+      end
+    end
+
     it "should not run when no inputs have changed" do
       with_scenario("empty") do
         x = 0

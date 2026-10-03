@@ -148,11 +148,25 @@ module Croupier
         last_run.merge!(this_run).merge!(next_run)
         {0.01, targets}
       rescue ex
-        # Sometimes we can't run because not all dependencies
-        # are there yet or whatever. We'll try again later
+        # Every failure retries with backoff: auto mode is a
+        # long-lived watcher, and stopping it on the first error
+        # would leave the process blind. What differs per failure
+        # is how loud it is.
         delay = Math.min(retry_delay * 2, 1.0)
-        unless ex.is_a?(UnknownInputsError)
+        case ex
+        when UnknownInputsError
+          # Not all inputs exist yet: the routine auto-mode
+          # condition, retry quietly
+        when RunFailure
+          # A task failed (mid-edit source, broken command): warn,
+          # still normal in auto mode
           Log.warn { "Automatic run failed (will retry): #{ex.message}" }
+        else
+          # Anything else is a bug (in a before_run_hook or in
+          # croupier itself: task proc failures arrive wrapped in
+          # RunFailure). Error level with the backtrace, so it can't
+          # be confused with the quiet retry above.
+          Log.error { "Automatic run crashed (bug, will retry): #{ex.inspect_with_backtrace}" }
         end
         {delay, targets}
       end
