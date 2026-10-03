@@ -787,7 +787,7 @@ describe "TaskManager" do
         TaskManager.cleanup
         TaskManager.@autorun_running.should be_false
         # The autorun fiber and the watcher's reader are gone. (One
-        # inotify event-loop fiber stays parked on the library's own
+        # filesystem event-loop fiber stays parked on the library's own
         # channel forever — an upstream leak croupier can't retire.)
         wait_until(message: "autorun fibers never stopped") { live_fiber_count < during }
       end

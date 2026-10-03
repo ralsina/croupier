@@ -16,14 +16,14 @@ describe "TaskManager" do
       with_scenario("basic", to_create: {"input" => "foo"}) do
         TaskManager.watch
         File.open("input", "w") << "bar"
-        # The inotify event is delivered asynchronously by the kernel,
+        # The filesystem event is delivered asynchronously by the kernel,
         # so a single Fiber.yield can run before the watcher fiber is
         # scheduled: wait (with a timeout) for the event to land.
-        wait_until(message: "inotify event for input never arrived") {
+        wait_until(message: "filesystem event for input never arrived") {
           TaskManager.@queued_changes.includes?("input")
         }
         File.open("input2", "w") << "foo"
-        wait_until(message: "inotify event for input2 never arrived") {
+        wait_until(message: "filesystem event for input2 never arrived") {
           TaskManager.@queued_changes.includes?("input2")
         }
         TaskManager.@queued_changes.should eq Set{"input", "input2"}
@@ -63,7 +63,7 @@ describe "TaskManager" do
         Fiber.yield
 
         File.write("seed", "two")
-        # Note: one File.write can deliver two inotify events (modify +
+        # Note: one File.write can deliver more than one event (modify +
         # close), so a change may legitimately trigger more than one
         # cycle; assert at-least-once, never exact counts
         wait_until(message: "first producer cycle never ran") {

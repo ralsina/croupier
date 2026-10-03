@@ -7,10 +7,22 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Download source
         uses: actions/checkout@v4
+      - name: Refresh apt package lists
+        # The runner image's cached lists can point at superseded
+        # package versions, making apt 404 while installing Crystal's
+        # dependencies (libevent-dev et al); refreshing resolves them
+        if: runner.os == 'Linux'
+        run: sudo apt-get update
       - name: Install Crystal
         uses: crystal-lang/install-crystal@v1
       - name: Run tests
@@ -23,6 +35,8 @@ jobs:
     steps:
       - name: Download source
         uses: actions/checkout@v4
+      - name: Refresh apt package lists
+        run: sudo apt-get update
       - name: Install Crystal
         uses: crystal-lang/install-crystal@v1
       - name: Lint Crystal

@@ -1,11 +1,11 @@
 module Croupier
-  # TaskManagerType methods for auto_run and the inotify watcher.
+  # TaskManagerType methods for auto_run and the platform filesystem watcher.
   class TaskManagerType
     # Files with changes detected in auto_run
     @queued_changes : Set(String) = Set(String).new
-    # Guards @queued_changes. The inotify callback runs on the library's
-    # own fiber, and hashing inputs resizes the default execution
-    # context to several OS threads, so the callback fiber and the
+    # Guards @queued_changes. The filesystem watcher may run on its own
+    # fiber or OS thread, and hashing inputs resizes the default execution
+    # context to several OS threads, so the watcher and the
     # autorun fiber can genuinely run in parallel even though auto mode
     # executes tasks serially. A Set is not thread-safe: every access
     # from either fiber goes through this lock.
@@ -25,13 +25,13 @@ module Croupier
       @autorun_running = false
     end
 
-    # Snapshot of the queued changes, safe to call from the inotify
-    # callback fiber or the autorun fiber.
+    # Snapshot of the queued changes, safe to call from the watcher callback
+    # or the autorun fiber.
     private def queued_changes_snapshot : Set(String)
       @queued_changes_lock.synchronize { @queued_changes.dup }
     end
 
-    # Queue one changed path (called from the inotify callback fiber).
+    # Queue one changed path (called from the filesystem watcher).
     private def queue_change(path : String) : Nil
       @queued_changes_lock.synchronize { @queued_changes << path }
     end
@@ -46,123 +46,132 @@ module Croupier
       @queued_changes_lock.synchronize { @queued_changes.clear }
     end
 
-    {% if flag?(:linux) %}
-      def auto_run(targets : Array(String) = [] of String)
-        @auto_mode = true
-        targets = tasks.keys if targets.empty?
-        # Only want dependencies that are not tasks
-        inputs = inputs(targets)
-        Log.info { "Auto_run: targets=#{targets.inspect}, inputs=#{inputs.inspect}" }
-        raise "No inputs to watch, can't auto_run" if inputs.empty?
+    def auto_run(targets : Array(String) = [] of String)
+      @auto_mode = true
+      targets = tasks.keys if targets.empty?
+      # Only want dependencies that are not tasks
+      inputs = inputs(targets)
+      Log.info { "Auto_run: targets=#{targets.inspect}, inputs=#{inputs.inspect}" }
+      raise "No inputs to watch, can't auto_run" if inputs.empty?
 
-        # Auto_run always runs serially to avoid inotify thread safety issues
-        # File watching and parallel execution don't mix well due to
-        # shared state and nonblocking inotify library limitations
-        Log.info { "Auto_run mode: forcing serial execution (parallel disabled)" }
+      # Auto_run always runs serially to avoid watcher thread safety issues
+      # File watching and parallel execution don't mix well due to
+      # shared state and filesystem watcher limitations
+      Log.info { "Auto_run mode: forcing serial execution (parallel disabled)" }
 
-        watch(targets)
-        @autorun_running = true
-        # Retry backoff: consecutive failures slow the loop down from
-        # the 10ms change-poll to at most one attempt per second, so a
-        # persistent problem (e.g. a deleted input) can't spin the CPU
-        # and the log; any success resets it
-        retry_delay = 0.01
-        spawn do
-          loop do
-            select
-            when @autorun_control.receive
-              stop_autorun
-              break
-            else
-              retry_delay, targets = autorun_cycle(targets, retry_delay)
-            end
+      watch(targets)
+      @autorun_running = true
+      # Retry backoff: consecutive failures slow the loop down from
+      # the 10ms change-poll to at most one attempt per second, so a
+      # persistent problem (e.g. a deleted input) can't spin the CPU
+      # and the log; any success resets it
+      retry_delay = 0.01
+      spawn do
+        loop do
+          select
+          when @autorun_control.receive
+            stop_autorun
+            break
+          else
+            retry_delay, targets = autorun_cycle(targets, retry_delay)
           end
         end
       end
+    end
 
-      # Handle the stop order (runs on the autorun fiber): close the
-      # control channel so the stopping fiber's receive? returns, and
-      # shut the watcher down.
-      private def stop_autorun : Nil
-        Log.info { "Stopping automatic run" }
-        @autorun_control.close
-        @autorun_running = false
-        if watcher = @@watcher
-          watcher.close # Stop watchers
+    # Handle the stop order (runs on the autorun fiber): close the
+    # control channel so the stopping fiber's receive? returns, and
+    # shut the watcher down.
+    private def stop_autorun : Nil
+      Log.info { "Stopping automatic run" }
+      @autorun_control.close
+      @autorun_running = false
+      close_watcher
+    end
+
+    # One iteration of the autorun loop: process queued changes,
+    # re-run tasks, expand the graph if master tasks added subtasks,
+    # and fold the cycle's hashes into last_run. The non-auto path
+    # reloads those hashes from the state file every run, but the
+    # auto branch never refreshes last_run, so without the fold every
+    # cycle looks like the first one (no early cutoff, and unchanged
+    # rewrites keep re-staling their dependents). this_run holds the
+    # scanned input hashes, next_run the recorded output hashes.
+    #
+    # Returns the updated retry delay and target list (the targets
+    # may grow when the graph grew).
+    private def autorun_cycle(targets : Array(String), retry_delay : Float64) : {Float64, Array(String)}
+      # Sleep early is better for race conditions in tests
+      # If we sleep late, it's likely that we'll get the
+      # stop order and break the loop without running, so we
+      # can't see the side effects without sleeping in the
+      # tests.
+      sleep retry_delay.seconds
+      changes = queued_changes_snapshot
+      # modified is checked under the lock: task procs may mark kv
+      # keys modified from parallel workers
+      modified_pending = @modified_lock.synchronize { !@modified.empty? }
+      return {retry_delay, targets} if changes.empty? && !modified_pending
+      begin
+        Log.info { "Detected changes in #{changes}" }
+        # No need to mark targets stale here: propagate_staleness,
+        # called at the start of every run, resets every task's
+        # staleness from scratch.
+        hook_changes = @modified_lock.synchronize do
+          @modified += changes
+          @modified.dup
         end
-      end
-
-      # One iteration of the autorun loop: process queued changes,
-      # re-run tasks, expand the graph if master tasks added subtasks,
-      # and fold the cycle's hashes into last_run. The non-auto path
-      # reloads those hashes from the state file every run, but the
-      # auto branch never refreshes last_run, so without the fold every
-      # cycle looks like the first one (no early cutoff, and unchanged
-      # rewrites keep re-staling their dependents). this_run holds the
-      # scanned input hashes, next_run the recorded output hashes.
-      #
-      # Returns the updated retry delay and target list (the targets
-      # may grow when the graph grew).
-      private def autorun_cycle(targets : Array(String), retry_delay : Float64) : {Float64, Array(String)}
-        # Sleep early is better for race conditions in tests
-        # If we sleep late, it's likely that we'll get the
-        # stop order and break the loop without running, so we
-        # can't see the side effects without sleeping in the
-        # tests.
-        sleep retry_delay.seconds
-        changes = queued_changes_snapshot
-        # modified is checked under the lock: task procs may mark kv
-        # keys modified from parallel workers
-        modified_pending = @modified_lock.synchronize { !@modified.empty? }
-        return {retry_delay, targets} if changes.empty? && !modified_pending
-        begin
-          Log.info { "Detected changes in #{changes}" }
-          # No need to mark targets stale here: propagate_staleness,
-          # called at the start of every run, resets every task's
-          # staleness from scratch.
-          hook_changes = @modified_lock.synchronize do
-            @modified += changes
-            @modified.dup
-          end
-          Log.debug { "Modified: #{hook_changes}" }
-          # Call the before_run_hook if set, passing the changed files.
-          # User code must not run under a library lock
-          before_run_hook.call(hook_changes) unless hook_changes.empty?
-          # Run tasks - if master tasks create new subtasks, the graph
-          # will be invalidated and we need to run again to execute them
-          initial_task_count = tasks.size
+        Log.debug { "Modified: #{hook_changes}" }
+        # Call the before_run_hook if set, passing the changed files.
+        # User code must not run under a library lock
+        before_run_hook.call(hook_changes) unless hook_changes.empty?
+        # Run tasks - if master tasks create new subtasks, the graph
+        # will be invalidated and we need to run again to execute them
+        initial_task_count = tasks.size
+        run_tasks(targets: targets, parallel: false)
+        # If new tasks were created (graph was invalidated), run
+        # again with the expanded graph
+        if @graph_invalidated || tasks.size > initial_task_count
+          targets = tasks.keys
+          # And re-watch: the new subtasks' inputs were not
+          # known when watch() was last called, so changes to
+          # them would be invisible to the watcher
+          watch(targets)
           run_tasks(targets: targets, parallel: false)
-          # If new tasks were created (graph was invalidated), run
-          # again with the expanded graph
-          if @graph_invalidated || tasks.size > initial_task_count
-            targets = tasks.keys
-            # And re-watch: the new subtasks' inputs were not
-            # known when watch() was last called, so changes to
-            # them would be invisible to the watcher
-            watch(targets)
-            run_tasks(targets: targets, parallel: false)
-          end
-          # Drop only the changes processed this cycle, then the
-          # modified set: a successful run consumed them
-          unqueue_changes(changes)
-          @modified_lock.synchronize { @modified.clear }
-          # In auto mode this fiber is the only writer of the run-hash
-          # trio (tasks run serially on it), so the merge needs no lock
-          last_run.merge!(this_run).merge!(next_run)
-          {0.01, targets}
-        rescue ex
-          # Sometimes we can't run because not all dependencies
-          # are there yet or whatever. We'll try again later
-          delay = Math.min(retry_delay * 2, 1.0)
-          unless ex.is_a?(UnknownInputsError)
-            Log.warn { "Automatic run failed (will retry): #{ex.message}" }
-          end
-          {delay, targets}
+        end
+        # Drop only the changes processed this cycle, then the
+        # modified set: a successful run consumed them
+        unqueue_changes(changes)
+        @modified_lock.synchronize { @modified.clear }
+        # In auto mode this fiber is the only writer of the run-hash
+        # trio (tasks run serially on it), so the merge needs no lock
+        last_run.merge!(this_run).merge!(next_run)
+        {0.01, targets}
+      rescue ex
+        # Sometimes we can't run because not all dependencies
+        # are there yet or whatever. We'll try again later
+        delay = Math.min(retry_delay * 2, 1.0)
+        unless ex.is_a?(UnknownInputsError)
+          Log.warn { "Automatic run failed (will retry): #{ex.message}" }
+        end
+        {delay, targets}
+      end
+    end
+
+    {% if flag?(:linux) %}
+      # Linux filesystem watcher
+      @@watcher : Inotify::Watcher | Nil = nil
+
+      private def close_watcher : Nil
+        return unless watcher = @@watcher
+        begin
+          watcher.close
+        rescue ex : Inotify::Error
+          # Closing an already-closed inotify descriptor is harmless here.
+        ensure
+          @@watcher = nil
         end
       end
-
-      # Filesystem watcher
-      @@watcher : Inotify::Watcher | Nil = nil
 
       # Watch for changes in inputs.
       # If an input has been changed BEFORE calling this method,
@@ -299,6 +308,42 @@ module Croupier
 
           Log.debug { "Event NOT matched for path=#{path}, target_inputs=#{target_inputs.inspect}" } unless matched
         end
+      end
+    {% elsif flag?(:darwin) %}
+      # macOS filesystem watcher. The task-manager API and queued paths are
+      # identical to Linux; only the kernel event backend differs.
+      @@watcher : KqueueWatcher | Nil = nil
+
+      private def close_watcher : Nil
+        if watcher = @@watcher
+          watcher.close
+          @@watcher = nil
+        end
+      end
+
+      def watch(targets : Array(String) = [] of String) : Nil
+        close_watcher
+        targets = tasks.keys if targets.empty?
+        target_inputs = inputs(targets)
+
+        watcher = KqueueWatcher.new(->(input : String) {
+          queue_change(input)
+          Log.debug { "Detected change in #{input}" }
+        })
+        @@watcher = watcher
+
+        target_inputs.each do |input|
+          next if input.lchop?("kv://")
+          watcher.watch(input)
+          Log.info { "Watching: #{input}" }
+        end
+      end
+    {% else %}
+      private def close_watcher : Nil
+      end
+
+      def watch(targets : Array(String) = [] of String) : Nil
+        raise "auto_run is supported only on Linux and macOS"
       end
     {% end %}
   end
