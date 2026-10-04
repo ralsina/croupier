@@ -75,6 +75,17 @@ module Croupier
           file_inputs << path
         elsif File.directory? path
           hash[path] = hash_directory(path)
+        elsif info = File.info?(path)
+          # An existing thing that is neither file nor directory
+          # (fifo, socket, device): reading it could block forever
+          # (a fifo has no EOF until a writer appears), so hash its
+          # metadata instead. Dropping it — the old behavior — made
+          # it invisible to modification detection. A path that
+          # doesn't stat at all (deleted file, dangling symlink) is
+          # still dropped, exactly like deleted regular files; a
+          # dangling symlink starts being hashed (as a file) once its
+          # target appears.
+          hash[path] = Digest::SHA1.hexdigest("#{info.type}:#{info.modification_time.to_unix_f}:#{info.size}")
         end
       end
 

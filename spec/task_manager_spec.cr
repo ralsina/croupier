@@ -1,5 +1,6 @@
 require "./spec_helper"
 require "file_utils"
+require "socket"
 include Croupier
 
 describe "TaskManager" do
@@ -770,6 +771,28 @@ describe "TaskManager" do
     it "should not hash files that don't exist" do
       with_scenario("basic") do
         TaskManager.scan_inputs.size.should eq 0
+      end
+    end
+
+    it "should hash special files (fifo, socket) by metadata" do
+      with_scenario("empty") do
+        LibC.mkfifo("special", 0o644)
+        Task.new(inputs: ["special"], always_run: true, proc: nil, id: "t1")
+        # Before, a fifo fell through every branch and was silently
+        # dropped from the scan, so it could never be detected as
+        # modified
+        first = TaskManager.scan_inputs["special"]
+        first.should_not be_empty
+
+        # Replacing it with a socket at the same path changes the
+        # metadata hash (the file type is part of it)
+        File.delete("special")
+        server = UNIXServer.new("special")
+        begin
+          TaskManager.scan_inputs["special"].should_not eq first
+        ensure
+          server.close
+        end
       end
     end
 
