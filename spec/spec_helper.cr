@@ -77,6 +77,7 @@ def with_scenario(
   Dir.cd("spec/testcases/#{name}") do
     # Clean up
     File.delete?(".croupier")
+    File.delete?(".croupier.lock")
     Dir.glob("*").each do |f|
       FileUtils.rm_rf(f) unless keep.includes?(f) || f == "tasks.yml"
     end

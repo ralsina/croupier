@@ -174,13 +174,12 @@ module Croupier
       hash = {} of String => String
       return hash if file_inputs.empty?
 
-      chunk_size = 64
-      if file_inputs.size <= chunk_size
+      if file_inputs.size <= SCAN_CHUNK_SIZE
         file_inputs.each { |path| hash[path] = Croupier.hash_file(path) }
         return hash
       end
 
-      chunks = file_inputs.each_slice(chunk_size).to_a
+      chunks = file_inputs.each_slice(SCAN_CHUNK_SIZE).to_a
       num_workers = Math.min(System.cpu_count, chunks.size)
       enable_parallelism(num_workers)
       task_queue = Channel(Array(String)).new(chunks.size)
@@ -237,6 +236,11 @@ module Croupier
       {% end %}
     end
 
+    # How many files each scan worker hashes at a time: small enough
+    # that a slow huge file doesn't strand a whole core's worth of
+    # work behind it, big enough that channel overhead stays negligible
+    SCAN_CHUNK_SIZE = 64
+
     # Version of the state-file schema, stored as __version. A
     # mismatch (including files written before versioning existed)
     # discards all recorded hashes: one full rebuild instead of
@@ -256,8 +260,47 @@ module Croupier
       temp_file = "#{@state_file}.tmp.#{Process.pid}"
       File.open(temp_file, "w") do |file|
         file << YAML.dump(state)
+        # Push the YAML out of the IO buffers and onto the disk
+        # BEFORE the rename: without an fsync a crash could leave
+        # the renamed state file empty. Self-heals (a full rebuild)
+        # but loses the run's recorded work for no good reason.
+        file.fsync
       end
       File.rename(temp_file, @state_file)
+    end
+
+    # Serialize runs against the same state file across PROCESSES:
+    # two croupier processes in one directory would otherwise race
+    # their read-scan-run-save cycles, and the last writer would
+    # silently erase the other's results (PID-suffixed temp names
+    # prevent torn files, not lost writes).
+    #
+    # flock is kernel-managed: a crashed holder releases it
+    # automatically, so there is no stale-lock cleanup. The lock file
+    # is never unlinked — deleting it would let a third process lock
+    # a fresh inode while the old one is still held. Contention is
+    # polled non-blocking so fibers keep running while waiting. Not
+    # reentrant: nothing inside a run may call run_tasks again.
+    def with_state_lock(dry_run : Bool, &)
+      # A dry run never writes state, and atomic renames make its
+      # reads safe against concurrent writers
+      return yield if dry_run
+      lock_path = "#{@state_file}.lock"
+      File.open(lock_path, "a") do |lock_file|
+        until state_lock_acquired?(lock_file)
+          Log.debug { "Waiting for another croupier process holding #{lock_path}" }
+          sleep 10.milliseconds
+        end
+        yield
+      end
+    end
+
+    private def state_lock_acquired?(lock_file : File) : Bool
+      lock_file.flock_exclusive(blocking: false)
+      true
+    rescue IO::Error
+      # flock_exclusive(blocking: false) raises when the lock is held
+      false
     end
 
     # Read the state file, guarding against corruption and schema
@@ -282,8 +325,20 @@ module Croupier
       return {} of String => String if parsed.nil?
       return {} of String => String if parsed["__version"]?.try(&.to_s) != STATE_VERSION
       @last_scan_time = parsed["__scan_time"]?.try &.to_s.to_f?
-      parsed.reject! { |key, _| {"__version", "__scan_time"}.includes?(key.to_s) }
-        .map { |key, value| {key.to_s, value.to_s} }.to_h
+      entries = {} of String => String
+      parsed.each do |key, value|
+        next if {"__version", "__scan_time"}.includes?(key.to_s)
+        # A non-string value means this file is not our schema at
+        # all: coercing it with to_s used to quietly turn arrays and
+        # maps into garbage hash entries. Treat the whole state as
+        # unusable, like a version mismatch does.
+        unless hash = value.as_s?
+          Log.warn { "State file #{@state_file} has a non-string entry for #{key}, rebuilding everything" }
+          return {} of String => String
+        end
+        entries[key.to_s] = hash
+      end
+      entries
     rescue ex : YAML::ParseException | File::Error
       # Invalid YAML or an unreadable file means we know nothing about
       # the previous run: a full rebuild, self-healed on the next save

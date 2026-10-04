@@ -764,7 +764,9 @@ describe "TaskManager" do
         TaskManager.modified.empty?.should be_true
         TaskManager.@existing_files.empty?.should be_true
         TaskManager.@store_cache.empty?.should be_true
-        TaskManager.@all_inputs.empty?.should be_true
+        # Through the accessor: the cache is nil-when-invalid now,
+        # and cleanup must leave it invalidated
+        TaskManager.all_inputs.empty?.should be_true
 
         # The hooks are gone: running a task must not fire them
         Task.new(output: "out2", inputs: ["seed"]) { "data" }
@@ -785,7 +787,7 @@ describe "TaskManager" do
         during = live_fiber_count
 
         TaskManager.cleanup
-        TaskManager.@autorun_running.should be_false
+        TaskManager.@autorun_running.get.should be_false
         # The autorun fiber and the watcher's reader are gone. (One
         # filesystem event-loop fiber stays parked on the library's own
         # channel forever — an upstream leak croupier can't retire.)

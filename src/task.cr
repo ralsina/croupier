@@ -4,6 +4,11 @@ require "log"
 module Croupier
   alias TaskProc = -> String? | Array(String)
 
+  # Length of the SHA1 prefix used for generated task ids (tasks with
+  # outputs and no explicit id): long enough to avoid realistic
+  # collisions, short enough to stay readable in logs
+  ID_HASH_LENGTH = 12
+
   # A Task is an object that may generate output
   #
   # It has a `Proc` which is executed when the task is run
@@ -133,7 +138,7 @@ module Croupier
       @procs << proc unless proc.nil?
       @outputs = outputs.uniq
       raise TaskDefinitionError.new("Task has no outputs and no id") if id.nil? && @outputs.empty?
-      @id = id ? id : Digest::SHA1.hexdigest(@outputs.join(","))[0, 12]
+      @id = id ? id : Digest::SHA1.hexdigest(@outputs.join(","))[0, ID_HASH_LENGTH]
       @inputs = Set.new inputs
       @no_save = no_save
       @mergeable = mergeable

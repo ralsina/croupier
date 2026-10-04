@@ -252,6 +252,59 @@ describe "TaskManager" do
     end
   end
 
+  describe "state file" do
+    it "should wait for another process holding the state lock" do
+      with_scenario("empty", to_create: {"seed" => "data"}) do
+        ran = 0
+        Task.new(output: "out", inputs: ["seed"]) { ran += 1; "data" }
+
+        # Simulate a competing croupier process: a separate open file
+        # description holds the flock, exactly like another process
+        # would (flock contention is per description, not per process)
+        blocker = File.open(".croupier.lock", "a")
+        blocker.flock_exclusive(blocking: false)
+
+        done = false
+        spawn { TaskManager.run_tasks; done = true }
+        # The run must be parked behind the lock, not finished
+        sleep 100.milliseconds
+        done.should be_false
+        ran.should eq 0
+
+        # Releasing lets the waiting run through
+        blocker.close
+        wait_until(message: "run never completed after the lock was released") { done }
+        ran.should eq 1
+      end
+    end
+
+    it "should treat a state file with non-string entries as unusable" do
+      with_scenario("empty", to_create: {"seed1" => "one", "seed2" => "two"}) do
+        ran1 = 0
+        ran2 = 0
+        Task.new(output: "out1", inputs: ["seed1"]) { ran1 += 1; "one" }
+        Task.new(output: "out2", inputs: ["seed2"]) { ran2 += 1; "two" }
+
+        TaskManager.run_tasks
+        TaskManager.run_tasks
+        # Fresh after an unchanged second run
+        ran1.should eq 1
+        ran2.should eq 1
+
+        # A non-string value means the file is not our schema. The
+        # old to_s coercion would only re-detect seed2; treating the
+        # whole state as unusable rebuilds everything
+        state = {"__version" => "1", "__scan_time" => "100.0",
+                 "seed1" => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
+                 "seed2" => [1, 2]}
+        File.write(".croupier", state.to_yaml)
+        TaskManager.run_tasks
+        ran1.should eq 2
+        ran2.should eq 2
+      end
+    end
+  end
+
   describe "hash_directory" do
     it "walks the same entries the previous glob-based scan did" do
       with_scenario("empty") do

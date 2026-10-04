@@ -20,6 +20,12 @@ module Croupier
     # Returns true if the input was added, false if the task already had
     # it. Raises if `task_key` is not a registered task, or if the input
     # is one of the task's own keys (that would be a cycle).
+    # How far back (seconds) the fast-mode mtime comparison reaches,
+    # absorbing filesystem timestamp granularity and clock skew at
+    # the cost of occasionally re-detecting an input modified just
+    # before the previous scan (the classic make solution).
+    FAST_MODE_GRACE = 1.0
+
     @pending_inputs = [] of {String, String}
     @parallel_wave_active = false
 
@@ -95,7 +101,7 @@ module Croupier
     # read per auto cycle).
     def invalidate_graph_cache
       @graph_invalidated = true
-      @all_inputs.clear
+      @all_inputs = nil
     end
 
     # Tasks as a dependency graph sorted topologically.
@@ -115,8 +121,9 @@ module Croupier
         @graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
         @graph_sorted = [] of String
         @graph_invalidated = false
-        # Clear all_inputs cache so it gets rebuilt with new subtask inputs
-        @all_inputs.clear
+        # Invalidate the all_inputs cache so it is rebuilt with the
+        # new subtask inputs
+        @all_inputs = nil
 
         # All inputs are vertices
         all_inputs.each do |input|
@@ -152,15 +159,21 @@ module Croupier
       return @graph, @graph_sorted
     end
 
-    # All inputs from all tasks
-    @all_inputs = Set(String).new
+    # All inputs from all tasks, cached. nil means invalid: emptiness
+    # used to be the invalidity signal, which made a legitimately
+    # input-less task set rescan (and rebuild the set) on every call.
+    @all_inputs : Set(String)? = nil
 
-    def all_inputs
-      return @all_inputs unless @all_inputs.empty?
-      tasks.values.each do |task|
-        @all_inputs.concat task.@inputs
+    def all_inputs : Set(String)
+      if cached = @all_inputs
+        return cached
       end
-      @all_inputs
+      result = Set(String).new
+      tasks.values.each do |task|
+        result.concat task.@inputs
+      end
+      @all_inputs = result
+      result
     end
 
     # The set of all inputs for the given tasks
@@ -396,7 +409,7 @@ module Croupier
       # written before __scan_time existed compares mtime to
       # mtime, which needs no grace.
       scan_started = if baseline = @last_scan_time
-                       baseline - 1.0
+                       baseline - FAST_MODE_GRACE
                      else
                        last_run_date.to_unix_f
                      end

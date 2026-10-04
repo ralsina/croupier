@@ -153,7 +153,7 @@ module Croupier
       last_run.clear
       this_run.clear
       next_run.clear
-      @all_inputs.clear
+      @all_inputs = nil
       @graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
       @graph_sorted = [] of String
       @reverse_deps.clear
