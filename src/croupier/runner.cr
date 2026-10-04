@@ -272,8 +272,12 @@ module Croupier
 
       @data_mutex.synchronize { @parallel_wave_active = true }
       begin
-        num_workers.times do
-          spawn do
+        num_workers.times do |worker_index|
+          # Named so specs can count croupier's own fibers: the raw
+          # Fiber registry also holds thread infrastructure (GC
+          # markers, scheduler loops) that is indistinguishable from
+          # unnamed workers (issue #64)
+          spawn(name: "croupier-worker-#{worker_index}") do
             loop do
               task = task_queue.receive?
               break unless task # Queue is empty, exit worker
