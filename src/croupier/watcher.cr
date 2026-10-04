@@ -33,11 +33,18 @@ module Croupier
     @@watcher_lock = Sync::Mutex.new
 
     def auto_stop
-      return unless @autorun_running.get
+      # CAS gate: exactly one caller runs the shutdown handshake.
+      # A plain flag check let two concurrent callers through, and
+      # the second one then blocked forever sending to the
+      # unbuffered control channel (or raised on it once the first
+      # stop had closed it). Losers of the CAS see the flag already
+      # false and return — either the autorun fiber was never
+      # started, or someone else is stopping it.
+      won_stop, _previous = @autorun_running.compare_and_set(true, false)
+      return unless won_stop
       @autorun_control.send true
       @autorun_control.receive?
       @autorun_control = Channel(Bool).new
-      @autorun_running.set(false)
     end
 
     # Snapshot of the queued changes, safe to call from the watcher callback
