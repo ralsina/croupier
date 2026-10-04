@@ -180,8 +180,8 @@ module Croupier
       # of parking forever on the drained channel
       task_queue.close
 
-      num_workers.times do
-        spawn do
+      num_workers.times do |worker_index|
+        spawn(name: "croupier-scan-worker-#{worker_index}") do
           loop do
             chunk = task_queue.receive?
             break unless chunk

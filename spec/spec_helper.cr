@@ -6,9 +6,19 @@ require "file_utils"
 # removed from it, so worker fibers that exit after their work queue is
 # drained don't count, while fibers parked forever on a channel that is
 # never closed do.
+#
+# Thread-root fibers are filtered out as noise: every OS thread — the
+# GC's parallel markers, the system monitor — registers a root fiber
+# named "main" that never leaves the registry (removal only happens in
+# Fiber#run's ensure, which thread roots never execute). The GC spawns
+# its markers nondeterministically under allocation pressure, so raw
+# counts drifted upward mid-test and made baseline comparisons flaky
+# (#64). The process' own main fiber is also named "main" and filtered
+# with them: it is constant, so equality and before/after comparisons
+# are unaffected.
 def live_fiber_count : Int32
   count = 0
-  Fiber.each { count += 1 }
+  Fiber.each { |fiber| count += 1 unless fiber.name == "main" }
   count
 end
 

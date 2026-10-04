@@ -17,6 +17,12 @@ module Croupier
     @store_cache = Hash(String, String).new
     @store_misses = Set(String).new
 
+    # Every key written through set() in this process. Kiwi stores
+    # expose no iteration API, so this bookkeeping is what lets
+    # use_persistent_store migrate data through the public get/[]=
+    # instead of reaching into Kiwi::MemoryStore's internals.
+    @store_keys = Set(String).new
+
     # Store a value, returning whether it CHANGED: a same-value set is a
     # no-op for staleness, so kv outputs holding identical values don't
     # re-stale their dependents on every run.
@@ -31,6 +37,7 @@ module Croupier
         # rewrite per identical kv output per run.
         if changed
           @_store.set(key, value)
+          @store_keys << key
           @store_cache[key] = value
           @store_misses.delete(key)
         end
@@ -63,16 +70,29 @@ module Croupier
     def use_persistent_store(path : String)
       return if path == @_store_path
       raise UsageError.new("Can't change persistent k/v store path") unless @_store_path.nil?
-      new_store = Kiwi::FileStore.new(path)
-      # Convert from MemoryStore to FileStore, copying any data set so far
-      old_store = @_store.as(Kiwi::MemoryStore)
-      old_store.@mem.each { |k, v| new_store[k] = v }
-      @_store = new_store
-      @_store_path = path
-      # New backing store: drop cached answers, lazily re-prime from
-      # the file store (which may carry data from a previous process)
-      @store_cache.clear
-      @store_misses.clear
+      # The whole swap happens under @store_lock: without it, a set()
+      # from a task worker could write to the old store (or read the
+      # cache) mid-swap and be lost
+      @store_lock.synchronize do
+        new_store = Kiwi::FileStore.new(path)
+        # Migrate everything written so far through the public API:
+        # set() is the only way data entered the old store, and it
+        # remembers every key, so get/[]= is enough — no reaching
+        # into Kiwi internals. A pre-existing file store may hold more
+        # keys from a previous process; the read-through cache picks
+        # those up lazily after the swap
+        @store_keys.each do |key|
+          if value = @_store.get(key)
+            new_store[key] = value
+          end
+        end
+        @_store = new_store
+        @_store_path = path
+        # New backing store: drop cached answers, lazily re-prime from
+        # the file store (which may carry data from a previous process)
+        @store_cache.clear
+        @store_misses.clear
+      end
       Log.debug { "Storing k/v data in #{path}" }
     end
   end
