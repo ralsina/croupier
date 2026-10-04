@@ -14,15 +14,30 @@ module Croupier
     @autorun_control = Channel(Bool).new
     # Whether the autorun fiber is live: auto_stop's send would block
     # forever on the unbuffered control channel if nothing is running
-    # (e.g. cleanup without auto_run)
-    @autorun_running = false
+    # (e.g. cleanup without auto_run). Atomic because it is written by
+    # the autorun fiber (stop_autorun) and read from whatever fiber
+    # calls auto_stop, and those genuinely run in parallel once the
+    # execution context has been resized for parallel task runs.
+    @autorun_running = Atomic(Bool).new(false)
+
+    # Autorun retry backoff bounds, in seconds: consecutive failures
+    # slow the loop from the change-poll minimum to at most one
+    # attempt per second; any success resets to the minimum.
+    AUTORUN_RETRY_MIN_DELAY = 0.01
+    AUTORUN_RETRY_MAX_DELAY =  1.0
+
+    # Guards @@watcher: watch() can be called from the autorun fiber
+    # (graph growth re-watch) while cleanup's close_watcher runs on
+    # another fiber, and an unsynchronized read-modify-write of the
+    # class variable could leak a watcher nobody closes.
+    @@watcher_lock = Sync::Mutex.new
 
     def auto_stop
-      return unless @autorun_running
+      return unless @autorun_running.get
       @autorun_control.send true
       @autorun_control.receive?
       @autorun_control = Channel(Bool).new
-      @autorun_running = false
+      @autorun_running.set(false)
     end
 
     # Snapshot of the queued changes, safe to call from the watcher callback
@@ -60,12 +75,8 @@ module Croupier
       Log.info { "Auto_run mode: forcing serial execution (parallel disabled)" }
 
       watch(targets)
-      @autorun_running = true
-      # Retry backoff: consecutive failures slow the loop down from
-      # the 10ms change-poll to at most one attempt per second, so a
-      # persistent problem (e.g. a deleted input) can't spin the CPU
-      # and the log; any success resets it
-      retry_delay = 0.01
+      @autorun_running.set(true)
+      retry_delay = AUTORUN_RETRY_MIN_DELAY
       spawn do
         loop do
           select
@@ -85,7 +96,7 @@ module Croupier
     private def stop_autorun : Nil
       Log.info { "Stopping automatic run" }
       @autorun_control.close
-      @autorun_running = false
+      @autorun_running.set(false)
       close_watcher
     end
 
@@ -146,13 +157,13 @@ module Croupier
         # In auto mode this fiber is the only writer of the run-hash
         # trio (tasks run serially on it), so the merge needs no lock
         last_run.merge!(this_run).merge!(next_run)
-        {0.01, targets}
+        {AUTORUN_RETRY_MIN_DELAY, targets}
       rescue ex
         # Every failure retries with backoff: auto mode is a
         # long-lived watcher, and stopping it on the first error
         # would leave the process blind. What differs per failure
         # is how loud it is.
-        delay = Math.min(retry_delay * 2, 1.0)
+        delay = Math.min(retry_delay * 2, AUTORUN_RETRY_MAX_DELAY)
         case ex
         when UnknownInputsError
           # Not all inputs exist yet: the routine auto-mode
@@ -177,13 +188,15 @@ module Croupier
       @@watcher : Inotify::Watcher | Nil = nil
 
       private def close_watcher : Nil
-        return unless watcher = @@watcher
-        begin
-          watcher.close
-        rescue ex : Inotify::Error
-          # Closing an already-closed inotify descriptor is harmless here.
-        ensure
-          @@watcher = nil
+        @@watcher_lock.synchronize do
+          return unless watcher = @@watcher
+          begin
+            watcher.close
+          rescue ex : Inotify::Error
+            # Closing an already-closed inotify descriptor is harmless here.
+          ensure
+            @@watcher = nil
+          end
         end
       end
 
@@ -194,15 +207,17 @@ module Croupier
       # Changes are added to queued_changes
 
       def watch(targets : Array(String) = [] of String)
-        if current_watcher = @@watcher
-          current_watcher.close
-        end
-
-        @@watcher = Inotify::Watcher.new(recursive: true)
         targets = tasks.keys if targets.empty?
-        target_inputs = inputs(targets)
-
-        return unless watcher = @@watcher
+        watcher, target_inputs = @@watcher_lock.synchronize do
+          # Events arriving in the close/re-watch window below are
+          # lost: the kernel can't queue them on a watcher that no
+          # longer exists. Whatever they changed is caught by the
+          # next cycle's input scan instead.
+          @@watcher.try(&.close)
+          new_watcher = Inotify::Watcher.new(recursive: true)
+          @@watcher = new_watcher
+          {new_watcher, inputs(targets)}
+        end
 
         # Prefix matching runs on every filesystem event, so the
         # normalized forms (trailing slash, "dir/" matches everything
@@ -329,22 +344,31 @@ module Croupier
       @@watcher : KqueueWatcher | Nil = nil
 
       private def close_watcher : Nil
-        if watcher = @@watcher
-          watcher.close
-          @@watcher = nil
+        @@watcher_lock.synchronize do
+          if watcher = @@watcher
+            watcher.close
+            @@watcher = nil
+          end
         end
       end
 
       def watch(targets : Array(String) = [] of String) : Nil
-        close_watcher
         targets = tasks.keys if targets.empty?
-        target_inputs = inputs(targets)
-
-        watcher = KqueueWatcher.new(->(input : String) {
-          queue_change(input)
-          Log.debug { "Detected change in #{input}" }
-        })
-        @@watcher = watcher
+        watcher, target_inputs = @@watcher_lock.synchronize do
+          # Events arriving in the close/re-watch window are lost
+          # (the kernel can't queue them on a watcher that no longer
+          # exists); the next cycle's input scan catches up instead.
+          if old_watcher = @@watcher
+            old_watcher.close
+            @@watcher = nil
+          end
+          new_watcher = KqueueWatcher.new(->(input : String) {
+            queue_change(input)
+            Log.debug { "Detected change in #{input}" }
+          })
+          @@watcher = new_watcher
+          {new_watcher, inputs(targets)}
+        end
 
         target_inputs.each do |input|
           next if input.lchop?("kv://")

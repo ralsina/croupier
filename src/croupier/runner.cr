@@ -62,10 +62,13 @@ module Croupier
       # Use TaskManager.early_cutoff if not explicitly specified
       early_cutoff = @early_cutoff if early_cutoff.nil?
 
+      # Real runs read-modify-write the state file under the
+      # cross-process lock, so concurrent croupier processes
+      # serialize instead of silently overwriting each other
       if parallel
-        _run_tasks_parallel(task_names, run_all, dry_run, keep_going, early_cutoff)
+        with_state_lock(dry_run) { _run_tasks_parallel(task_names, run_all, dry_run, keep_going, early_cutoff) }
       else
-        _run_tasks(task_names, run_all, dry_run, keep_going, early_cutoff)
+        with_state_lock(dry_run) { _run_tasks(task_names, run_all, dry_run, keep_going, early_cutoff) }
       end
     end
 
