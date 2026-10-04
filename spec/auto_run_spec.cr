@@ -177,6 +177,27 @@ describe "TaskManager" do
       end
     end
 
+    it "should not lose kv changes marked while a cycle is running" do
+      with_scenario("empty") do
+        x = 0
+        TaskManager.set("foo", "bar1")
+        # The proc lingers after incrementing x, so the second set()
+        # below lands while the cycle is still running: its kv://foo
+        # flag used to be wiped by the cycle's end-of-run blanket
+        # clear and the change was silently lost
+        Task.new(inputs: ["kv://foo"], output: "kv://bar",
+          proc: TaskProc.new { x += 1; sleep 200.milliseconds; x.to_s })
+        TaskManager.auto_run
+        TaskManager.set("foo", "bar2")
+        wait_until(message: "task never ran after kv change") { x >= 1 }
+        # Lands while the first run is still executing (the proc sleeps)
+        TaskManager.set("foo", "bar3")
+        wait_until(message: "kv change made during the run was lost") { x >= 2 }
+        TaskManager.auto_stop
+        x.should eq 2
+      end
+    end
+
     it "should not run when no inputs have changed" do
       with_scenario("empty") do
         x = 0
