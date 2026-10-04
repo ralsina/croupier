@@ -96,7 +96,7 @@ module Croupier
         next if finished.includes?(task)
         next unless task.stale? || run_all
         Log.debug { "Running task for #{task.outputs}" }
-        next unless runnable?(task, keep_going, dry_run)
+        next unless ensure_runnable(task, keep_going, dry_run)
         failure = run_one(task, dry_run, succeeded)
         if failure
           failures << failure
@@ -141,7 +141,9 @@ module Croupier
     # or the run tolerates waiting (dry run) / absorbs it (keep_going
     # warns and skips). Raises otherwise: a blocked task with no
     # keep_going has no useful failure of its own to report.
-    private def runnable?(task : Task, keep_going : Bool, dry_run : Bool) : Bool
+    # Not a `?` predicate on purpose: it raises in the no-keep_going
+    # case, and a question-mark name would promise a plain Bool.
+    private def ensure_runnable(task : Task, keep_going : Bool, dry_run : Bool) : Bool
       return true if task.waiting_for.empty? || dry_run
       raise UnknownInputsError.new("Can't run task for #{task.outputs}: Waiting for #{task.waiting_for}") unless keep_going
       # Blocked behind a failure: skip it and keep going with

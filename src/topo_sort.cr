@@ -49,9 +49,9 @@ module Croupier
     unvisited = all_vertices.reject { |vertex| seen.includes?(vertex) }
     unless unvisited.empty?
       if cyclic?(unvisited.to_a, g)
-        raise "Cycle detected"
+        raise CycleError.new("Cycle detected in the task graph: #{unvisited.to_a.sort.join(", ")}")
       end
-      raise "Unreachable from root: #{unvisited.to_a.sort.join(", ")}"
+      raise UnreachableTaskError.new("Unreachable from root: #{unvisited.to_a.sort.join(", ")}")
     end
     result
   end

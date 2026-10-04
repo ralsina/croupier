@@ -4,25 +4,6 @@ require "log"
 module Croupier
   alias TaskProc = -> String? | Array(String)
 
-  # Error raised when a task's proc raises: it carries the task context
-  # in its message and keeps the original exception (with its backtrace)
-  # available as `#cause`.
-  class TaskFailure < Exception
-  end
-
-  # Raised when a run has failing tasks. Without `keep_going` the run
-  # aborts on the first failure (state is not saved); with
-  # `keep_going: true` the run completes everything it can and saves
-  # its state, then this is raised at the end. `#errors` carries every
-  # task failure, since `Exception#cause` can only chain one.
-  class RunFailure < Exception
-    getter errors : Array(Exception)
-
-    def initialize(@errors : Array(Exception))
-      super(errors.join("\n") { |failure| failure.message || failure.class.name })
-    end
-  end
-
   # A Task is an object that may generate output
   #
   # It has a `Proc` which is executed when the task is run
@@ -136,7 +117,7 @@ module Croupier
     )
       # An empty kv:// key can never be satisfied (get("") on a store
       # that never holds it): better to fail at declaration
-      raise "Task has an empty kv:// key" if outputs.includes?("kv://") || inputs.includes?("kv://")
+      raise TaskDefinitionError.new("Task has an empty kv:// key") if outputs.includes?("kv://") || inputs.includes?("kv://")
 
       # kv:// entries keep their prefix; everything else is a path and
       # gets normalized, so "./x", "dir/../x" and "x" are the same
@@ -144,13 +125,14 @@ module Croupier
       inputs = normalize_paths(inputs)
       outputs = normalize_paths(outputs)
 
-      if !(inputs.to_set & outputs.to_set).empty?
-        raise "Cycle detected"
+      overlap = inputs.to_set & outputs.to_set
+      unless overlap.empty?
+        raise CycleError.new("Cycle detected: #{overlap.to_a.sort.join(", ")} is both an input and an output of the task")
       end
       @always_run = always_run
       @procs << proc unless proc.nil?
       @outputs = outputs.uniq
-      raise "Task has no outputs and no id" if id.nil? && @outputs.empty?
+      raise TaskDefinitionError.new("Task has no outputs and no id") if id.nil? && @outputs.empty?
       @id = id ? id : Digest::SHA1.hexdigest(@outputs.join(","))[0, 12]
       @inputs = Set.new inputs
       @no_save = no_save
@@ -164,7 +146,7 @@ module Croupier
       to_merge = colliding_tasks
       # Refuse to merge if this task or any of the colliding ones
       # are not mergeable
-      raise "Can't merge task #{self} with #{to_merge[..-2].map(&.to_s)}" \
+      raise TaskDefinitionError.new("Can't merge task #{self} with #{to_merge[..-2].map(&.to_s)}") \
         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
       check_explicit_id_conflict(id, to_merge)
       check_merge_flag_compatibility(to_merge)
@@ -202,7 +184,7 @@ module Croupier
       return if id.nil? || @outputs.empty?
       conflict = TaskManager.tasks_by_id[id]?
       return if conflict.nil? || to_merge.includes?(conflict)
-      raise "Task id #{id} is already used by #{conflict}"
+      raise TaskDefinitionError.new("Task id #{id} is already used by #{conflict}")
     end
 
     # Check flag compatibility across the WHOLE set before the first
@@ -214,10 +196,10 @@ module Croupier
       return unless to_merge.size > 1
       first = to_merge.first
       to_merge.each do |task|
-        raise "Cannot merge tasks with different no_save settings" unless task.no_save? == first.no_save?
-        raise "Cannot merge tasks with different always_run settings" unless task.always_run? == first.always_run?
-        raise "Cannot merge master task with non-master task" unless task.master_task? == first.master_task?
-        raise "Cannot merge tasks with different mutexes" unless task.mutex == first.mutex
+        raise TaskDefinitionError.new("Cannot merge tasks with different no_save settings") unless task.no_save? == first.no_save?
+        raise TaskDefinitionError.new("Cannot merge tasks with different always_run settings") unless task.always_run? == first.always_run?
+        raise TaskDefinitionError.new("Cannot merge master task with non-master task") unless task.master_task? == first.master_task?
+        raise TaskDefinitionError.new("Cannot merge tasks with different mutexes") unless task.mutex == first.mutex
       end
     end
 
@@ -323,7 +305,7 @@ module Croupier
         # If the output is a kv:// url, we don't need to check if it exists
         next if output.lchop?("kv://")
         if !File.exists?(output)
-          raise "Task #{self} did not generate #{output}"
+          raise TaskVerificationError.new("Task #{self} did not generate #{output}")
         end
         # A directory output gets the same Merkle-tree digest the
         # input scanner uses, so a dependent consuming it as an input
@@ -340,7 +322,7 @@ module Croupier
         Log.warn { "Task #{self} returned #{call_results.size} results for #{@outputs.size} outputs, discarding the extras" }
       end
       @outputs.zip(call_results) do |output, call_result|
-        raise "Task #{self} did not return any data for output #{output}" if call_result.nil?
+        raise TaskVerificationError.new("Task #{self} did not return any data for output #{output}") if call_result.nil?
         if k = output.lchop?("kv://")
           save_kv_output(k, output, call_result)
         else
@@ -348,7 +330,7 @@ module Croupier
         end
       end
     rescue IndexError
-      raise "Task #{self} did not return the correct number of outputs"
+      raise TaskVerificationError.new("Task #{self} did not return the correct number of outputs")
     end
 
     # If the output is a kv:// url, we save it in the k/v
@@ -506,12 +488,12 @@ module Croupier
     # inputs and outputs are joined
     # procs of the second task are added to the 1st
     def merge(other : Task)
-      raise "Cannot merge tasks with different no_save settings" unless no_save? == other.no_save?
-      raise "Cannot merge tasks with different always_run settings" unless always_run? == other.always_run?
-      raise "Cannot merge master task with non-master task" unless master_task? == other.master_task?
+      raise TaskDefinitionError.new("Cannot merge tasks with different no_save settings") unless no_save? == other.no_save?
+      raise TaskDefinitionError.new("Cannot merge tasks with different always_run settings") unless always_run? == other.always_run?
+      raise TaskDefinitionError.new("Cannot merge master task with non-master task") unless master_task? == other.master_task?
       # A merged task runs all procs under one mutex: silently keeping
       # only one side's would break the other's mutual exclusion
-      raise "Cannot merge tasks with different mutexes" unless mutex == other.mutex
+      raise TaskDefinitionError.new("Cannot merge tasks with different mutexes") unless mutex == other.mutex
 
       # @outputs is NOT unique! We can save multiple times
       # the same file in multiple procs

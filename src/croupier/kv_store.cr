@@ -69,7 +69,7 @@ module Croupier
     # the default memory store
     def use_persistent_store(path : String)
       return if path == @_store_path
-      raise "Can't change persistent k/v store path" unless @_store_path.nil?
+      raise UsageError.new("Can't change persistent k/v store path") unless @_store_path.nil?
       # The whole swap happens under @store_lock: without it, a set()
       # from a task worker could write to the old store (or read the
       # cache) mid-swap and be lost
