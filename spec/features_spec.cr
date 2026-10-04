@@ -711,6 +711,23 @@ describe "TaskManager" do
         reported.first.should eq TaskManager.tasks["out"].id
       end
     end
+
+    it "should be called from every worker of a parallel run" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        # The callback fires on worker fibers, so the shared array
+        # needs a guard the serial case never exercises
+        lock = Sync::Mutex.new
+        reported = [] of String
+        TaskManager.progress_callback = ->(id : String) { lock.synchronize { reported << id } }
+        4.times { |i| Task.new(output: "out_#{i}", inputs: ["seed"]) { "data_#{i}" } }
+
+        TaskManager.run_tasks(parallel: true)
+
+        reported.size.should eq 4
+        expected = (0...4).map { |i| TaskManager.tasks["out_#{i}"].id }.to_set
+        reported.to_set.should eq expected
+      end
+    end
   end
 
   describe "no_save with kv outputs" do

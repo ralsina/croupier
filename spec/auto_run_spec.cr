@@ -198,6 +198,34 @@ describe "TaskManager" do
       end
     end
 
+    it "should keep auto mode working over a persistent store" do
+      with_scenario("empty") do
+        # kv:// traffic in auto mode must flow through the file
+        # store: the cycle's hash comparisons and set()'s modified
+        # flags all go through the same cache+store path
+        TaskManager.use_persistent_store("store")
+        File.write("seed", "v1")
+        runs = 0
+        Task.new(output: "kv://result", inputs: ["seed"]) { runs += 1; "run_#{runs}" }
+
+        TaskManager.auto_run
+        Fiber.yield
+        # Auto mode idles until the watcher sees a change: both runs
+        # are driven by real seed rewrites
+        File.write("seed", "v2")
+        wait_until(message: "first change never ran the task") { runs >= 1 }
+        File.write("seed", "v3")
+        wait_until(message: "second change never re-ran the task") { runs >= 2 }
+        TaskManager.auto_stop
+
+        runs.should eq 2
+        TaskManager.get("result").should eq "run_2"
+        # The value is really on disk, not just in the read-through
+        # cache: a fresh store handle reads the same directory
+        Kiwi::FileStore.new("store").get("result").should eq "run_2"
+      end
+    end
+
     it "should not run when no inputs have changed" do
       with_scenario("empty") do
         x = 0
