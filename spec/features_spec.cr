@@ -801,30 +801,31 @@ describe "TaskManager" do
       with_scenario("empty", to_create: seeds) do
         seeds.each_key { |k| Task.new(output: "out_#{k}", inputs: [k]) { "data" } }
 
-        # First round absorbs the one-time cost of resizing the fiber
-        # execution context (its threads show up as extra loop fibers
-        # and live as long as the process)
-        TaskManager.run_tasks(parallel: true)
-        5.times { TaskManager.scan_inputs }
-        # Worker fibers exit once their (closed) queue drains: wait
-        # until the count is stable across a few yields, that is the
-        # floor the second round must return to
-        baseline = 0
-        wait_until(message: "fiber count never stabilized") {
-          baseline = live_fiber_count
-          3.times { Fiber.yield; sleep 1.millisecond }
-          live_fiber_count == baseline
+        # Count only croupier's own worker fibers, by name: the raw
+        # registry also holds stdlib thread infrastructure that comes
+        # and goes with load (GC marker roots, the thread pool's lazy
+        # main-thread loop — see #64), so a whole-registry baseline
+        # compares croupier against noise it does not control
+        worker_count = -> {
+          count = 0
+          Fiber.each { |fiber| count += 1 if fiber.name.try(&.starts_with?("croupier-worker")) }
+          count
         }
 
-        # A second round of the same width must not grow the fiber
-        # count: worker fibers that drained their (closed) queue exit,
-        # fibers parked on a never-closed channel accumulate forever.
-        # (All seeds change so the wave width — and thus the execution
-        # context resize — matches the first round.)
+        # First round also absorbs the one-time execution-context
+        # resize; its workers must all retire
+        TaskManager.run_tasks(parallel: true)
+        5.times { TaskManager.scan_inputs }
+        wait_until(message: "round 1 worker fibers never exited") { worker_count.call == 0 }
+
+        # A second round of the same width: worker fibers that drained
+        # their (closed) queue exit, fibers parked on a never-closed
+        # channel would accumulate forever. (All seeds change so the
+        # wave width matches the first round.)
         seeds.each_key { |k| File.write(k, "changed") }
         TaskManager.run_tasks(parallel: true)
         5.times { TaskManager.scan_inputs }
-        wait_until(message: "worker fibers never exited") { live_fiber_count == baseline }
+        wait_until(message: "worker fibers never exited") { worker_count.call == 0 }
       end
     end
   end
