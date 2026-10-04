@@ -327,6 +327,7 @@ module Croupier
         # this fiber, where nothing iterates the input sets concurrently
         @data_mutex.synchronize { @parallel_wave_active = false }
         apply_pending_inputs
+        apply_pending_subtask_ops
       end
       errors
     end

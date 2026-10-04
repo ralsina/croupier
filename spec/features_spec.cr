@@ -150,6 +150,61 @@ describe "TaskManager" do
       end
     end
 
+    it "should allow re-registering a subtask id after remove_subtask" do
+      with_scenario("empty") do
+        master = Task.new(id: "test_master", inputs: [] of String,
+          always_run: true, master_task: true) { nil }
+        Task.new(id: "subtask_x", inputs: ["in"], outputs: ["out_x"]) { "content" }
+        TaskManager.register_subtask("test_master", TaskManager.tasks_by_id["subtask_x"])
+        TaskManager.tasks_by_id.has_key?("subtask_x").should be_true
+
+        TaskManager.remove_subtask("subtask_x")
+        TaskManager.tasks.has_key?("out_x").should be_false
+        TaskManager.tasks_by_id.has_key?("subtask_x").should be_false
+        master.subtask_ids.should be_empty
+
+        # Re-adding under the same id must not be rejected as a
+        # duplicate: raw TaskManager.tasks.delete (the old documented
+        # pattern) leaves the stale tasks_by_id entry behind, and the
+        # deterministic subtask ids of the master pattern reproduce
+        # this on every delete-then-re-add cycle
+        Task.new(id: "subtask_x", inputs: ["in"], outputs: ["out_x"]) { "content" }
+        TaskManager.tasks_by_id.has_key?("subtask_x").should be_true
+      end
+    end
+
+    it "should queue subtask operations during parallel waves" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        master = Task.new(id: "test_master", inputs: [] of String,
+          always_run: true, master_task: true) { nil }
+        Task.new(id: "sub_a", inputs: ["seed"], outputs: ["out_a"]) { "a" }
+        TaskManager.register_subtask("test_master", TaskManager.tasks_by_id["sub_a"])
+        # Pre-created: constructing a Task inside a running wave is
+        # the one registration path that stays unlocked
+        Task.new(id: "sub_b", inputs: ["seed"], outputs: ["out_b"]) { "b" }
+
+        ran = false
+        Task.new(id: "wave_member", inputs: [] of String, outputs: ["out_w"]) do
+          # Executed on a worker fiber INSIDE the parallel wave: both
+          # operations must be queued and applied at the wave barrier
+          # instead of mutating registries the coordinator iterates
+          TaskManager.remove_subtask("sub_a")
+          TaskManager.register_subtask("test_master", TaskManager.tasks_by_id["sub_b"])
+          ran = true
+          "w"
+        end
+
+        TaskManager.run_tasks(run_all: true, parallel: true)
+        ran.should be_true
+        # Applied after the wave, never against the in-flight one
+        TaskManager.tasks.has_key?("out_a").should be_false
+        TaskManager.tasks_by_id.has_key?("sub_a").should be_false
+        TaskManager.tasks_by_id.has_key?("sub_b").should be_true
+        master.subtask_ids.should contain("sub_b")
+        master.subtask_ids.should_not contain("sub_a")
+      end
+    end
+
     it "should rebuild graph when subtasks are registered" do
       with_scenario("empty") do
         # Build initial graph
@@ -343,9 +398,7 @@ describe "TaskManager" do
           # Remove deleted file subtasks
           (previous_files - files).each do |deleted_file|
             subtask_id = "render_#{Digest::SHA1.hexdigest(deleted_file)[0..6]}"
-            TaskManager.tasks.each do |key, task|
-              TaskManager.tasks.delete(key) if task.id == subtask_id
-            end
+            TaskManager.remove_subtask(subtask_id)
           end
 
           # Create new file subtasks

@@ -66,32 +66,98 @@ module Croupier
       invalidate_graph_cache
     end
 
-    # Register a subtask with the task manager
-    def register_subtask(master_id : String, subtask : Task)
-      # Track this subtask in master's subtask list
-      if master = tasks[master_id]?
-        master.subtask_ids << subtask.id
-      end
+    # Subtask operations queued while a parallel wave is executing,
+    # applied by the coordinating fiber at the wave barrier (same
+    # lifecycle as @pending_inputs): mutating the registries from a
+    # worker fiber while the coordinator iterates them — readiness
+    # sweeps, early-cutoff scans, results bookkeeping — is a data
+    # race no mutex can fix, because those iterations take no lock.
+    @pending_subtask_links = [] of {String, String}
+    @pending_subtask_removals = [] of String
 
+    # Register a subtask with the task manager.
+    #
+    # Thread-safe like add_input: during a parallel wave the link is
+    # queued and applied at the barrier; outside waves it applies
+    # immediately.
+    def register_subtask(master_id : String, subtask : Task)
+      @data_mutex.synchronize do
+        if @parallel_wave_active
+          @pending_subtask_links << {master_id, subtask.id}
+        else
+          link_subtask(master_id, subtask.id)
+        end
+      end
       invalidate_graph_cache
     end
 
-    # Remove all subtasks belonging to a master task
-    def remove_subtasks(master_id : String)
-      if master = tasks[master_id]?
-        keys_to_delete = [] of String
-        tasks.each do |key, task|
-          keys_to_delete << key if master.subtask_ids.includes?(task.id)
+    # Remove one subtask by id: both registry views (tasks and
+    # tasks_by_id) and any master's tracking. This is the supported
+    # way to do per-file subtask cleanup (as in the README's
+    # master-task example): deleting from TaskManager.tasks directly
+    # leaves a stale tasks_by_id entry behind, and the next task
+    # registered under the same id — exactly what the
+    # deterministic subtask ids of that pattern produce on re-adding
+    # a deleted file — is rejected as a duplicate id.
+    #
+    # Thread-safe like register_subtask.
+    def remove_subtask(subtask_id : String)
+      @data_mutex.synchronize do
+        if @parallel_wave_active
+          @pending_subtask_removals << subtask_id
+        else
+          deregister_subtask(subtask_id)
         end
-        keys_to_delete.each do |key|
-          if task = tasks.delete(key)
-            tasks_by_id.delete(task.id)
-          end
-        end
-        master.subtask_ids.clear
       end
-
       invalidate_graph_cache
+    end
+
+    # Remove all subtasks belonging to a master task.
+    #
+    # Thread-safe like register_subtask.
+    def remove_subtasks(master_id : String)
+      @data_mutex.synchronize do
+        if master = tasks[master_id]?
+          if @parallel_wave_active
+            @pending_subtask_removals.concat(master.subtask_ids)
+          else
+            master.subtask_ids.each { |subtask_id| deregister_subtask(subtask_id) }
+          end
+          master.subtask_ids.clear
+        end
+      end
+      invalidate_graph_cache
+    end
+
+    # Apply the subtask operations queued during a wave. Runs on the
+    # coordinating fiber at the barrier, where nothing iterates the
+    # registries concurrently.
+    private def apply_pending_subtask_ops : Nil
+      @data_mutex.synchronize do
+        removals = @pending_subtask_removals.dup
+        @pending_subtask_removals.clear
+        links = @pending_subtask_links.dup
+        @pending_subtask_links.clear
+        removals.each { |subtask_id| deregister_subtask(subtask_id) }
+        links.each { |master_id, subtask_id| link_subtask(master_id, subtask_id) }
+      end
+      invalidate_graph_cache
+    end
+
+    # Link a subtask id to its master (assumes the caller holds
+    # @data_mutex)
+    private def link_subtask(master_id : String, subtask_id : String) : Nil
+      if master = tasks[master_id]?
+        master.subtask_ids << subtask_id
+      end
+    end
+
+    # Drop a subtask from both registry views and any master's
+    # tracking (assumes the caller holds @data_mutex)
+    private def deregister_subtask(subtask_id : String) : Nil
+      tasks.reject! { |_key, task| task.id == subtask_id }
+      tasks_by_id.delete(subtask_id)
+      tasks.each_value(&.subtask_ids.delete(subtask_id))
     end
 
     # Invalidate the cached task graph. Only touches in-memory state:
