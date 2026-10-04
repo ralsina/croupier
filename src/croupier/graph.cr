@@ -296,122 +296,101 @@ module Croupier
       result
     end
 
-    # Read state of last run, then scan inputs and compare.
+    # Read state of last run, then scan inputs and compare, leaving
+    # the changed paths in @modified for propagate_staleness.
     #
-    # With run_all the scan only feeds staleness *decisions*, which are
-    # then overridden anyway (every task re-runs), so in fast mode the
-    # mtime scan is skipped as pure overhead. Content mode still scans
-    # because @this_run feeds save_run and skipping it would make the
-    # next incremental run rebuild everything.
+    # Three modes, one method each with its own scan+compare:
+    #
+    #   auto     the watcher already said WHAT changed; hashing only
+    #            re-confirms it (unchanged rewrites must not retrigger)
+    #   fast     mtime comparison against the last run's scan start,
+    #            no content hashing
+    #   content  full hash comparison against the last run's hashes
+    #
+    # Two modifiers complete the old 5-flag matrix:
+    #
+    #   run_all  only matters to fast mode: staleness decisions are
+    #            overridden anyway (every task re-runs), so its mtime
+    #            scan is pure overhead. Content mode still scans
+    #            because @this_run feeds save_run, and skipping it
+    #            would make the next incremental run rebuild
+    #            everything.
+    #   targets  narrows the scan scope to the inputs of the tasks
+    #            the run may execute; unrelated inputs keep their
+    #            recorded hashes, so a change to them is detected by
+    #            the next run that includes their tasks.
     def mark_stale_inputs(run_all : Bool = false, targets : Array(String)? = nil)
       # New run: the positive file-existence cache may be stale
       @existing_files.clear
-      if auto_mode?
-        # Record when this run's scan starts, like the non-auto path
-        # below: a later fast-mode run compares mtimes against this
-        # timestamp, and a zero would make every input look modified
-        # (one spurious full rebuild when auto and fast mode mix)
-        @scan_started = Time.utc.to_unix_f
-        # In auto mode, the watcher tells us WHAT to look at, but events
-        # fire on rewrites even when the content is identical (a task
-        # that regenerates a watched input unchanged retriggers itself
-        # forever). Like content mode, decide by comparing hashes
-        # against the last completed cycle; unscanned entries (deleted
-        # files, kv keys set outside this flow) are kept as modified.
-        @this_run = scan_inputs
-        # Keep only changes the last completed cycle doesn't already
-        # know about. Mutated in place under the lock: reassigning the
-        # set would race readers holding the old reference
-        @modified_lock.synchronize do
-          kept = @modified.select { |path|
-            if hash = @this_run[path]?
-              last_run.fetch(path, "") != hash
-            else
-              true
-            end
-          }
-          @modified.clear
-          kept.each { |path| @modified << path }
-        end
-        return
-      end
-
-      # Preserve k/v store modifications before clearing
-      # K/v modifications are added via set() and need to survive the clear
-      # so that propagate_staleness() can detect tasks that depend on them
-      # (both happen under the lock: set() marks modified from parallel
-      # task workers)
-      kv_modifications = @modified_lock.synchronize do
-        kv = @modified.select(&.starts_with?("kv://"))
-        @modified.clear
-        kv
-      end
-
       # When this run's scan starts: recorded in the state file so the
       # NEXT fast-mode run compares input mtimes against this moment
       # rather than the state file's own mtime (written at the END of
-      # the run, which hides inputs modified mid-run)
+      # the run, which hides inputs modified mid-run). A zero here
+      # would make every input look modified (one spurious full
+      # rebuild when auto and fast mode mix).
       @scan_started = Time.utc.to_unix_f
-
-      if File.exists? @state_file
-        last_run_date = File.info(@state_file).modification_time
-        @last_run = load_state_file
+      if auto_mode?
+        scan_auto_mode
+      elsif @fast_mode
+        scan_fast_mode(run_all, targets)
       else
-        last_run_date = Time.utc # Now
-        @last_run = {} of String => String
-        @last_scan_time = nil
-      end
-
-      # A targeted run only scans the inputs of the tasks it may
-      # execute, instead of re-hashing every input of every registered
-      # task: unrelated inputs are left as recorded by the previous
-      # run, so a change to them is still detected by the next run
-      # that includes their tasks.
-      scan_scope = if targets
-                     scope = Set(String).new
-                     targets.each do |name|
-                       if task = tasks[name]?
-                         scope.concat task.@inputs
-                       end
-                     end
-                     scope
-                   else
-                     all_inputs
-                   end
-
-      if @fast_mode
-        mark_stale_inputs_fast_mode(run_all, scan_scope, kv_modifications, last_run_date)
-      else
-        mark_stale_inputs_content_mode(scan_scope, kv_modifications)
+        scan_content_mode(targets)
       end
     end
 
-    private def mark_stale_inputs_fast_mode(
-      run_all : Bool,
-      scan_scope : Set(String),
-      kv_modifications : Array(String),
-      last_run_date : Time,
-    )
+    # Auto mode: the watcher queues changed paths, so the scan only has
+    # to confirm them: events fire on rewrites even when the content is
+    # identical (a task that regenerates a watched input unchanged
+    # would retriggers itself forever). Like content mode, decide by
+    # comparing hashes against the last completed cycle; unscanned
+    # entries (deleted files, kv keys set outside this flow) are kept
+    # as modified. last_run comes from the autorun fiber's in-memory
+    # folds, not the state file, which is why nothing is loaded here.
+    private def scan_auto_mode : Nil
+      @this_run = scan_inputs
+      # Keep only changes the last completed cycle doesn't already
+      # know about. Mutated in place under the lock: reassigning the
+      # set would race readers holding the old reference
+      @modified_lock.synchronize do
+        kept = @modified.select { |path|
+          if hash = @this_run[path]?
+            last_run.fetch(path, "") != hash
+          else
+            true
+          end
+        }
+        @modified.clear
+        kept.each { |path| @modified << path }
+      end
+    end
+
+    # Fast mode: an input is modified when its mtime is newer than the
+    # last run's scan start. No content hashing at all.
+    private def scan_fast_mode(run_all : Bool, targets : Array(String)?) : Nil
+      kv_modifications = take_kv_modifications
+      state_file_date = load_last_run
       # Base @this_run on @last_run so input hashes recorded by the
       # last hash-mode run survive the save: fast mode can't hash, so
       # wiping them would make the next hash-mode run treat every
       # input as modified (a surprise full rebuild)
       @this_run = @last_run.dup
+      # With run_all every task re-runs regardless of staleness, so
+      # the mtime sweep is pure overhead; @this_run above is still
+      # prepared so the save keeps the last recorded hashes
       return if run_all
       # Compare mtimes against the last run's scan START (recorded
-      # in the state file): the file is saved at the END of the
-      # run, so its own mtime would hide inputs modified mid-run.
-      # A one-second grace window (the classic make solution)
-      # absorbs filesystem timestamp granularity and the small
-      # clock skew between recorded wall time and mtimes, at the
-      # cost of occasionally re-detecting an input modified just
+      # in the state file): the file is saved at the END of the run,
+      # so its own mtime would hide inputs modified mid-run. The
+      # grace window absorbs filesystem timestamp granularity and the
+      # small clock skew between recorded wall time and mtimes, at
+      # the cost of occasionally re-detecting an input modified just
       # before the previous scan. The fallback for state files
-      # written before __scan_time existed compares mtime to
-      # mtime, which needs no grace.
+      # written before __scan_time existed compares mtime to mtime,
+      # which needs no grace.
       scan_started = if baseline = @last_scan_time
                        baseline - FAST_MODE_GRACE
                      else
-                       last_run_date.to_unix_f
+                       state_file_date.to_unix_f
                      end
       # Stat outside the lock: the sweep can touch every input of
       # every task, and holding @modified_lock across those syscalls
@@ -420,7 +399,7 @@ module Croupier
       # modified files first, then insert them under the lock in one
       # batch, together with the k/v modifications.
       modified_now = [] of String
-      scan_scope.each do |file|
+      scan_scope(targets).each do |file|
         if info = File.info?(file)
           modified_now << file if info.modification_time.to_unix_f > scan_started
         end
@@ -433,11 +412,18 @@ module Croupier
       end
     end
 
-    private def mark_stale_inputs_content_mode(
-      scan_scope : Set(String),
-      kv_modifications : Array(String),
-    )
-      scanned = scan_inputs(scan_scope)
+    # Content mode: hash every input in scope and compare against the
+    # last run's recorded hashes.
+    private def scan_content_mode(targets : Array(String)?) : Nil
+      # The k/v entries are taken out (and @modified cleared) even
+      # though the return value is unused: k/v modifications are
+      # hash-detected like files below, and set()'s flags from before
+      # the run (or from the previous run) are stale by comparison
+      # and must NOT survive the clear, or a one-time change
+      # re-stales its dependents on every later run
+      take_kv_modifications
+      load_last_run
+      scanned = scan_inputs(scan_scope(targets))
       # Base @this_run on @last_run so hashes of inputs outside the
       # scan scope survive into the state file save (dropping them
       # would make the next full run treat those inputs as modified
@@ -448,10 +434,49 @@ module Croupier
           @modified << file if last_run.fetch(file, "") != sha1
         end
       end
-      # k/v modifications are hash-detected like files here; set()'s
-      # flags from before the run (or from the previous run) are
-      # stale by comparison and must NOT survive the clear, or a
-      # one-time change re-stales its dependents on every later run
+    end
+
+    # Split the kv:// entries out of @modified and clear the rest:
+    # k/v modifications are marked by set() (possibly from parallel
+    # task workers of a PREVIOUS run) and must survive the clear,
+    # because in fast mode those flags are the only kv change
+    # detection there is.
+    private def take_kv_modifications : Array(String)
+      @modified_lock.synchronize do
+        kv = @modified.select(&.starts_with?("kv://"))
+        @modified.clear
+        kv
+      end
+    end
+
+    # Load the last run's recorded hashes from the state file, or
+    # start from scratch when there is none. Also refreshes
+    # @last_scan_time (fast mode's comparison baseline). Returns the
+    # state file's own mtime: the pre-__scan_time fallback fast mode
+    # compares against when no baseline was recorded.
+    private def load_last_run : Time
+      if File.exists? @state_file
+        last_run_date = File.info(@state_file).modification_time
+        @last_run = load_state_file
+        last_run_date
+      else
+        @last_run = {} of String => String
+        @last_scan_time = nil
+        Time.utc # No state file: nothing can be older than now
+      end
+    end
+
+    # The inputs a run needs to look at: every input of every task
+    # when untargeted, or just the inputs of the given targets.
+    private def scan_scope(targets : Array(String)?) : Set(String)
+      return all_inputs unless targets
+      scope = Set(String).new
+      targets.each do |name|
+        if task = tasks[name]?
+          scope.concat task.@inputs
+        end
+      end
+      scope
     end
 
     # Propagate staleness through the task graph in a single forward pass.
