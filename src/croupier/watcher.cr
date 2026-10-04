@@ -150,10 +150,26 @@ module Croupier
           watch(targets)
           run_tasks(targets: targets, parallel: false)
         end
-        # Drop only the changes processed this cycle, then the
-        # modified set: a successful run consumed them
+        # Drop only what this cycle consumed. The old blanket clear
+        # also erased kv:// flags that set() marked while the run was
+        # executing, silently losing that change: the next cycle
+        # found an empty queue and an empty modified set and did
+        # nothing. Dropping by key alone can't tell a consumed
+        # kv:// entry from a mid-run re-mark of the same key, so a
+        # taken kv:// entry is dropped only when the current store
+        # value matches what the fold just recorded. Reading the
+        # store under this lock is safe: set() takes both locks
+        # sequentially, never nested in the reverse order.
         unqueue_changes(changes)
-        @modified_lock.synchronize { @modified.clear }
+        @modified_lock.synchronize do
+          consumed = @modified.select do |path|
+            next false unless hook_changes.includes?(path)
+            next true unless key = path.lchop?("kv://")
+            value = get(key)
+            Digest::SHA1.hexdigest(value || "") == last_run.fetch(path, "")
+          end
+          consumed.each { |path| @modified.delete(path) }
+        end
         # In auto mode this fiber is the only writer of the run-hash
         # trio (tasks run serially on it), so the merge needs no lock
         last_run.merge!(this_run).merge!(next_run)
