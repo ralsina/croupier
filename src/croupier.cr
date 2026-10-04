@@ -165,6 +165,7 @@ module Croupier
       @_store = Kiwi::MemoryStore.new
       @store_cache.clear
       @store_misses.clear
+      @store_keys.clear
       @fast_mode = false
       @fast_dirs = false
       @auto_mode = false
