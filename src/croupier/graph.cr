@@ -400,16 +400,22 @@ module Croupier
                      else
                        last_run_date.to_unix_f
                      end
-      @modified_lock.synchronize do
-        scan_scope.each do |file|
-          if info = File.info?(file)
-            @modified << file if info.modification_time.to_unix_f > scan_started
-          end
+      # Stat outside the lock: the sweep can touch every input of
+      # every task, and holding @modified_lock across those syscalls
+      # blocks task workers calling set()/modified? — the same lock
+      # convoy file_exists? avoids by stat'ing unlocked. Collect the
+      # modified files first, then insert them under the lock in one
+      # batch, together with the k/v modifications.
+      modified_now = [] of String
+      scan_scope.each do |file|
+        if info = File.info?(file)
+          modified_now << file if info.modification_time.to_unix_f > scan_started
         end
       end
-      # Fast mode can't hash values, so k/v modifications are still
-      # detected through set()'s flags and must survive the clear
       @modified_lock.synchronize do
+        modified_now.each { |file| @modified << file }
+        # Fast mode can't hash values, so k/v modifications are still
+        # detected through set()'s flags and must survive the clear
         kv_modifications.each { |key| @modified << key }
       end
     end
