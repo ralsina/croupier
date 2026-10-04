@@ -366,7 +366,15 @@ module Croupier
         next if succeeded.includes?(task)
         task.@inputs.each do |input|
           if previous = last_run[input]?
-            this_run[input] = previous
+            # Keep the freshly-scanned entry when only its framing
+            # changed (same sha1): file entries carry the stat for
+            # hash reuse, and reverting the mtime too would defeat
+            # reuse whenever an input is rewritten with identical
+            # content. The recorded hash still reverts whenever it
+            # actually differs, which is what the retry needs.
+            if Croupier.recorded_sha1(this_run[input]?.to_s) != Croupier.recorded_sha1(previous)
+              this_run[input] = previous
+            end
           else
             this_run.delete(input)
           end

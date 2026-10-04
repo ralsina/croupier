@@ -764,7 +764,14 @@ describe "TaskManager" do
       expected = {"input"  => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
                   "input2" => "62cdb7020ff920e5aa642c3d4066950dd1f01f4d"}
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-        TaskManager.scan_inputs.should eq expected
+        scanned = TaskManager.scan_inputs
+        scanned.size.should eq 2
+        expected.each do |path, sha1|
+          # File entries are mtime|size framed now; compare the hash
+          # they carry and check the framing is really there
+          Croupier.recorded_sha1(scanned[path]).should eq sha1
+          scanned[path].should match(/^[\d.]+\|\d+\|[0-9a-f]{40}$/)
+        end
       end
     end
 
@@ -851,7 +858,10 @@ describe "TaskManager" do
         end
 
         result = TaskManager.scan_inputs
-        result.should eq(files)
+        result.size.should eq files.size
+        files.each do |path, sha1|
+          Croupier.recorded_sha1(result[path]).should eq sha1
+        end
       end
     end
   end
@@ -885,7 +895,7 @@ describe "TaskManager" do
         File.open(".croupier", "w") do |f|
           f.puts(<<-STATE)
             {
-                "__version": "1",
+                "__version": "2",
                 "input": "thisiswrong",
                 "input2": "62cdb7020ff920e5aa642c3d4066950dd1f01f4d",
                 "output3": "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
@@ -909,7 +919,7 @@ describe "TaskManager" do
         File.write("output4", "")
         File.write("output5", "")
         File.write(".croupier", YAML.dump({
-          "__version" => "1",
+          "__version" => "2",
           "input"     => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
           "input2"    => "62cdb7020ff920e5aa642c3d4066950dd1f01f4d",
           "output1"   => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
@@ -923,6 +933,40 @@ describe "TaskManager" do
         # Since .croupier describes all inputs, none should be
         # considered modified
         TaskManager.modified.empty?.should be_true
+      end
+    end
+
+    it "should reuse a file's recorded hash when mtime and size are unchanged" do
+      with_scenario("empty") do
+        File.write("seed", "aaaa")
+        runs = 0
+        Task.new(output: "out", inputs: ["seed"]) { runs += 1; "o" }
+        TaskManager.run_tasks
+        runs.should eq 1
+        TaskManager.run_tasks
+        runs.should eq 1
+
+        # A rewrite with identical content re-hashes (mtime changed)
+        # but still doesn't re-run: framing alone never marks a file
+        # modified, only the sha1 it carries does
+        File.write("seed", "aaaa")
+        TaskManager.run_tasks
+        runs.should eq 1
+
+        # Different content, same size, mtime restored: the stat is
+        # unchanged so the recorded hash is trusted without reading
+        # the file (the trade-off TODO #6 sanctions), and the task
+        # does not re-run
+        stamp = File.info("seed").modification_time
+        File.write("seed", "bbbb")
+        File.utime(stamp, stamp, "seed")
+        TaskManager.run_tasks
+        runs.should eq 1
+
+        # A real change (size differs) is still detected
+        File.write("seed", "cc")
+        TaskManager.run_tasks
+        runs.should eq 2
       end
     end
 

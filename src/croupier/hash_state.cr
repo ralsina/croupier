@@ -61,8 +61,12 @@ module Croupier
       inputs = scope || all_inputs
 
       # Partition inputs into kv keys, files (hashable in parallel)
-      # and directories.
-      file_inputs = [] of String
+      # and directories. One stat per path classifies it AND feeds
+      # the mtime+size hash reuse: a plain file whose recorded
+      # entry has the same mtime and size keeps its recorded sha1
+      # without reading the file (TODO #6) — the stat is orders of
+      # magnitude cheaper than read+hash.
+      file_infos = {} of String => File::Info
       inputs.each do |path|
         if key = path.lchop?("kv://")
           # A kv input's "hash" is the digest of its current value, so
@@ -71,26 +75,42 @@ module Croupier
           # absent state-file entry)
           value = get(key)
           hash[path] = value.nil? ? "" : Digest::SHA1.hexdigest(value)
-        elsif File.file? path
-          file_inputs << path
-        elsif File.directory? path
-          hash[path] = hash_directory(path)
         elsif info = File.info?(path)
-          # An existing thing that is neither file nor directory
-          # (fifo, socket, device): reading it could block forever
-          # (a fifo has no EOF until a writer appears), so hash its
-          # metadata instead. Dropping it — the old behavior — made
-          # it invisible to modification detection. A path that
-          # doesn't stat at all (deleted file, dangling symlink) is
-          # still dropped, exactly like deleted regular files; a
-          # dangling symlink starts being hashed (as a file) once its
-          # target appears.
-          hash[path] = Digest::SHA1.hexdigest("#{info.type}:#{info.modification_time.to_unix_f}:#{info.size}")
+          if info.file?
+            if reusable_hash?(path, info)
+              # Reuse verbatim: the recorded entry's mtime+size match,
+              # so its sha1 is the file's hash until the stat changes
+              hash[path] = last_run.fetch(path, "")
+            else
+              file_infos[path] = info
+            end
+          elsif info.directory?
+            hash[path] = hash_directory(path)
+          else
+            # An existing thing that is neither file nor directory
+            # (fifo, socket, device): reading it could block forever
+            # (a fifo has no EOF until a writer appears), so hash its
+            # metadata instead. Dropping it — the old behavior — made
+            # it invisible to modification detection. A path that
+            # doesn't stat at all (deleted file, dangling symlink) is
+            # still dropped, exactly like deleted regular files; a
+            # dangling symlink starts being hashed (as a file) once its
+            # target appears.
+            hash[path] = Digest::SHA1.hexdigest("#{info.type}:#{info.modification_time.to_unix_f}:#{info.size}")
+          end
         end
       end
 
-      hash_files_parallel(file_inputs).each do |path, sha1|
-        hash[path] = sha1
+      hash_files_parallel(file_infos.keys).each do |path, sha1|
+        if info = file_infos[path]?
+          # Frame the stat with the hash so the NEXT run can reuse it;
+          # the mtime is captured before reading, so a change landing
+          # mid-read produces a mixed hash with a stale stat and the
+          # next run's stat comparison re-hashes — self-correcting
+          hash[path] = "#{info.modification_time.to_unix_f}|#{info.size}|#{sha1}"
+        else
+          hash[path] = sha1
+        end
       end
       hash
     end
@@ -246,7 +266,32 @@ module Croupier
     # discards all recorded hashes: one full rebuild instead of
     # silently comparing hashes computed by a different scheme (the
     # directory digest already changed shape once).
-    STATE_VERSION = "1"
+    #
+    # v2: plain-file entries became "mtime|size|sha1" so an unchanged
+    # stat can reuse the recorded hash without reading the file.
+    STATE_VERSION = "2"
+
+    # Whether the recorded entry for `path` can be reused as-is: it
+    # must be a framed file entry whose stat matches what we see now.
+    # (last_run is written by this fiber's run lifecycle and by the
+    # autorun fold, same as every other reader in the scan paths.)
+    private def reusable_hash?(path : String, info : File::Info) : Bool
+      return false unless entry = last_run[path]?
+      return false unless meta = parse_file_meta(entry)
+      meta[0] == info.modification_time.to_unix_f && meta[1] == info.size
+    end
+
+    # The mtime and size of a framed file entry
+    # ("mtime|size|sha1"), or nil when the entry is not framed
+    # (kv values, directory digests, output hashes, pre-v2 files)
+    private def parse_file_meta(entry : String) : {Float64, Int64}?
+      parts = entry.split('|')
+      return unless parts.size == 3
+      mtime = parts[0].to_f?
+      size = parts[1].to_i64?
+      return unless mtime && size
+      {mtime, size}
+    end
 
     # We ran all tasks, store the current state. Written to a
     # temporary file and renamed into place, so a crash mid-write
