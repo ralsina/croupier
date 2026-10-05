@@ -105,14 +105,18 @@ module Croupier
       end
     end
 
-    # Handle the stop order (runs on the autorun fiber): close the
-    # control channel so the stopping fiber's receive? returns, and
-    # shut the watcher down.
+    # Handle the stop order (runs on the autorun fiber). Teardown
+    # happens BEFORE closing the control channel: the closing is the
+    # acknowledgement auto_stop's receive? waits on, so it may only
+    # fire once the watcher is shut down and this fiber has no
+    # remaining cleanup — otherwise auto_stop returns (and a
+    # subsequent auto_run could install a new watcher) while this
+    # fiber is still tearing the old one down.
     private def stop_autorun : Nil
       Log.info { "Stopping automatic run" }
-      @autorun_control.close
-      @autorun_running.set(false)
       close_watcher
+      @autorun_running.set(false)
+      @autorun_control.close
     end
 
     # One iteration of the autorun loop: process queued changes,
