@@ -32,12 +32,27 @@ module Croupier
     # class variable could leak a watcher nobody closes.
     @@watcher_lock = Sync::Mutex.new
 
+    # Serializes stop callers through the whole shutdown handshake:
+    # the first caller to take the mutex runs it (and flips the
+    # running flag only at the end), every other caller either
+    # blocks on the mutex until the handshake completed or — once
+    # the flag is down — returns knowing the stop is done. That
+    # keeps auto_stop's synchronous contract under concurrency:
+    # when it returns, the autorun fiber is no longer running,
+    # whoever performed the stop. Without the mutex a second
+    # concurrent caller raced past the flag check and blocked
+    # forever on the unbuffered control channel (or raised on it
+    # once the first stop closed it).
+    @@stop_mutex = Sync::Mutex.new
+
     def auto_stop
-      return unless @autorun_running.get
-      @autorun_control.send true
-      @autorun_control.receive?
-      @autorun_control = Channel(Bool).new
-      @autorun_running.set(false)
+      @@stop_mutex.synchronize do
+        return unless @autorun_running.get
+        @autorun_control.send true
+        @autorun_control.receive?
+        @autorun_control = Channel(Bool).new
+        @autorun_running.set(false)
+      end
     end
 
     # Snapshot of the queued changes, safe to call from the watcher callback
@@ -90,14 +105,18 @@ module Croupier
       end
     end
 
-    # Handle the stop order (runs on the autorun fiber): close the
-    # control channel so the stopping fiber's receive? returns, and
-    # shut the watcher down.
+    # Handle the stop order (runs on the autorun fiber). Teardown
+    # happens BEFORE closing the control channel: the closing is the
+    # acknowledgement auto_stop's receive? waits on, so it may only
+    # fire once the watcher is shut down and this fiber has no
+    # remaining cleanup — otherwise auto_stop returns (and a
+    # subsequent auto_run could install a new watcher) while this
+    # fiber is still tearing the old one down.
     private def stop_autorun : Nil
       Log.info { "Stopping automatic run" }
-      @autorun_control.close
-      @autorun_running.set(false)
       close_watcher
+      @autorun_running.set(false)
+      @autorun_control.close
     end
 
     # One iteration of the autorun loop: process queued changes,

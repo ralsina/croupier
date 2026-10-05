@@ -177,6 +177,33 @@ describe "TaskManager" do
       end
     end
 
+    it "should survive concurrent auto_stop calls" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        Task.new(output: "out", inputs: ["seed"]) { "data" }
+        TaskManager.auto_run
+        wait_until(message: "autorun never started") { TaskManager.@autorun_running.get }
+
+        # Every concurrent stopper must return: with the old flag
+        # check, the losers of the race blocked forever on the
+        # unbuffered control channel send
+        stopped = 0
+        latch = Channel(Nil).new
+        5.times { spawn { TaskManager.auto_stop; latch.send(nil) } }
+        5.times do
+          returned = true
+          select
+          when latch.receive
+          when timeout 5.seconds
+            returned = false
+          end
+          raise "an auto_stop caller never returned" unless returned
+          stopped += 1
+        end
+        stopped.should eq 5
+        wait_until(message: "autorun never stopped") { !TaskManager.@autorun_running.get }
+      end
+    end
+
     it "should not lose kv changes marked while a cycle is running" do
       with_scenario("empty") do
         x = 0
