@@ -331,9 +331,23 @@ module Croupier
       ensure
         # Workers are done: queued add_input calls can be applied on
         # this fiber, where nothing iterates the input sets concurrently
-        @data_mutex.synchronize { @parallel_wave_active = false }
-        apply_pending_inputs
-        apply_pending_subtask_ops
+        # One synchronized barrier: the wave flag drops, the queued
+        # add_input/subtask operations replay, and the caches
+        # invalidate as a single critical section. Clearing the flag
+        # separately would let an outside-thread caller apply a newer
+        # operation through the immediate path AHEAD of the older
+        # queued ones, and a separate invalidation could overlap one
+        # from an immediate call. The replay helpers assume the lock
+        # is held (Sync::Mutex is not reentrant).
+        @data_mutex.synchronize do
+          @parallel_wave_active = false
+          applied = !@pending_inputs.empty? || !@pending_subtask_ops.empty?
+          replay_pending_inputs_locked
+          replay_pending_subtask_ops_locked
+          # Nothing changed in a wave with no queued operations:
+          # invalidating would force a pointless graph rebuild
+          invalidate_graph_cache if applied
+        end
       end
       errors
     end

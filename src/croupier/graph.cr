@@ -46,16 +46,12 @@ module Croupier
       end
     end
 
-    # Apply queued add_input calls. Runs on the coordinating fiber at
-    # wave boundaries, when no worker can mutate task inputs
-    # concurrently with the iteration below.
-    private def apply_pending_inputs
-      pending = @data_mutex.synchronize do
-        swapped = @pending_inputs
-        @pending_inputs = [] of {String, String}
-        swapped
-      end
-      return if pending.empty?
+    # Apply queued add_input calls (assumes the caller holds
+    # @data_mutex: only the wave barrier calls this, inside its
+    # single critical section)
+    private def replay_pending_inputs_locked : Nil
+      pending = @pending_inputs
+      @pending_inputs = [] of {String, String}
       pending.each do |task_key, input|
         if task = tasks[task_key]?
           # Set#<< is idempotent: duplicates queued during the wave
@@ -63,7 +59,6 @@ module Croupier
           task.inputs << input
         end
       end
-      invalidate_graph_cache
     end
 
     # Subtask operations queued while a parallel wave is executing,
@@ -149,34 +144,30 @@ module Croupier
     end
 
     # Replay the subtask operations queued during a wave, in call
-    # order. Runs on the coordinating fiber at the barrier, where
-    # nothing iterates the registries concurrently. A master-wide
+    # order (assumes the caller holds @data_mutex — the wave barrier
+    # replays inside its single critical section). A master-wide
     # removal is evaluated at REPLAY time against the master's
     # then-current tracking, so it removes exactly what the same
     # serial call sequence would — including subtasks registered by
     # earlier ops of the same batch.
-    private def apply_pending_subtask_ops : Nil
-      return if @pending_subtask_ops.empty?
-      @data_mutex.synchronize do
-        ops = @pending_subtask_ops.dup
-        @pending_subtask_ops.clear
-        ops.each do |kind, subtask_id, master_id|
-          case kind
-          when SubtaskOp::Register
-            link_subtask(master_id, subtask_id)
-          when SubtaskOp::Remove
-            deregister_subtasks(Set{subtask_id})
-          when SubtaskOp::RemoveMasterSubtasks
-            if master = tasks[master_id]?
-              ids = Set(String).new
-              ids.concat master.subtask_ids
-              deregister_subtasks(ids)
-              master.subtask_ids.clear
-            end
+    private def replay_pending_subtask_ops_locked : Nil
+      ops = @pending_subtask_ops
+      @pending_subtask_ops = [] of {SubtaskOp, String, String}
+      ops.each do |kind, subtask_id, master_id|
+        case kind
+        when SubtaskOp::Register
+          link_subtask(master_id, subtask_id)
+        when SubtaskOp::Remove
+          deregister_subtasks(Set{subtask_id})
+        when SubtaskOp::RemoveMasterSubtasks
+          if master = tasks[master_id]?
+            ids = Set(String).new
+            ids.concat master.subtask_ids
+            deregister_subtasks(ids)
+            master.subtask_ids.clear
           end
         end
       end
-      invalidate_graph_cache
     end
 
     # Link a subtask id to its master (assumes the caller holds
