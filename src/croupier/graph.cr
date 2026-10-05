@@ -225,7 +225,7 @@ module Croupier
     # node's own closure, never its siblings'.
     private def _dependencies(outputs : Array(String))
       self_if_task = ->(node : String) { tasks.has_key?(node) ? [node] : [] of String }
-      inputs_of = ->(node : String) { tasks[node]?.try(&.@inputs.to_a) || [] of String }
+      inputs_of = ->(node : String) { tasks[node]?.try(&.inputs.to_a) || [] of String }
       memoized_closure(outputs, {} of String => Set(String), self_if_task, inputs_of)
     end
 
@@ -268,11 +268,17 @@ module Croupier
       # id): a task seeds its outputs, and the next nodes are the
       # tasks consuming any of those outputs
       outputs_of = ->(task_id : String) { tasks_by_id[task_id].outputs }
-      downstream = ->(task_id : String) {
-        tasks_by_id[task_id].outputs.flat_map { |output| consumers.fetch(output, nil) || [] of Task }.map(&.id).uniq!
-      }
+      downstream = ->(task_id : String) { downstream_task_ids(task_id, consumers) }
       starts = inputs.flat_map { |input| consumers.fetch(input, nil) || [] of Task }.map(&.id).uniq!
       memoized_closure(starts, {} of String => Set(String), outputs_of, downstream)
+    end
+
+    # Ids of the tasks consuming any output of the task registered
+    # as `task_id`
+    private def downstream_task_ids(task_id : String, consumers : Hash(String, Array(Task))) : Array(String)
+      tasks_by_id[task_id].outputs
+        .flat_map { |output| consumers.fetch(output, nil) || [] of Task }
+        .map(&.id).uniq!
     end
 
     # Input => tasks that consume it.
@@ -289,7 +295,6 @@ module Croupier
       end
       consumers
     end
-
 
     # Compare inputs against the last run and leave the changed ones
     # in @modified for propagate_staleness. Three modes:
