@@ -61,7 +61,12 @@ module Croupier
       inputs = scope || all_inputs
 
       # Partition inputs into kv keys, files (hashable in parallel)
-      # and directories.
+      # and directories. One stat per path classifies it (instead of
+      # the three File.file?/directory?/info? calls this used to
+      # cost) — but every file is then HASHED: this is content mode,
+      # and its guarantee is that staleness decisions rest on file
+      # contents, never on metadata trust. mtime-based shortcuts are
+      # what fast mode is for.
       file_inputs = [] of String
       inputs.each do |path|
         if key = path.lchop?("kv://")
@@ -71,21 +76,23 @@ module Croupier
           # absent state-file entry)
           value = get(key)
           hash[path] = value.nil? ? "" : Digest::SHA1.hexdigest(value)
-        elsif File.file? path
-          file_inputs << path
-        elsif File.directory? path
-          hash[path] = hash_directory(path)
         elsif info = File.info?(path)
-          # An existing thing that is neither file nor directory
-          # (fifo, socket, device): reading it could block forever
-          # (a fifo has no EOF until a writer appears), so hash its
-          # metadata instead. Dropping it — the old behavior — made
-          # it invisible to modification detection. A path that
-          # doesn't stat at all (deleted file, dangling symlink) is
-          # still dropped, exactly like deleted regular files; a
-          # dangling symlink starts being hashed (as a file) once its
-          # target appears.
-          hash[path] = Digest::SHA1.hexdigest("#{info.type}:#{info.modification_time.to_unix_f}:#{info.size}")
+          if info.file?
+            file_inputs << path
+          elsif info.directory?
+            hash[path] = hash_directory(path)
+          else
+            # An existing thing that is neither file nor directory
+            # (fifo, socket, device): reading it could block forever
+            # (a fifo has no EOF until a writer appears), so hash its
+            # metadata instead. Dropping it — the old behavior — made
+            # it invisible to modification detection. A path that
+            # doesn't stat at all (deleted file, dangling symlink) is
+            # still dropped, exactly like deleted regular files; a
+            # dangling symlink starts being hashed (as a file) once its
+            # target appears.
+            hash[path] = Digest::SHA1.hexdigest("#{info.type}:#{info.modification_time.to_unix_f}:#{info.size}")
+          end
         end
       end
 
@@ -246,6 +253,7 @@ module Croupier
     # discards all recorded hashes: one full rebuild instead of
     # silently comparing hashes computed by a different scheme (the
     # directory digest already changed shape once).
+    #
     STATE_VERSION = "1"
 
     # We ran all tasks, store the current state. Written to a

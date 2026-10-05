@@ -34,6 +34,7 @@ describe "TaskManager" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         TaskManager.run_tasks
         state = YAML.parse(File.read(".croupier")).as_h.reject { |key, _| key.to_s == "__scan_time" }
+        state["__version"].to_s.should eq "1"
         state.should eq({
           "__version" => "1",
           "input"     => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",

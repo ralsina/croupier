@@ -926,6 +926,27 @@ describe "TaskManager" do
       end
     end
 
+    it "should detect a same-size rewrite even when its mtime is restored" do
+      with_scenario("empty", to_create: {"seed" => "aaaa"}) do
+        runs = 0
+        Task.new(output: "out", inputs: ["seed"]) { runs += 1; "o" }
+        TaskManager.run_tasks
+        runs.should eq 1
+
+        # THE content-mode contract: staleness rests on file
+        # CONTENTS, never on metadata. A same-size rewrite whose
+        # mtime is restored (touched, backup-restored, rsynced with
+        # --times) must still be detected, because the file is
+        # always re-hashed. Fast mode may trade this for speed;
+        # content mode may not.
+        stamp = File.info("seed").modification_time
+        File.write("seed", "bbbb")
+        File.utime(stamp, stamp, "seed")
+        TaskManager.run_tasks
+        runs.should eq 2
+      end
+    end
+
     it "should preserve input hashes across fast-mode runs" do
       with_scenario("empty", to_create: {"seed" => "one"}) do
         runs = 0
