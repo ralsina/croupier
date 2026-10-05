@@ -1,22 +1,21 @@
-# Algorithm shamelessly stolen from https://stackoverflow.com/a/47234034
-# Thanks Blckknght!
+# Iterative DFS topological sort, adapted from
+# https://stackoverflow.com/a/47234034 (thanks, Blckknght).
 
 module Croupier
-  # Virtual root vertex of the task graph. It contains a NUL byte,
-  # which no file path (and no sane task id) can contain, so a real
-  # vertex can never collide with it — it used to be literally
-  # "start", and a task named "start" would become the root of the
-  # whole graph.
+  # Virtual root vertex of the task graph. The NUL byte keeps it from
+  # colliding with any file path or task id.
   ROOT_VERTEX = "\0start"
 
   # Sort the vertices of `g` (an adjacency hash, vertex => the vertices it
   # points at) starting from the virtual root (ROOT_VERTEX), so every vertex
   # comes after the vertices pointing at it.
   #
-  # Neighbors are visited in sorted order, so the order among independent
-  # vertices is deterministic instead of following hash-table layout.
-  # `g[v]?` tolerates plain hashes without a default block (and doesn't
-  # mutate the graph by inserting missing keys on read).
+  # Neighbors are visited in sorted order, so independent vertices
+  # come out in a deterministic order. `g[v]?` works on hashes without
+  # a default block and never inserts keys.
+  #
+  # Raises CycleError or UnreachableTaskError when some vertex is not
+  # reachable from the root.
   def self.topological_sort(g)
     seen = Set(String).new
     stack = Array(String).new
@@ -36,11 +35,8 @@ module Croupier
       end
     end
     result = stack + order.reverse
-    # The DFS visits every vertex reachable from ROOT_VERTEX. Anything
-    # never seen (as a key or inside an adjacency list) is not
-    # reachable: that is either an acyclic island (a wiring mistake
-    # like a missing root edge) or an actual cycle. Report which,
-    # instead of calling both a cycle.
+    # Vertices the DFS never reached are either on a cycle or an
+    # acyclic island with no edge from the root. Report which.
     all_vertices = Set(String).new
     g.each do |vertex, neighbors|
       all_vertices << vertex
@@ -81,9 +77,7 @@ module Croupier
   end
 end
 
-# Deprecated shim: top-level defs were how the sort was exposed before
-# it moved into the Croupier module. New code should call
-# Croupier.topological_sort.
+# Deprecated top-level alias, kept for compatibility.
 @[Deprecated("Use `Croupier.topological_sort` instead")]
 def topological_sort(g)
   Croupier.topological_sort(g)

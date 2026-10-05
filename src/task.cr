@@ -29,18 +29,13 @@ module Croupier
     property id : String = ""
     # The task's inputs: files, task ids or kv:// keys it depends on.
     #
-    # Treat as read-only while tasks are running: mutating it from task
-    # procs on parallel workers races and, even done safely, cannot
-    # affect the current run (wave planning happens before workers
-    # start). Use `TaskManager.add_input`, which is guarded and
-    # invalidates the caches a later run needs. Read-only by design:
-    # every write goes through add_input (or the registration path),
-    # both under the manager's data lock.
+    # Don't mutate the returned set: runs read it without locks. Add
+    # inputs with `TaskManager.add_input`, which locks, defers the
+    # change during parallel waves and invalidates the graph cache.
     getter inputs : Set(String) = Set(String).new
     property outputs : Array(String) = [] of String
-    # Tri-state staleness in a single atomic field, so reads from
-    # parallel workers are safe without extra locking. The stale,
-    # stale= and stale? methods below are views over this field.
+    # Tri-state staleness in one atomic field, safe to read from
+    # parallel workers. stale, stale= and stale? are views over it.
     @[YAML::Field(ignore: true)]
     @staleness : Atomic(Staleness) = Atomic.new(Staleness::Unknown)
     property? always_run : Bool = false
@@ -50,16 +45,15 @@ module Croupier
     property? mergeable : Bool = true
     property mutex : String? = nil
 
-    # Setting a mutex also registers it: Task#run locks mutexes through
-    # the manager, and an unregistered one would fail at run time
-    # (long after the declaration that named it)
+    # Setting a mutex also registers it with the manager, which is
+    # where Task#run looks it up
     def mutex=(name : String?)
       @mutex = name
       TaskManager.add_mutex(name) if name
     end
 
     @[YAML::Field(ignore: true)]
-    property? outputs_changed : Bool = false # Track if outputs actually changed during run
+    property? outputs_changed : Bool = false # Whether the last run changed any output
 
     # Under what keys should this task be registered with TaskManager
     def keys
@@ -68,29 +62,34 @@ module Croupier
 
     # Create a task with zero or more outputs.
     #
-    # `output` is an array of files or k/v store keys that the task generates
-    # `inputs` is an array of filesystem paths, task ids or k/v store keys that the
-    # task depends on.
-    # `proc` is a proc that is executed when the task is run
-    # `no_save` is a boolean that tells croupier that the task will save the files itself
-    # `id` is a unique identifier for the task. If the task has no outputs,
-    # it *must* have an id. If not given, it's calculated as a hash of outputs.
-    # `always_run` is a boolean that tells croupier that the task is always
-    #   stale regardless of its dependencies' state
-    # `mergeable` is a boolean. If true, the task can be merged
-    #   with others that share an output. Tasks with different
-    #   `mergeable` values can NOT be merged together.
+    # `outputs` is an array of files or k/v store keys that the task
+    #   generates (the `output:` overloads take a single one)
+    # `inputs` is an array of filesystem paths, task ids or k/v store
+    #   keys that the task depends on
+    # The block (or `proc:`) is executed when the task is run
+    # `no_save` tells croupier that the task saves its outputs itself
+    # `id` is a unique identifier for the task. If the task has no
+    #   outputs, it *must* have an id. If not given, it's a hash of the
+    #   outputs.
+    # `always_run` makes the task stale regardless of its inputs
+    # `mergeable`: if true, the task can be merged with others that
+    #   share an output. Tasks with different `mergeable` values can
+    #   NOT be merged together.
+    # `mutex` names a lock held while the task's procs run, so tasks
+    #   sharing it never run at the same time
     #
     # k/v store keys are of the form `kv://key`, and are used to store
-    # intermediate data in a key/value store. They are not saved to disk.
+    # intermediate data in a key/value store (in memory, or a file via
+    # `TaskManager.use_persistent_store`).
     #
-    # To access k/v data in your proc, you can use `TaskManager.store.get(key)`.
+    # To access k/v data in your proc, use `TaskManager.get(key)`.
     #
-    # Important: tasks will be registered in TaskManager. If the new task
-    # conflicts in id/outputs with others, it will be merged, and the new
-    # object will NOT be registered. For that reason, keeping references
-    # to Task objects you create is probably pointless.
-
+    # Important: tasks are registered in TaskManager on creation, and
+    # creating one while a run is in progress raises `UsageError`. If
+    # the new task conflicts in id/outputs with others, it is merged
+    # into the existing one and the new object is NOT registered, so
+    # keeping references to Task objects you create is probably
+    # pointless.
     def initialize(
       outputs : Array(String) = [] of String,
       inputs : Array(String) = [] of String,
@@ -121,9 +120,6 @@ module Croupier
       # that never holds it): better to fail at declaration
       raise TaskDefinitionError.new("Task has an empty kv:// key") if outputs.includes?("kv://") || inputs.includes?("kv://")
 
-      # kv:// entries keep their prefix; everything else is a path and
-      # gets normalized, so "./x", "dir/../x" and "x" are the same
-      # graph vertex (and match the watcher's normalized event paths)
       inputs = normalize_paths(inputs)
       outputs = normalize_paths(outputs)
 
@@ -140,27 +136,23 @@ module Croupier
       @no_save = no_save
       @mergeable = mergeable
 
-      # Register with the task manager. Rejected mid-run: the task
-      # set is fixed before the first run (see TaskManager.register_task).
+      # Raises if a run is in progress (see TaskManager.register_task)
       TaskManager.register_task(self, id)
     end
 
     # Register this task in the TaskManager: merge every task it has
     # an output/id collision with into one, and register the survivor
-    # on every output/id of the merged set. Called from Task.new.
-    # Not part of the public API.
+    # on every output/id of the merged set. Called by
+    # TaskManager.register_task. Not part of the public API.
     # :nodoc:
     def register_with_manager(explicit_id : String?) : Nil
       to_merge = colliding_tasks
-      # Refuse to merge if this task or any of the colliding ones
-      # are not mergeable
       raise TaskDefinitionError.new("Can't merge task #{self} with #{to_merge[..-2].map(&.to_s)}") \
         if to_merge.size > 1 && to_merge.any? { |t| !t.mergeable? }
       check_explicit_id_conflict(explicit_id, to_merge)
       check_merge_flag_compatibility(to_merge)
       register_merged(to_merge)
 
-      # Invalidate graph cache since we added/modified a task
       TaskManager.invalidate_graph_cache
     end
 
@@ -181,12 +173,10 @@ module Croupier
       fetched
     end
 
-    # An explicit id on an output-ful task must be unique among tasks
+    # An explicit id on a task with outputs must be unique among tasks
     # that stay separate: the id index assumes one task per id.
     # (Output-less tasks may still merge under a shared id, and a
     # collision with a merge target is fine: one task, one id.)
-    # The check goes through TaskManager's id index: scanning every
-    # registered task made creation O(N^2) overall.
     private def check_explicit_id_conflict(id : String?, to_merge : Array(Task))
       return if id.nil? || @outputs.empty?
       conflict = TaskManager.tasks_by_id[id]?
@@ -195,10 +185,9 @@ module Croupier
     end
 
     # Check flag compatibility across the WHOLE set before the first
-    # merge: merge mutates the live first task in place, so a reduce
-    # that fails partway (3+ colliding tasks) would leave the earlier
-    # merges applied and the registry corrupted. Same checks and
-    # messages as Task#merge, which still re-checks pairwise.
+    # merge: merge mutates the first task in place, so a reduce that
+    # failed partway (3+ colliding tasks) would leave earlier merges
+    # applied. Same checks and messages as Task#merge.
     private def check_merge_flag_compatibility(to_merge : Array(Task))
       return unless to_merge.size > 1
       first = to_merge.first
@@ -212,9 +201,8 @@ module Croupier
     private def register_merged(to_merge : Array(Task))
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
       reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
-      # Keep the id index in step: merged tasks share the survivor's
-      # id, and absorbed tasks drop out of the registry entirely, so
-      # their index entries must go or a later task reusing such an
+      # Keep the id index in step: absorbed tasks leave the registry,
+      # so their index entries go too, or a later task reusing such an
       # id would falsely conflict
       to_merge.each { |t| TaskManager.tasks_by_id.delete(t.id) unless t == reduced }
       TaskManager.tasks_by_id[reduced.id] = reduced
@@ -262,7 +250,7 @@ module Croupier
     def run
       call_results = call_procs
 
-      # Track if any output changed (for early cutoff optimization)
+      # Set by the save/verify steps below; read by early cutoff
       @outputs_changed = false
 
       if @no_save
@@ -270,7 +258,7 @@ module Croupier
       else
         save_outputs(call_results)
       end
-      self.stale = false # Done, not stale anymore (staleness is a single atomic field)
+      self.stale = false
       TaskManager.progress_callback.call(id)
     end
 
@@ -301,11 +289,11 @@ module Croupier
       call_results
     end
 
-    # The task saved the data so we should not do it
-    # but we need to update hashes
+    # no_save tasks write their own outputs: check they exist and
+    # record their hashes
     private def verify_no_save_outputs
       @outputs.reject(&.empty?).each do |output|
-        # If the output is a kv:// url, we don't need to check if it exists
+        # The task sets kv:// outputs itself; nothing to check
         next if output.lchop?("kv://")
         if !File.exists?(output)
           raise TaskVerificationError.new("Task #{self} did not generate #{output}")
@@ -319,7 +307,7 @@ module Croupier
       end
     end
 
-    # We have to save the files ourselves
+    # Save the procs' results to the task's outputs, in order
     private def save_outputs(call_results : Array(String?))
       if call_results.size > @outputs.size
         Log.warn { "Task #{self} returned #{call_results.size} results for #{@outputs.size} outputs, discarding the extras" }
@@ -336,19 +324,14 @@ module Croupier
       raise TaskVerificationError.new("Task #{self} did not return the correct number of outputs")
     end
 
-    # If the output is a kv:// url, we save it in the k/v
-    # store; set reports whether the value actually changed,
-    # and the value's hash is recorded for the next run's
-    # state file exactly like a file output's
+    # kv:// outputs go to the k/v store; `set` reports whether the
+    # value changed, and the value's hash is recorded like a file's
     private def save_kv_output(key : String, output : String, call_result : String)
       @outputs_changed = true if TaskManager.set(key, call_result)
       TaskManager.record_output_hash(output, Digest::SHA1.hexdigest(call_result))
     end
 
     private def save_file_output(output : String, call_result : String)
-      # mkdir_p is idempotent, so an existing directory is not an
-      # error; a real failure (e.g. permissions) raises from here
-      # instead of being misdiagnosed
       Dir.mkdir_p(File.dirname output)
       File.open(output, "w") do |io|
         io << call_result
@@ -362,26 +345,25 @@ module Croupier
       end
     end
 
-    # Tasks are stale if:
+    # A task is stale if:
     #
-    # * One of their inputs are stale
-    # * If one of the output files doesn't exist
-    # * If any of the inputs are generated by a stale task
+    # * it is always_run, or has no inputs
+    # * one of its outputs is missing
+    # * one of its inputs was modified
+    # * one of its inputs is produced by a stale task
     #
-    # Staleness is tri-state: unknown (compute on-demand), stale, fresh.
-    # TaskManager.propagate_staleness pre-computes it for O(V+E)
-    # performance, and running a task sets it to fresh. This method
-    # trusts that assigned value — dependents (waiting_for) rely on a
-    # finished task reporting fresh even when it has no inputs or is
-    # always_run — and computes on-demand only while it is unknown.
-
+    # Staleness is tri-state: unknown, stale, fresh.
+    # TaskManager.propagate_staleness sets it for every task before a
+    # run, and running a task sets it to fresh. This method trusts an
+    # assigned value (dependents rely on a finished task reporting
+    # fresh even when it is always_run) and computes only while it is
+    # unknown.
     def stale? : Bool
       case @staleness.get
       when Staleness::Stale then true
       when Staleness::Fresh then false
       else
-        # Unknown: compute on demand. Tasks without inputs or flagged
-        # always_run are always stale.
+        # Unknown: compute on demand
         return true if @always_run || @inputs.empty?
 
         computed = compute_staleness
@@ -407,23 +389,17 @@ module Croupier
       )
     end
 
-    # Mark that a dependency (input) is known to be unchanged.
-    # Recomputes staleness considering ALL inputs together (thread-safe).
+    # Early cutoff: `input` turned out unchanged, so recompute
+    # staleness from all inputs (another may still be stale).
     def mark_dependency_fresh(input : String)
       self.stale = compute_staleness(inputless_is_stale: true)
     end
 
-    # Compute staleness by checking that every output exists (as a file
-    # or as a k/v key) and no input is modified or produced by a stale
-    # task.
-    #
-    # Single shared implementation for the on-demand path (stale?) and
-    # the early-cutoff recompute (mark_dependency_fresh); they differ
-    # only in whether input-less / always_run tasks short-circuit to
-    # stale, which is the `inputless_is_stale` flag (stale? checks that
-    # itself before descending). The output scan is one early-exit pass
-    # instead of separate file/kv partitions, and stops at the first
-    # missing output.
+    # Stale unless every output exists (as a file or as a k/v key) and
+    # no input is modified or produced by a stale task. Shared by
+    # stale? and mark_dependency_fresh; `inputless_is_stale` makes
+    # always_run and input-less tasks stale (stale? checks that
+    # itself first).
     private def compute_staleness(inputless_is_stale : Bool = false) : Bool
       return true if inputless_is_stale && (@always_run || @inputs.empty?)
 
@@ -443,17 +419,8 @@ module Croupier
       end
     end
 
-    # For inputs that are tasks, we check if they are stale
-    # For inputs that are not tasks, they should exist as files
-    # or as keys in the k/v store
-    # If any inputs don't fit those criteria, they are being
-    # waited for.
-
-    # Is this input satisfied (a fresh task, an existing file, or a
-    # key present in the k/v store)?
-    #
-    # The store is read through TaskManager.get so the store's lock
-    # guards against parallel workers writing it from other threads.
+    # Is this input satisfied: a fresh task, an existing file, or a
+    # key present in the k/v store?
     private def input_satisfied?(input) : Bool
       if task = TaskManager.tasks[input]?
         !task.stale?
@@ -464,19 +431,18 @@ module Croupier
       end
     end
 
-    # All inputs that are not satisfied yet.
+    # All inputs that are not satisfied yet
     def waiting_for
       @inputs.reject { |input| input_satisfied?(input) }
     end
 
-    # Early-exit version of waiting_for.empty? used by ready?, so
-    # readiness checks stop at the first blocked input instead of
-    # building the whole array.
+    # Early-exit version of `waiting_for.empty?`, used by ready?
     def waiting? : Bool
       @inputs.any? { |input| !input_satisfied?(input) }
     end
 
-    # A task is ready if it is stale and not waiting for anything
+    # A task is ready if it needs to run (stale, always_run or
+    # run_all) and is not waiting for any input
     def ready?(run_all = false)
       (stale? || always_run? || run_all) &&
         !waiting?
@@ -486,19 +452,17 @@ module Croupier
       io << @id << "::" << @outputs.join(", ")
     end
 
-    # Merge two tasks.
-    #
-    # inputs and outputs are joined
-    # procs of the second task are added to the 1st
+    # Merge two tasks: inputs and outputs are joined, and the second
+    # task's procs are appended to the first's.
     def merge(other : Task)
       raise TaskDefinitionError.new("Cannot merge tasks with different no_save settings") unless no_save? == other.no_save?
       raise TaskDefinitionError.new("Cannot merge tasks with different always_run settings") unless always_run? == other.always_run?
-      # A merged task runs all procs under one mutex: silently keeping
-      # only one side's would break the other's mutual exclusion
+      # A merged task runs all procs under one mutex, so keeping only
+      # one side's would break the other's mutual exclusion
       raise TaskDefinitionError.new("Cannot merge tasks with different mutexes") unless mutex == other.mutex
 
-      # @outputs is NOT unique! We can save multiple times
-      # the same file in multiple procs
+      # @outputs may hold duplicates: several procs can write the
+      # same output
       @outputs += other.@outputs
       @inputs += other.@inputs
       @procs += other.@procs

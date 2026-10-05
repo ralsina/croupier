@@ -25,10 +25,8 @@ module Croupier
 
   alias CallbackProc = Proc(String, Nil)
 
-  # SHA1 of a file's contents, streamed so large files are never
-  # buffered whole. Shared by Task#run (no_save output verification)
-  # and the manager's input scanner; an unreadable file still raises
-  # from File.open, same as File.read did.
+  # SHA1 of a file's contents, read in chunks so large files are never
+  # held in memory whole. Raises if the file can't be opened.
   def self.hash_file(path : String) : String
     File.open(path) do |file|
       digest = Digest::SHA1.new
@@ -45,38 +43,37 @@ module Croupier
   # Its methods live in focused files under src/croupier/: kv_store.cr,
   # hash_state.cr, graph.cr, runner.cr and watcher.cr.
   class TaskManagerType
-    # Registry of all tasks.
+    # Registry of all tasks, keyed by each output (or by id for tasks
+    # without outputs).
     #
-    # Treat as read-only while tasks are running: workers and the
-    # coordinating fiber traverse it (and the Task objects in it)
-    # concurrently during run_tasks. To grow a task's dependencies
-    # between runs, use `add_input` instead of mutating `tasks` or
-    # `Task#inputs` directly.
+    # Read without locks while a run executes, so the task set must not
+    # change mid-run: `Task.new` and `remove_task` raise `UsageError`
+    # during a run. Change it through those two methods (and grow
+    # inputs through `add_input`), never by writing to the hash.
     getter tasks : Hash(String, Croupier::Task) = {} of String => Croupier::Task
-    # Registry of modified files, which will make tasks stale.
+    # Inputs (files and kv:// keys) modified since the last run; they
+    # make the tasks that consume them stale.
     #
-    # Unlike the run-hash trio below, this set IS touched from parallel
-    # task workers: kv:// writes (set) and modified? are public API for
-    # task procs. Every internal access therefore goes through
-    # @modified_lock (including in cleanup, which can race a live
-    # autorun cycle). The property is public for user code and tests,
-    # but mutating it directly from a running task proc races.
+    # Task procs touch this set from parallel workers (`set` marks
+    # kv:// keys, `modified?` reads it), so every internal access goes
+    # through @modified_lock. Mutating it directly from a running proc
+    # races.
     property modified = Set(String).new
-    # SHA1 of files from last run
+    # Hashes recorded by the previous run (from the state file, or
+    # folded in by the previous auto mode cycle).
     #
     # Concurrency contract shared by last_run / this_run / next_run:
     # task workers only touch them through the @hashes_lock accessors
-    # in hash_state.cr (record_output_hash, swap_output_hash); every
-    # other read or write happens on the coordinating fiber (the
-    # run_tasks caller in serial mode, the wave-barrier fiber in
-    # parallel mode, the autorun fiber in auto mode), so those sites
-    # are deliberately lock-free.
+    # in hash_state.cr (record_output_hash, swap_output_hash). Every
+    # other access happens on the coordinating fiber (the run_tasks
+    # caller, or the autorun fiber in auto mode), so those sites take
+    # no lock.
     property last_run = {} of String => String
-    # SHA1 of files as of starting this run
+    # Input hashes scanned at the start of this run.
     #
     # See last_run for the concurrency contract.
     property this_run = {} of String => String
-    # SHA1 of input files as of ending this run
+    # Output hashes recorded by tasks during this run.
     #
     # See last_run for the concurrency contract.
     property next_run = {} of String => String
@@ -93,14 +90,12 @@ module Croupier
     # If set, it's called after every task finishes
     property progress_callback : Proc(String, Nil) = ->(_id : String) { }
     # If set, it's called in auto mode after changes are detected but before tasks run
-    # Receives the list of changed files as an argument
+    # Receives the set of modified paths (files and kv:// keys)
     property before_run_hook : Proc(Set(String), Nil) = ->(_changes : Set(String)) { }
     # A hash of mutexes required by tasks
     property mutexes = {} of String => Sync::Mutex
-    # Task id -> task index so the per-creation duplicate-id check is
-    # O(1) instead of a linear scan over every registered task (which
-    # made creating N tasks O(N^2); a 4000-task site spent ~200ms in
-    # the scan alone)
+    # Task id -> task, so the duplicate-id check on task creation is
+    # O(1) instead of a scan over every registered task.
     getter tasks_by_id : Hash(String, Task) = {} of String => Task
     @graph_invalidated : Bool = false
 
@@ -109,13 +104,11 @@ module Croupier
     end
 
     def lock_mutex(name : String)
-      # Registry reads are lock-free: every naming path registers the
-      # mutex at declaration time (block initializer, mutex= setter),
-      # before waves start — the same read-only-during-runs contract
-      # the tasks registry relies on. Taking @data_mutex here twice
-      # per task proc was a lock convoy (see the 0.14 performance
-      # report). The locked fallback only covers direct calls with a
-      # never-declared name.
+      # The registry read takes no lock: mutexes are registered when a
+      # task declares them, before any run starts, and taking
+      # @data_mutex twice per proc call made workers contend on it.
+      # The locked fallback only covers direct calls with a name that
+      # was never declared.
       if mutex = mutexes[name]?
         mutex.lock
       else
@@ -125,17 +118,18 @@ module Croupier
     end
 
     def unlock_mutex(name : String)
-      # Lock-free read, no KeyError: this runs in Task#run's ensure,
-      # where raising would mask the proc's own exception
+      # No lock and no KeyError: this runs in Task#run's ensure, where
+      # raising would mask the proc's own exception
       mutexes[name]?.try &.unlock
     end
 
-    # Guards the shared data containers, which parallel task workers
-    # mutate and read from multiple OS threads. Split by concern so
-    # hot paths don't contend on one lock (see the 0.14 performance
-    # report): store trio, run hashes, modified set, existing-files
-    # cache each get their own; @data_mutex stays for the rare paths
-    # (mutex registry fallback, pending-input queue, wave flag).
+    # Locks for state shared with parallel task workers, split by
+    # concern so hot paths don't contend on one lock: the k/v store
+    # (@store_lock), the run hashes (@hashes_lock), the modified set
+    # (@modified_lock) and the file-existence cache (@files_lock).
+    # @data_mutex covers the rest: registry writes, the run counter,
+    # the wave flag, the pending add_input queue and the mutex
+    # registry fallback.
     @data_mutex = Sync::Mutex.new
     @store_lock = Sync::Mutex.new
     @hashes_lock = Sync::Mutex.new
@@ -160,9 +154,8 @@ module Croupier
       @graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
       @graph_sorted = [] of String
       @reverse_deps.clear
-      # Locked: the filesystem watcher may still be running while
-      # cleanup starts (auto_stop closes the watcher from the autorun
-      # fiber, which takes a moment)
+      # Locked: the filesystem watcher may still deliver events while
+      # cleanup runs
       clear_queued_changes
       @existing_files.clear
       @_store_path = nil
