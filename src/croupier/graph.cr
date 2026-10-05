@@ -271,21 +271,32 @@ module Croupier
       # never terminate
       sorted_task_keys
       consumers = consumers_index
-      # Walk the downstream graph in task space (memo keyed by task
-      # id): a task seeds its outputs, and the next nodes are the
-      # tasks consuming any of those outputs
-      outputs_of = ->(task_id : String) { tasks_by_id[task_id].outputs }
-      downstream = ->(task_id : String) { downstream_task_ids(task_id, consumers) }
-      starts = inputs.flat_map { |input| consumers.fetch(input, NO_CONSUMERS) }.map(&.id).uniq!
+      # Walk the downstream graph in task space: a task seeds its
+      # outputs, and the next nodes are the tasks consuming any of
+      # those outputs. Nodes are the task's REPRESENTATIVE REGISTRY
+      # KEY, not its id: ids are not unique task identities (an
+      # output-less task may reuse an output-producing task's id, and
+      # generated ids hash the comma-joined outputs, so ["a,b"] and
+      # ["a", "b"] collide), while the representative key resolves
+      # back to exactly this task object in `tasks`.
+      outputs_of = ->(key : String) { tasks[key]?.try(&.outputs) || [] of String }
+      downstream = ->(key : String) { downstream_task_keys(key, consumers) }
+      starts = inputs.flat_map { |input| consumers.fetch(input, NO_CONSUMERS) }
+        .compact_map { |task| task.keys.find { |key| tasks[key]?.same?(task) } }
+        .uniq!
       memoized_closure(starts, {} of String => Set(String), outputs_of, downstream)
     end
 
-    # Ids of the tasks consuming any output of the task registered
-    # as `task_id`
-    private def downstream_task_ids(task_id : String, consumers : Hash(String, Array(Task))) : Array(String)
-      tasks_by_id[task_id].outputs
+    # Registry keys of the tasks consuming any output of the task
+    # registered as `key` (each task is represented by the first of
+    # its keys that resolves back to it)
+    private def downstream_task_keys(key : String, consumers : Hash(String, Array(Task))) : Array(String)
+      task = tasks[key]?
+      return [] of String unless task
+      task.outputs
         .flat_map { |output| consumers.fetch(output, NO_CONSUMERS) }
-        .map(&.id).uniq!
+        .compact_map { |consumer| consumer.keys.find { |k| tasks[k]?.same?(consumer) } }
+        .uniq!
     end
 
     # Shared empty for consumers.fetch misses
