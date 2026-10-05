@@ -20,12 +20,6 @@ module Croupier
     # Returns true if the input was added, false if the task already had
     # it. Raises if `task_key` is not a registered task, or if the input
     # is one of the task's own keys (that would be a cycle).
-    # How far back (seconds) the fast-mode mtime comparison reaches,
-    # absorbing filesystem timestamp granularity and clock skew at
-    # the cost of occasionally re-detecting an input modified just
-    # before the previous scan (the classic make solution).
-    FAST_MODE_GRACE = 1.0
-
     @pending_inputs = [] of {String, String}
     @parallel_wave_active = false
 
@@ -62,12 +56,6 @@ module Croupier
     end
 
     # Subtask operations queued while a parallel wave is executing,
-    # applied by the coordinating fiber at the wave barrier (same
-    # lifecycle as @pending_inputs): mutating the registries from a
-    # worker fiber while the coordinator iterates them — readiness
-    # sweeps, early-cutoff scans, results bookkeeping — is a data
-    # race no mutex can fix, because those iterations take no lock.
-    # Subtask operations queued while a parallel wave is executing,
     # replayed in order by the coordinating fiber at the wave barrier
     # (same lifecycle as @pending_inputs): mutating the registries
     # from a worker fiber while the coordinator iterates them —
@@ -87,6 +75,39 @@ module Croupier
     end
 
     @pending_subtask_ops = [] of {SubtaskOp, String, String}
+
+    # Task registrations queued while a parallel wave is executing:
+    # Task.new writes the registries, and that must not happen while
+    # other workers read them (the worker-side reads take no lock).
+    # Replayed at the wave barrier, where the collision/merge check
+    # runs against the then-current registry.
+    @pending_registrations = [] of {Task, String?}
+
+    # Register a freshly constructed task, or defer the registration
+    # to the wave barrier when called from a worker fiber mid-wave.
+    def register_or_defer(task : Task, explicit_id : String?) : Nil
+      deferred = @data_mutex.synchronize do
+        if @parallel_wave_active
+          @pending_registrations << {task, explicit_id}
+          true
+        else
+          false
+        end
+      end
+      task.register_with_manager(explicit_id) unless deferred
+    end
+
+    # Replay queued task registrations (assumes the caller holds
+    # @data_mutex: the wave barrier replays inside its single critical
+    # section, and register_with_manager re-reads the registries,
+    # which is safe there because no worker runs during the barrier)
+    private def replay_pending_registrations_locked : Nil
+      pending = @pending_registrations
+      @pending_registrations = [] of {Task, String?}
+      pending.each do |task, explicit_id|
+        task.register_with_manager(explicit_id)
+      end
+    end
 
     # Register a subtask with the task manager.
     #
@@ -438,7 +459,7 @@ module Croupier
     # Auto mode: the watcher queues changed paths, so the scan only has
     # to confirm them: events fire on rewrites even when the content is
     # identical (a task that regenerates a watched input unchanged
-    # would retriggers itself forever). Like content mode, decide by
+    # would retrigger itself forever). Like content mode, decide by
     # comparing hashes against the last completed cycle; unscanned
     # entries (deleted files, kv keys set outside this flow) are kept
     # as modified. last_run comes from the autorun fiber's in-memory
@@ -460,6 +481,12 @@ module Croupier
         kept.each { |path| @modified << path }
       end
     end
+
+    # How far back (seconds) the fast-mode mtime comparison reaches,
+    # absorbing filesystem timestamp granularity and clock skew at
+    # the cost of occasionally re-detecting an input modified just
+    # before the previous scan (the classic make solution).
+    FAST_MODE_GRACE = 1.0
 
     # Fast mode: an input is modified when its mtime is newer than the
     # last run's scan start. No content hashing at all.

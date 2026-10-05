@@ -179,8 +179,9 @@ describe "TaskManager" do
           always_run: true, master_task: true) { nil }
         Task.new(id: "sub_a", inputs: ["seed"], outputs: ["out_a"]) { "a" }
         TaskManager.register_subtask("test_master", TaskManager.tasks_by_id["sub_a"])
-        # Pre-created: constructing a Task inside a running wave is
-        # the one registration path that stays unlocked
+        # Pre-created before the wave: registration inside a wave is
+        # deferred to the barrier, so it must not collide with this
+        # wave's bookkeeping
         Task.new(id: "sub_b", inputs: ["seed"], outputs: ["out_b"]) { "b" }
 
         ran = false
@@ -210,6 +211,51 @@ describe "TaskManager" do
         TaskManager.tasks_by_id.has_key?("sub_b").should be_true
         master.subtask_ids.should contain("sub_b")
         master.subtask_ids.should_not contain("sub_a")
+      end
+    end
+
+    it "should defer task creation during parallel waves and register at the barrier" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        ran_inside = false
+        Task.new(id: "creator", output: "out_c", inputs: ["seed"]) do
+          Task.new(id: "sub_1", output: "out_s1", inputs: [] of String) { "s1" }
+          # Deferral check: the registries must be untouched while the
+          # wave runs — writing them here would race the coordinator's
+          # and other workers' unlocked reads of the same Hash
+          TaskManager.tasks.has_key?("out_s1").should be_false
+          TaskManager.tasks_by_id.has_key?("sub_1").should be_false
+          ran_inside = true
+          "c"
+        end
+
+        TaskManager.run_tasks(parallel: true)
+        ran_inside.should be_true
+        # Registered at the barrier; picked up by the next run, like
+        # the serial master pattern's second run
+        TaskManager.tasks_by_id.has_key?("sub_1").should be_true
+        TaskManager.run_tasks(parallel: true)
+        File.exists?("out_s1").should be_true
+      end
+    end
+
+    it "should merge tasks created concurrently during one wave" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        Task.new(id: "creator1", output: "out_c1", inputs: ["seed"]) do
+          Task.new(id: "dup", output: "out_d") { "d1" }
+          "c1"
+        end
+        Task.new(id: "creator2", output: "out_c2", inputs: ["seed"]) do
+          Task.new(id: "dup", output: "out_d") { "d2" }
+          "c2"
+        end
+
+        TaskManager.run_tasks(parallel: true)
+
+        # Both registrations replayed; the collision check at replay
+        # time saw the registry in order and merged them into one
+        # task carrying both procs
+        TaskManager.tasks["out_d"].@procs.size.should eq 2
+        TaskManager.tasks_by_id.has_key?("dup").should be_true
       end
     end
 

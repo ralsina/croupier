@@ -148,7 +148,10 @@ module Croupier
         # called at the start of every run, resets every task's
         # staleness from scratch.
         hook_changes = @modified_lock.synchronize do
-          @modified += changes
+          # In-place mutation: reassigning the set would leave
+          # readers of the `modified` property holding a stale
+          # reference
+          changes.each { |change| @modified << change }
           @modified.dup
         end
         Log.debug { "Modified: #{hook_changes}" }

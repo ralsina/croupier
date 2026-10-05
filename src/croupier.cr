@@ -176,6 +176,7 @@ module Croupier
       @early_cutoff = true
       mutexes.clear
       @pending_subtask_ops.clear
+      @pending_registrations.clear
       @progress_callback = ->(_id : String) { }
       @before_run_hook = ->(_changes : Set(String)) { }
       close_watcher

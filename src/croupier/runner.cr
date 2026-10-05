@@ -89,11 +89,9 @@ module Croupier
 
       # Single pass: no intermediate name→task arrays, and staleness is
       # decided at visit time so tasks marked fresh by early cutoff are
-      # skipped. Like the parallel runner, run_all re-runs fresh tasks.
-      # (Supersedes the 4793a67 re-check patch: the visit-time check
-      # t.stale? || run_all honors run_all the same way, and always_run
-      # needs no explicit check because propagate_staleness marks those
-      # tasks stale and early cutoff cannot freshen them.)
+      # skipped. run_all re-runs fresh tasks like the parallel runner;
+      # always_run needs no explicit check because propagate_staleness
+      # marks those tasks stale and early cutoff cannot freshen them.
       task_names.each do |name|
         next unless task = tasks.fetch(name, nil)
         next if finished.includes?(task)
@@ -257,7 +255,7 @@ module Croupier
     # writer of the bookkeeping state, so none of it needs a lock).
     # Worker fibers touch no shared bookkeeping: task staleness is a
     # single atomic field, and the TaskManager data they write goes
-    # through @data_mutex-guarded accessors.
+    # through mutex-guarded accessors (@store_lock, @modified_lock).
     private def run_wave(
       batch : Array(Task),
       dry_run : Bool,
@@ -287,7 +285,7 @@ module Croupier
           # Named so specs can count croupier's own fibers: the raw
           # Fiber registry also holds thread infrastructure (GC
           # markers, scheduler loops) that is indistinguishable from
-          # unnamed workers (issue #64)
+          # unnamed workers
           spawn(name: "croupier-worker-#{worker_index}") do
             loop do
               task = task_queue.receive?
@@ -341,7 +339,11 @@ module Croupier
         # is held (Sync::Mutex is not reentrant).
         @data_mutex.synchronize do
           @parallel_wave_active = false
-          applied = !@pending_inputs.empty? || !@pending_subtask_ops.empty?
+          applied = !@pending_inputs.empty? || !@pending_subtask_ops.empty? ||
+                    !@pending_registrations.empty?
+          # Registrations replay first: a worker's call order is
+          # Task.new, then any add_input / subtask operations on it
+          replay_pending_registrations_locked
           replay_pending_inputs_locked
           replay_pending_subtask_ops_locked
           # Nothing changed in a wave with no queued operations:

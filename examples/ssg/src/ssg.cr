@@ -111,22 +111,31 @@ Croupier::Task.new(
   previous_data = Croupier::TaskManager.get("content_subtasks")
   previous_files = previous_data ? previous_data.split("\n").to_set : Set(String).new
 
-  # Remove subtasks for deleted files
+  # Remove output files for deleted sources
   (previous_files - current_files).each do |deleted_file|
-    puts "🗑️  Removing subtask for deleted file: #{deleted_file}"
-    subtask_id = "render_#{Digest::SHA1.hexdigest(deleted_file)[0..6]}"
-    Croupier::TaskManager.tasks.each do |key, task|
-      Croupier::TaskManager.tasks.delete(key) if task.id == subtask_id
-    end
-
-    # Also remove output file
+    puts "🗑️  Removing output for deleted file: #{deleted_file}"
     output_path = deleted_file.sub("content", "output").sub(".md", ".html")
     File.delete?(output_path)
   end
 
-  # Create subtasks for new/changed files
-  (current_files - previous_files).each do |new_file|
-    puts "✨ Creating subtask for new file: #{new_file}"
+  # Rebuild the subtask set from the CURRENT files: every previous
+  # subtask is removed first, then one subtask per current file is
+  # created fresh. Creating only for *new* files breaks across
+  # processes — with a persistent k/v store, previous_files already
+  # holds every file, so existing files would never get their
+  # subtasks back after a restart. Removing first also keeps the
+  # per-file procs from accumulating through id merges. (Never
+  # delete from TaskManager.tasks directly: that leaves a stale
+  # tasks_by_id entry, and re-adding the file would then be rejected
+  # as a duplicate id.)
+  previous_files.each do |old_file|
+    Croupier::TaskManager.remove_subtask(
+      "render_#{Digest::SHA1.hexdigest(old_file)[0..6]}")
+  end
+
+  # Create one subtask per current file
+  current_files.each do |new_file|
+    puts "✨ Ensuring subtask for file: #{new_file}"
     subtask_id = "render_#{Digest::SHA1.hexdigest(new_file)[0..6]}"
     output_file = new_file.sub("content", "output").sub(".md", ".html")
 
