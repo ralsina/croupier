@@ -3,92 +3,45 @@ require "file_utils"
 include Croupier
 
 describe "TaskManager" do
-  describe "dynamic task creation during parallel waves" do
-    it "should defer task creation during parallel waves and register at the barrier" do
+  describe "task creation during runs" do
+    it "should reject task creation while a parallel run is in progress" do
       with_scenario("empty", to_create: {"seed" => "x"}) do
-        ran_inside = false
+        rejected = false
         Task.new(id: "creator", output: "out_c", inputs: ["seed"]) do
-          Task.new(id: "sub_1", output: "out_s1", inputs: [] of String) { "s1" }
-          # Deferral check: the registries must be untouched while the
-          # wave runs — writing them here would race the coordinator's
-          # and other workers' unlocked reads of the same Hash
-          TaskManager.tasks.has_key?("out_s1").should be_false
-          TaskManager.tasks_by_id.has_key?("sub_1").should be_false
-          ran_inside = true
-          "c"
+          caught = begin
+            Task.new(id: "mid_run", output: "out_m") { "m" }
+            nil
+          rescue ex : Croupier::UsageError
+            ex
+          end
+          caught.should be_a(Croupier::UsageError)
+          rejected = true
+          # The registry is untouched: no half-created task
+          TaskManager.tasks.has_key?("out_m").should be_false
+          TaskManager.tasks_by_id.has_key?("mid_run").should be_false
+          nil
         end
 
-        TaskManager.run_tasks(parallel: true)
-        ran_inside.should be_true
-        # Registered at the barrier; picked up by the next run, like
-        # the serial master pattern's second run
-        TaskManager.tasks_by_id.has_key?("sub_1").should be_true
-        TaskManager.run_tasks(parallel: true)
-        File.exists?("out_s1").should be_true
-      end
-    end
-
-    it "should merge tasks created concurrently during one wave" do
-      with_scenario("empty", to_create: {"seed" => "x"}) do
-        Task.new(id: "creator1", output: "out_c1", inputs: ["seed"]) do
-          Task.new(id: "dup", output: "out_d") { "d1" }
-          "c1"
-        end
-        Task.new(id: "creator2", output: "out_c2", inputs: ["seed"]) do
-          Task.new(id: "dup", output: "out_d") { "d2" }
-          "c2"
-        end
-
-        TaskManager.run_tasks(parallel: true)
-
-        # Both registrations replayed; the collision check at replay
-        # time saw the registry in order and merged them into one
-        # task carrying both procs
-        TaskManager.tasks["out_d"].@procs.size.should eq 2
-        TaskManager.tasks_by_id.has_key?("dup").should be_true
-      end
-    end
-
-    it "should allow add_input on a task created during the same wave" do
-      with_scenario("empty", to_create: {"seed" => "x"}) do
-        Task.new(id: "creator", output: "out_c", inputs: ["seed"]) do
-          Task.new(id: "sub_i", output: "out_i", inputs: [] of String) { "i" }
-          # The target is not registered yet — its Task.new was queued
-          # ahead of this call and registers at the barrier
-          TaskManager.add_input("out_i", "seed")
-          "c"
-        end
-
-        TaskManager.run_tasks(parallel: true)
-
-        TaskManager.tasks["out_i"].@inputs.should contain("seed")
-        # A target that is neither registered nor queued is still a
-        # real unknown-task error
-        expect_raises(Croupier::UnknownTaskError, "Unknown task") do
-          TaskManager.add_input("nope_mid_run", "x")
-        end
-      end
-    end
-
-    it "should report a bad deferred registration as a run failure" do
-      with_scenario("empty", to_create: {"seed" => "x"}) do
-        Task.new(id: "taken", output: "out_t") { "t" }
-        ran = false
-        Task.new(id: "creator", output: "out_c", inputs: ["seed"]) do
-          # Duplicate explicit id: an invalid definition discovered at
-          # the barrier must fail the run through its normal error
-          # reporting — not abort the barrier, drop the remaining
-          # queued operations and skip the state save
-          Task.new(id: "taken", output: "out_d") { "d" }
-          ran = true
-          "c"
-        end
-
+        # The rejection is a task failure (the proc raised), reported
+        # through the run's normal error path
         expect_raises(Croupier::RunFailure) { TaskManager.run_tasks(parallel: true) }
-        ran.should be_true
-        # The creator completed and registered; only the bad
-        # registration failed
-        TaskManager.tasks_by_id.has_key?("creator").should be_true
+        TaskManager.tasks_by_id.has_key?("mid_run").should be_false
+      end
+    end
+
+    it "should reject task creation while a serial run is in progress" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        Task.new(id: "creator", output: "out_c", inputs: ["seed"]) do
+          begin
+            Task.new(id: "mid_run", output: "out_m") { "m" }
+          rescue Croupier::UsageError
+            nil
+          end
+          nil
+        end
+
+        expect_raises(Croupier::RunFailure) { TaskManager.run_tasks }
+        TaskManager.tasks_by_id.has_key?("mid_run").should be_false
       end
     end
   end

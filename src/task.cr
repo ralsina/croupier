@@ -138,22 +138,15 @@ module Croupier
       @no_save = no_save
       @mergeable = mergeable
 
-      # Register with the task manager — or defer the registration to
-      # the wave barrier when constructed from a worker fiber
-      # mid-wave: Task.new writes the registries, and that must not
-      # happen while other workers read them (the worker-side reads
-      # take no lock). The deferral re-runs the collision check at
-      # replay time against the then-current registry, so tasks
-      # created concurrently during one wave still merge correctly.
-      TaskManager.register_or_defer(self, id)
+      # Register with the task manager. Rejected mid-run: the task
+      # set is fixed before the first run (see TaskManager.register_task).
+      TaskManager.register_task(self, id)
     end
 
     # Register this task in the TaskManager: merge every task it has
     # an output/id collision with into one, and register the survivor
-    # on every output/id of the merged set. Called from Task.new and,
-    # for tasks created during a parallel wave, again from the wave
-    # barrier's replay — where the collision check runs against the
-    # then-current registry. Not part of the public API.
+    # on every output/id of the merged set. Called from Task.new.
+    # Not part of the public API.
     # :nodoc:
     def register_with_manager(explicit_id : String?) : Nil
       to_merge = colliding_tasks

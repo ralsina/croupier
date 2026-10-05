@@ -16,7 +16,7 @@ Croupier task per markdown file, each depending on its source.
 - 🎨 Beautiful HTML output with [PicoCSS](https://picocss.com/)
 - 📁 Preserves directory structure (e.g., `content/blog/` → `output/blog/`)
 - ⚡ Incremental builds (only re-renders changed files)
-- 👁️ **Auto mode** - Watch for changes and rebuild automatically, including detecting new files
+- 👁️ **Auto mode** - Watch for changes and rebuild modified pages automatically
 - 🗑️ Cleanup of outputs for deleted sources
 
 ## Installation
@@ -55,13 +55,16 @@ In auto mode, the SSG will:
 
 1. Build the site initially
 2. Watch the `content/` folder for changes
-3. Automatically rebuild when:
-   - Files are created
-   - Files are modified
-   - Files are deleted or moved
-4. Only reprocess the files that changed
+3. Automatically rebuild the pages whose source files changed
 
 Press `Ctrl+C` to stop watching.
+
+**Note:** the task set is built at startup — Croupier runs a fixed
+task graph. Files added or removed while watching are picked up on
+the next restart: stop the program and run it again (this matches
+the "stop / rebuild / start" contract documented in the main
+README). Deleted sources leave their output behind until the next
+run cleans it up.
 
 ### Command-line options
 

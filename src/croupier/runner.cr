@@ -65,10 +65,17 @@ module Croupier
       # Real runs read-modify-write the state file under the
       # cross-process lock, so concurrent croupier processes
       # serialize instead of silently overwriting each other
-      if parallel
-        with_state_lock(dry_run) { _run_tasks_parallel(task_names, run_all, dry_run, keep_going, early_cutoff) }
-      else
-        with_state_lock(dry_run) { _run_tasks(task_names, run_all, dry_run, keep_going, early_cutoff) }
+      # A run is executing: task creation is rejected until it ends
+      # (see TaskManager.register_task)
+      @data_mutex.synchronize { @run_active = true }
+      begin
+        if parallel
+          with_state_lock(dry_run) { _run_tasks_parallel(task_names, run_all, dry_run, keep_going, early_cutoff) }
+        else
+          with_state_lock(dry_run) { _run_tasks(task_names, run_all, dry_run, keep_going, early_cutoff) }
+        end
+      ensure
+        @data_mutex.synchronize { @run_active = false }
       end
     end
 
@@ -193,12 +200,9 @@ module Croupier
       errors = [] of Exception
 
       loop do
-        # A prior wave's barrier may have re-registered candidates
-        # (dynamic task creation): prune stale entries so a task that
-        # no longer exists in the registry can't run in a later wave —
-        # the parallel counterpart of the serial runner's per-task
-        # registry lookups
-        _tasks = _tasks.select { |task| task.keys.any? { |key| tasks.fetch(key, nil) == task } }
+        # The task set is fixed for the whole run (task creation is
+        # rejected mid-run), so candidates never need re-validating
+        # against the registry between waves
         batch = next_batch(_tasks, run_all, finished_tasks, failed_tasks, keep_going)
         if batch.nil?
           break
@@ -279,7 +283,6 @@ module Croupier
 
       Log.debug { "Starting work-stealing execution of #{batch.size} tasks with #{num_workers} workers" }
 
-      barrier_failures = [] of Exception
       @data_mutex.synchronize { @parallel_wave_active = true }
       begin
         num_workers.times do |worker_index|
@@ -329,33 +332,29 @@ module Croupier
         end
       ensure
         # Workers are done: queued add_input calls can be applied on
-        # this fiber, where nothing iterates the input sets concurrently
-        # One synchronized barrier: the wave flag drops, the queued
-        # operations replay, and the caches
-        # invalidate as a single critical section. Clearing the flag
-        # separately would let an outside-thread caller apply a newer
-        # operation through the immediate path AHEAD of the older
-        # queued ones, and a separate invalidation could overlap one
-        # from an immediate call. The replay helpers assume the lock
-        # is held (Sync::Mutex is not reentrant).
+        # this fiber, where nothing iterates the input sets
+        # concurrently. Flag drop, replay and invalidation happen in
+        # one critical section: clearing the flag separately would
+        # let an outside-thread caller apply a newer add_input
+        # through the immediate path AHEAD of the queued ones, and a
+        # separate invalidation could overlap one from an immediate
+        # call.
         @data_mutex.synchronize do
           @parallel_wave_active = false
-          applied = !@pending_wave_ops.empty?
-          # Replay in the workers' call order. A failed deferred
-          # registration is returned, not raised: raising here would
-          # drop the remaining queued operations and skip the run's
-          # epilogue (state save, failure reporting)
-          barrier_failures = replay_pending_wave_ops_locked
-          # Nothing changed in a wave with no queued operations:
+          pending = @pending_inputs
+          @pending_inputs = [] of {String, String}
+          pending.each do |task_key, input|
+            if task = tasks[task_key]?
+              # Set#<< is idempotent: duplicates queued during the
+              # wave collapse on their own
+              task.inputs << input
+            end
+          end
+          # Nothing changed in a wave with no queued calls:
           # invalidating would force a pointless graph rebuild
-          invalidate_graph_cache if applied
+          invalidate_graph_cache unless pending.empty?
         end
       end
-      # Deferred operations that failed at the barrier fail the run
-      # through its normal error reporting (RunFailure#errors). If
-      # the wave body itself raised, that exception keeps precedence
-      # and the barrier failures were logged by the replay.
-      errors.concat(barrier_failures)
       errors
     end
 

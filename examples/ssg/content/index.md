@@ -1,23 +1,18 @@
 # Welcome to SSG
 
-This is a **static site generator** built with *Croupier* and the master/subtask pattern.
-
-## Features
-
-- Dynamic task creation
-- Automatic rebuilds
-- Real markdown support with `markd`
-- Simple and extensible architecture
+This is a **static site generator** built with *Croupier*: one task
+per markdown file, each render depending on its source file.
 
 ## How It Works
 
-The `master_subtask.cr` file defines a **master task** that:
+At startup the generator creates one Croupier task per page:
 
-1. Watches the `content/` folder for changes
-2. Automatically creates a **subtask** for each markdown file
-3. Each subtask renders its markdown file to HTML
+1. Each task takes its markdown file as input
+2. Renders it to HTML with the PicoCSS template
+3. Writes the output file
 
-When you add, modify, or delete markdown files, the master task automatically updates the subtasks accordingly.
+Re-running does nothing until a source file changes — then only that
+page's task re-runs.
 
 ## Example Code
 
@@ -37,4 +32,5 @@ And a list:
 
 ---
 
-Try editing the markdown files in `content/` and running the SSG again to see the changes!
+Try editing the markdown files in `content/` and running the SSG
+again to see the changes!

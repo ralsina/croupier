@@ -97,39 +97,29 @@ to create any output files. Other than that, it's just a regular task.
 If a task expects the TaskManager to create multiple files, it
 should return an array of strings.
 
-## Dynamic Task Creation
+## The Task Set Is Fixed Before Running
 
-Tasks can create other tasks from inside their procs. This is handy
-when the set of tasks is only known at runtime (e.g. one render task
-per file in a folder):
+Tasks are created at setup time, before the first `run_tasks` (or
+`auto_run`) call. Creating a task while a run is in progress raises
+`UsageError` — mid-run registration would mutate the task registries
+while the run reads them.
 
-```crystal
-Task.new(inputs: ["content/"]) do
-  Dir.glob("content/**/*.md").each do |md_file|
-    output_file = md_file.sub("content", "output").sub(".md", ".html")
-    Task.new(inputs: [md_file], outputs: [output_file]) do
-      Markd.to_html(File.read(md_file))
-    end
-  end
-  nil
-end
-```
+If the task set depends on things only known at runtime (files in a
+folder, entries in a database), build the graph when those things
+change:
 
-Notes:
+* **Batch mode**: collect the files, create the tasks, call
+  `run_tasks`. Unchanged tasks skip via early cutoff, so re-running
+  with the same set is cheap.
+* **Auto mode**: stop with `auto_stop`, rebuild the task graph, and
+  call `auto_run` again. (`TaskManager.cleanup` resets everything if
+  you want to build from scratch.)
 
-1. **Run twice (or use auto mode)**: the first run creates the tasks;
-   the second runs them. Auto mode detects the graph change and runs
-   again automatically.
-2. **Safe in parallel runs**: task creation and `add_input` calls
-   from worker fibers are deferred to the end of the current wave and
-   applied by the coordinator, so the registries are never mutated
-   while other workers read them.
-3. **Same id merges**: creating a task whose id or outputs collide
-   with an existing one merges the definitions (procs are appended).
+Tasks can still discover dependencies at runtime: `add_input` grows
+an existing task's inputs from inside a proc, and is safe during
+parallel runs (the addition is deferred to the end of the wave).
 
-For a complete working example, see `examples/ssg/`.
-
-## Installation## Installation
+## Installation
 
 1. Add the dependency to your `shard.yml`:
 

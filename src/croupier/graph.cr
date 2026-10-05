@@ -21,118 +21,51 @@ module Croupier
     # it. Raises if `task_key` is not a registered task, or if the input
     # is one of the task's own keys (that would be a cycle).
     @parallel_wave_active = false
+    # Whether a run is executing right now: task creation is a
+    # setup-time operation, and creating tasks mid-run is rejected
+    # instead of racing the run's unlocked registry reads
+    @run_active = false
 
     def add_input(task_key : String, input : String) : Bool
       @data_mutex.synchronize do
-        # The target may legitimately be unregistered mid-wave: its
-        # Task.new was queued ahead of this call and registers at the
-        # barrier. A target that is neither registered nor queued is
-        # a real unknown-task error, raised here like always.
-        target = tasks[task_key]? || pending_registration_target(task_key)
-        raise UnknownTaskError.new("Unknown task #{task_key}") unless target
-        raise CycleError.new("Cycle detected: #{input} is a key of task #{task_key} itself") if target.keys.includes?(input)
-        return false if target.inputs.includes?(input)
+        task = tasks[task_key]?
+        raise UnknownTaskError.new("Unknown task #{task_key}") unless task
+        raise CycleError.new("Cycle detected: #{input} is a key of task #{task_key} itself") if task.keys.includes?(input)
+        return false if task.inputs.includes?(input)
 
         if @parallel_wave_active
-          queue_add_input(task_key, input)
+          # Deferred to the wave barrier: mutating an input set while
+          # the coordinator iterates it is a data race
+          @pending_inputs << {task_key, input}
         else
-          target.inputs << input
+          task.inputs << input
           invalidate_graph_cache
         end
         true
       end
     end
 
-    # The task a queued registration will register, when its keys
-    # cover `task_key`
-    private def pending_registration_target(task_key : String) : Task?
-      @pending_wave_ops.each do |op|
-        next unless op.kind.register_task?
-        if task = op.task
-          return task if task.keys.includes?(task_key)
-        end
+    # add_input calls queued while a parallel wave is executing,
+    # applied by the coordinating fiber at the wave barrier: mutating
+    # an input set from a worker fiber while the coordinator iterates
+    # it (readiness sweeps, early-cutoff staleness recomputes) is a
+    # data race. Applied in call order inside the barrier's single
+    # critical section.
+    @pending_inputs = [] of {String, String}
+
+    # Register a freshly constructed task. Task creation is a
+    # setup-time operation: the task set is fixed before the first
+    # run, and a mid-run creation would write the registries while
+    # the run's reads take no lock. To change the task set, stop (in
+    # auto mode), rebuild the graph, and start again.
+    def register_task(task : Task, explicit_id : String?) : Nil
+      @data_mutex.synchronize do
+        raise UsageError.new(
+          "Cannot create tasks while a run is in progress; build the task graph " \
+          "before running (stop auto mode, rebuild, start again)"
+        ) if @parallel_wave_active || @run_active
       end
-      nil
-    end
-
-    # Operations queued while a parallel wave is executing, replayed
-    # in call order by the coordinating fiber at the wave barrier:
-    # Task.new writes the registries and add_input mutates task
-    # inputs — none of that may happen while other workers read them
-    # (the worker-side reads take no lock).
-    #
-    # ONE ordered queue for every kind, not per-kind queues: a
-    # worker's call order must be preserved across kinds, because the
-    # operations interact (a registration queued ahead of an
-    # add_input must be replayed first, or the target would not be
-    # registered yet).
-    enum WaveOpKind
-      RegisterTask # task + explicit_id
-      AddInput     # task_key + input
-    end
-
-    private record WaveOp,
-      kind : WaveOpKind,
-      task : Task?,
-      explicit_id : String?,
-      task_key : String?,
-      input : String?
-
-    @pending_wave_ops = [] of WaveOp
-
-    def register_or_defer(task : Task, explicit_id : String?) : Nil
-      deferred = @data_mutex.synchronize do
-        if @parallel_wave_active
-          @pending_wave_ops << WaveOp.new(WaveOpKind::RegisterTask, task, explicit_id, nil, nil)
-          true
-        else
-          false
-        end
-      end
-      task.register_with_manager(explicit_id) unless deferred
-    end
-
-    private def queue_add_input(task_key : String, input : String) : Nil
-      @pending_wave_ops << WaveOp.new(WaveOpKind::AddInput, nil, nil, task_key, input)
-    end
-
-    # Replay the wave operations in call order (assumes the caller
-    # holds @data_mutex: the wave barrier replays inside its single
-    # critical section, where no worker can observe intermediate
-    # states).
-    #
-    # A failed registration (duplicate explicit id, unmergeable
-    # collision, mismatched flags) is caught per entry and returned:
-    # it fails the run through the normal error reporting instead of
-    # aborting the barrier, which would drop the remaining queued
-    # operations and skip the run's epilogue.
-    private def replay_pending_wave_ops_locked : Array(Exception)
-      failures = [] of Exception
-      ops = @pending_wave_ops
-      @pending_wave_ops = [] of WaveOp
-      ops.each do |op|
-        apply_wave_op(op)
-      rescue ex
-        failures << ex
-        Log.error { "Deferred operation #{op.kind} failed: #{ex.message}" }
-      end
-      failures
-    end
-
-    private def apply_wave_op(op : WaveOp) : Nil
-      case op.kind
-      when WaveOpKind::RegisterTask
-        op.task.try &.register_with_manager(op.explicit_id)
-      when WaveOpKind::AddInput
-        apply_add_input(op)
-      end
-    end
-
-    private def apply_add_input(op : WaveOp) : Nil
-      if (task_key = op.task_key) && (input = op.input) && (task = tasks[task_key]?)
-        # Set#<< is idempotent: duplicates collapse on their own
-        task.inputs << input
-      end
+      task.register_with_manager(explicit_id)
     end
 
     # Invalidate the cached task graph. Only touches in-memory state:

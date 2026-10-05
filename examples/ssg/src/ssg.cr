@@ -148,9 +148,10 @@ if auto_mode
   puts "👀 Watching for changes... (Ctrl+C to stop)"
   puts ""
   puts "Auto mode detects:"
-  puts "  - New files added to content/"
-  puts "  - Modified files"
-  puts "  - Deleted or moved files"
+  puts "  - Modified files in content/ (rebuilds just those pages)"
+  puts ""
+  puts "Note: the task set is built at startup, so files added or"
+  puts "deleted while watching need a restart (stop, run again)."
   puts ""
 
   # Start auto mode - this will watch for changes and rebuild
