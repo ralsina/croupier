@@ -141,9 +141,11 @@ master_task = Croupier::Task.new(
   (previous_files - current_files).each do |deleted_file|
     puts "🗑️  Removing subtask for deleted file: #{deleted_file}"
     subtask_id = "render_#{Digest::SHA1.hexdigest(deleted_file)[0..6]}"
-    Croupier::TaskManager.tasks.each do |key, task|
-      Croupier::TaskManager.tasks.delete(key) if task.id == subtask_id
-    end
+    # remove_subtask cleans up every registry view: deleting from
+    # TaskManager.tasks directly would leave a stale tasks_by_id
+    # entry, and re-adding the file later (same deterministic id)
+    # would be rejected as a duplicate id
+    Croupier::TaskManager.remove_subtask(subtask_id)
 
     # Also remove output file
     output_path = deleted_file.sub("content", "output").sub(".md", ".html")
