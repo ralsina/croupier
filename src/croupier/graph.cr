@@ -354,10 +354,7 @@ module Croupier
       @modified_lock.synchronize do
         kept = @modified.select { |path|
           if hash = @this_run[path]?
-            # sha1-part comparison: file entries are mtime+size
-            # framed, and a frame change alone must not count as a
-            # modification
-            Croupier.recorded_sha1(last_run.fetch(path, "")) != Croupier.recorded_sha1(hash)
+            last_run.fetch(path, "") != hash
           else
             true
           end
@@ -434,7 +431,7 @@ module Croupier
       @this_run = @last_run.merge(scanned)
       @modified_lock.synchronize do
         scanned.each do |file, sha1|
-          @modified << file if Croupier.recorded_sha1(last_run.fetch(file, "")) != Croupier.recorded_sha1(sha1)
+          @modified << file if last_run.fetch(file, "") != sha1
         end
       end
     end

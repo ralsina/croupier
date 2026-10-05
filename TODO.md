@@ -161,9 +161,13 @@ squash-merged PRs (#15–#20); the rest are recorded here for later.
 * `#6` `scan_inputs` re-hashes every input file on every run (non-fast
   mode). Reuse hashes when `mtime+size` is unchanged, dedupe the double
   `Dir.glob`, and hash files in parallel (fiber-per-file batch like the
-  task runner). *(addressed in #19; mtime+size hash reuse landed for
-  plain-file inputs, and the scan now stats each path once — per-file
-  reuse inside directory inputs and the glob dedup still open)*
+  task runner). *(addressed in #19; the scan now stats each path once.
+  mtime+size hash reuse was implemented and then REMOVED: it made
+  non-fast mode trust metadata instead of file contents, which is
+  fast mode's corner to cut — content mode's guarantee is that
+  staleness always rests on hashed bytes. Any future attempt must be
+  opt-in. The glob dedup and per-file reuse inside directory inputs
+  remain open.)*
 * `#7` Early-cutoff notification in `_run_tasks` / `_run_tasks_parallel`
   and `find_and_mark_dependents_fresh` is O(V) per output → O(V²·outs)
   per run. Reuse the `reverse_deps` map already built in

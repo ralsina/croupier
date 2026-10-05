@@ -25,20 +25,6 @@ module Croupier
 
   alias CallbackProc = Proc(String, Nil)
 
-  # The sha1 carried by a state-file entry. Plain entries (kv values,
-  # directory digests, special-file metadata, output hashes) are bare
-  # sha1s; plain-FILE entries are framed as "mtime|size|sha1" so an
-  # unchanged stat can reuse the hash without reading the file. Every
-  # staleness comparison goes through this, so a touched-but-unchanged
-  # file never re-runs anything on mtime alone.
-  def self.recorded_sha1(entry : String) : String
-    if bar = entry.rindex('|')
-      entry[(bar + 1)..]
-    else
-      entry
-    end
-  end
-
   # SHA1 of a file's contents, streamed so large files are never
   # buffered whole. Shared by Task#run (no_save output verification)
   # and the manager's input scanner; an unreadable file still raises

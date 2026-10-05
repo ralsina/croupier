@@ -764,14 +764,7 @@ describe "TaskManager" do
       expected = {"input"  => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
                   "input2" => "62cdb7020ff920e5aa642c3d4066950dd1f01f4d"}
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-        scanned = TaskManager.scan_inputs
-        scanned.size.should eq 2
-        expected.each do |path, sha1|
-          # File entries are mtime|size framed now; compare the hash
-          # they carry and check the framing is really there
-          Croupier.recorded_sha1(scanned[path]).should eq sha1
-          scanned[path].should match(/^\d+\|\d+\|\d+\|[0-9a-f]{40}$/)
-        end
+        TaskManager.scan_inputs.should eq expected
       end
     end
 
@@ -858,10 +851,7 @@ describe "TaskManager" do
         end
 
         result = TaskManager.scan_inputs
-        result.size.should eq files.size
-        files.each do |path, sha1|
-          Croupier.recorded_sha1(result[path]).should eq sha1
-        end
+        result.should eq(files)
       end
     end
   end
@@ -895,7 +885,7 @@ describe "TaskManager" do
         File.open(".croupier", "w") do |f|
           f.puts(<<-STATE)
             {
-                "__version": "2",
+                "__version": "1",
                 "input": "thisiswrong",
                 "input2": "62cdb7020ff920e5aa642c3d4066950dd1f01f4d",
                 "output3": "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
@@ -919,7 +909,7 @@ describe "TaskManager" do
         File.write("output4", "")
         File.write("output5", "")
         File.write(".croupier", YAML.dump({
-          "__version" => "2",
+          "__version" => "1",
           "input"     => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
           "input2"    => "62cdb7020ff920e5aa642c3d4066950dd1f01f4d",
           "output1"   => "adc83b19e793491b1c6ea0fd8b46cd9f32e592fc",
@@ -936,116 +926,24 @@ describe "TaskManager" do
       end
     end
 
-    it "should reuse a file's recorded hash when mtime and size are unchanged" do
-      with_scenario("empty") do
-        File.write("seed", "aaaa")
+    it "should detect a same-size rewrite even when its mtime is restored" do
+      with_scenario("empty", to_create: {"seed" => "aaaa"}) do
         runs = 0
         Task.new(output: "out", inputs: ["seed"]) { runs += 1; "o" }
         TaskManager.run_tasks
         runs.should eq 1
-        TaskManager.run_tasks
-        runs.should eq 1
 
-        # A rewrite with identical content re-hashes (mtime changed)
-        # but still doesn't re-run: framing alone never marks a file
-        # modified, only the sha1 it carries does
-        File.write("seed", "aaaa")
-        TaskManager.run_tasks
-        runs.should eq 1
-
-        # Different content, same size, mtime restored: the stat is
-        # unchanged so the recorded hash is trusted without reading
-        # the file (the trade-off TODO #6 sanctions), and the task
-        # does not re-run
+        # THE content-mode contract: staleness rests on file
+        # CONTENTS, never on metadata. A same-size rewrite whose
+        # mtime is restored (touched, backup-restored, rsynced with
+        # --times) must still be detected, because the file is
+        # always re-hashed. Fast mode may trade this for speed;
+        # content mode may not.
         stamp = File.info("seed").modification_time
         File.write("seed", "bbbb")
         File.utime(stamp, stamp, "seed")
         TaskManager.run_tasks
-        runs.should eq 1
-
-        # A real change (size differs) is still detected
-        File.write("seed", "cc")
-        TaskManager.run_tasks
         runs.should eq 2
-      end
-    end
-
-    it "should keep the fresh frame of an unchanged input when a run fails" do
-      with_scenario("empty", to_create: {"a" => "a1", "b" => "b1"}) do
-        attempts = 0
-        Task.new(output: "out", inputs: ["a", "b"]) do
-          attempts += 1
-          raise "boom" if attempts > 1
-          "o"
-        end
-        TaskManager.run_tasks
-        attempts.should eq 1
-        sha_a = Digest::SHA1.hexdigest("a1")
-        recorded_a = File.read(".croupier").lines.find!(&.starts_with?("a:")).split(": ", 2)[1]
-
-        # Rewrite "a" with identical bytes AFTER the clock has moved
-        # past run 1's recorded frame, so the scan must produce a
-        # fresh frame (a same-tick rewrite would be reusable on a
-        # coarse-mtime filesystem and the assertion below would pass
-        # vacuously); the precondition makes that explicit. While "a"
-        # is rewritten, "b" genuinely changes: the task runs again
-        # and fails, so drop_unfinished_inputs reverts its inputs for
-        # the retry. The genuinely changed input must revert to the
-        # recorded hash, but the unchanged one must keep its fresh
-        # frame — reverting the mtime too would defeat hash reuse for
-        # identical rewrites (the same-sha branch this spec covers).
-        sleep 20.milliseconds
-        File.write("a", "a1")
-        File.write("b", "b2")
-        pre_mtime = File.info("a").modification_time
-        pre_parts = recorded_a.split('|')
-        (pre_mtime.to_unix * 1_000_000_000 + pre_mtime.nanosecond)
-          .should be > (pre_parts[0].to_i64 * 1_000_000_000 + pre_parts[1].to_i64)
-        expect_raises(Croupier::RunFailure) { TaskManager.run_tasks(keep_going: true) }
-        attempts.should eq 2
-
-        state = File.read(".croupier")
-        entry_a = state.lines.find!(&.starts_with?("a:")).split(": ", 2)[1]
-        entry_b = state.lines.find!(&.starts_with?("b:")).split(": ", 2)[1]
-        # "a": fresh frame retained — the full timestamp (seconds
-        # AND nanoseconds) matches the rewrite, not run 1's scan
-        mtime = File.info("a").modification_time
-        entry_a.split('|')[0..1].join("|").should eq "#{mtime.to_unix}|#{mtime.nanosecond}"
-        Croupier.recorded_sha1(entry_a).should eq sha_a
-        # "b": reverted to the recorded hash of the old content
-        Croupier.recorded_sha1(entry_b).should eq Digest::SHA1.hexdigest("b1")
-      end
-    end
-
-    it "should keep early cutoff when an output entry is framed by an idle run" do
-      with_scenario("empty", to_create: {"seed" => "v1"}) do
-        c_runs = 0
-        Task.new(output: "out", inputs: ["seed"]) { "same-bytes" }
-        # C goes stale whenever the producer goes stale (its only
-        # input is the producer's output), so only the early-cutoff
-        # notification — the producer's outputs being byte-identical
-        # — can save its run
-        Task.new(output: "c_out", inputs: ["out"]) { c_runs += 1; "c" }
-        TaskManager.run_tasks
-        c_runs.should eq 1
-
-        # Idle run of a FRESH process: next_run starts empty there,
-        # so the scan's framed entry for out survives into the saved
-        # state (simulated here by clearing the in-memory next_run,
-        # which a real second process would not have). Without this,
-        # the in-memory bare hash from run 1 would win the merge and
-        # the framed entry would never be persisted.
-        TaskManager.next_run.clear
-        TaskManager.run_tasks
-        c_runs.should eq 1
-
-        # Producer re-runs with byte-identical output: the framed
-        # prior value must normalize to the bare sha1, or the
-        # unchanged output would count as changed, disable early
-        # cutoff and re-run C for nothing
-        File.write("seed", "v2")
-        TaskManager.run_tasks
-        c_runs.should eq 1
       end
     end
 

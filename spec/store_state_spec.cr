@@ -11,7 +11,7 @@ describe "TaskManager" do
         TaskManager.save_run
         # __scan_time is a wall-clock timestamp; only check its presence
         state = YAML.parse(File.read(".croupier"))
-        state["__version"].to_s.should eq "2"
+        state["__version"].to_s.should eq "1"
         state["__scan_time"].to_s.should_not be_empty
         state["foo"].to_s.should eq "bar"
         state["bat"].to_s.should eq "quux"
@@ -34,23 +34,17 @@ describe "TaskManager" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
         TaskManager.run_tasks
         state = YAML.parse(File.read(".croupier")).as_h.reject { |key, _| key.to_s == "__scan_time" }
-        state["__version"].to_s.should eq "2"
-        # Plain-file inputs are framed "mtime|size|sha1" so the next
-        # run can reuse the hash on an unchanged stat
-        {"input"  => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
-         "input2" => "62cdb7020ff920e5aa642c3d4066950dd1f01f4d"}.each do |path, sha1|
-          entry = state[path].to_s
-          entry.should match(/^\d+\|\d+\|\d+\|[0-9a-f]{40}$/)
-          Croupier.recorded_sha1(entry).should eq sha1
-        end
-        # Outputs (and kv/digest entries) stay bare sha1s
-        {"output3" => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-         "output4" => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-         "output5" => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-         "output1" => "356a192b7913b04c54574d18c28d46e6395428ab",
-         "output2" => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33"}.each do |path, sha1|
-          state[path].to_s.should eq sha1
-        end
+        state["__version"].to_s.should eq "1"
+        state.should eq({
+          "__version" => "1",
+          "input"     => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
+          "input2"    => "62cdb7020ff920e5aa642c3d4066950dd1f01f4d",
+          "output3"   => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+          "output4"   => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+          "output5"   => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+          "output1"   => "356a192b7913b04c54574d18c28d46e6395428ab",
+          "output2"   => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
+        } of String => String)
       end
     end
   end
@@ -301,7 +295,7 @@ describe "TaskManager" do
         # A non-string value means the file is not our schema. The
         # old to_s coercion would only re-detect seed2; treating the
         # whole state as unusable rebuilds everything
-        state = {"__version" => "2", "__scan_time" => "100.0",
+        state = {"__version" => "1", "__scan_time" => "100.0",
                  "seed1" => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
                  "seed2" => [1, 2]}
         File.write(".croupier", state.to_yaml)
