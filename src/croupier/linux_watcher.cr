@@ -23,13 +23,17 @@
 
       def watch(path : String) : Nil
         normalized = Path[path].normalize.to_s
+        # State update and kernel registration in one critical
+        # section: a concurrent close could otherwise pass the @closed
+        # check and leave register_input watching a closed descriptor
+        # (same shape as KqueueWatcher#watch)
         @lock.synchronize do
           return if @closed || @target_inputs.includes?(normalized)
           @target_inputs << normalized
           prefix = normalized.ends_with?("/") ? normalized : "#{normalized}/"
           @prefix_inputs << {prefix, normalized}
+          register_input(normalized)
         end
-        register_input(normalized)
       end
 
       def close : Nil
@@ -89,10 +93,14 @@
           end
 
           # The watch was removed (an editor deleted or replaced the
-          # file): watch it again, or its parent if it's gone
+          # file): watch it again, or its parent if it's gone. The
+          # whole re-registration happens under the lock, so it either
+          # completes before close or is skipped
           if event.type_is?(LibInotify::IN_IGNORED)
             if ep = event.path
-              if @lock.synchronize { @target_inputs.includes?(ep) }
+              @lock.synchronize do
+                next if @closed
+                next unless @target_inputs.includes?(ep)
                 if File.exists?(ep)
                   @inotify.watch ep, watch_flags
                   Log.debug { "Re-watched file after editor replacement: #{ep}" }
