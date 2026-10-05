@@ -947,6 +947,27 @@ describe "TaskManager" do
       end
     end
 
+    it "should evaluate staleness once per multi-output task" do
+      with_scenario("empty", to_create: {"seed" => "v1"}) do
+        runs = 0
+        Task.new(outputs: ["out_a", "out_b"], inputs: ["seed"]) { runs += 1; ["a", "b"] }
+        TaskManager.run_tasks
+        runs.should eq 1
+
+        # Removing one output makes the task stale (its keys go
+        # stale jointly), and it runs exactly once — not once per
+        # output key
+        File.delete("out_b")
+        TaskManager.run_tasks
+        runs.should eq 2
+
+        # A modified input also runs it exactly once
+        File.write("seed", "v2")
+        TaskManager.run_tasks
+        runs.should eq 3
+      end
+    end
+
     it "should preserve input hashes across fast-mode runs" do
       with_scenario("empty", to_create: {"seed" => "one"}) do
         runs = 0
