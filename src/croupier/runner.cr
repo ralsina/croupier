@@ -193,9 +193,9 @@ module Croupier
       errors = [] of Exception
 
       loop do
-        # A prior wave's barrier may have deregistered candidates
-        # (master-task subtask removals): prune them so a removed
-        # task can't run in a later wave and recreate its outputs —
+        # A prior wave's barrier may have re-registered candidates
+        # (dynamic task creation): prune stale entries so a task that
+        # no longer exists in the registry can't run in a later wave —
         # the parallel counterpart of the serial runner's per-task
         # registry lookups
         _tasks = _tasks.select { |task| task.keys.any? { |key| tasks.fetch(key, nil) == task } }
@@ -331,7 +331,7 @@ module Croupier
         # Workers are done: queued add_input calls can be applied on
         # this fiber, where nothing iterates the input sets concurrently
         # One synchronized barrier: the wave flag drops, the queued
-        # add_input/subtask operations replay, and the caches
+        # operations replay, and the caches
         # invalidate as a single critical section. Clearing the flag
         # separately would let an outside-thread caller apply a newer
         # operation through the immediate path AHEAD of the older

@@ -85,11 +85,11 @@ describe "TaskManager" do
       end
     end
 
-    it "should watch inputs of subtasks created during auto_run" do
+    it "should watch inputs of tasks created during auto_run" do
       with_scenario("empty", to_create: {"seed" => "one"}) do
-        # The master creates a subtask whose input does not exist yet
+        # The proc creates a new task whose input does not exist yet
         # when auto_run starts watching
-        Task.new(output: "master_out", inputs: ["seed"], master_task: true) do
+        Task.new(output: "master_out", inputs: ["seed"]) do
           File.write("sub_input", "1")
           Task.new(output: "sub_out", inputs: ["sub_input"]) { File.read("sub_input") }
           "master data"

@@ -57,24 +57,18 @@ module Croupier
 
     # Operations queued while a parallel wave is executing, replayed
     # in call order by the coordinating fiber at the wave barrier:
-    # Task.new writes the registries, add_input mutates task inputs,
-    # and the subtask operations mutate the registries and master
-    # tracking — none of that may happen while other workers read
-    # them (the worker-side reads take no lock).
+    # Task.new writes the registries and add_input mutates task
+    # inputs — none of that may happen while other workers read them
+    # (the worker-side reads take no lock).
     #
     # ONE ordered queue for every kind, not per-kind queues: a
     # worker's call order must be preserved across kinds, because the
-    # operations interact. The documented subtask rebuild (remove the
-    # old render_x, then Task.new a fresh one under the same id)
-    # would merge the fresh task into the one queued for removal if
-    # registrations replayed ahead of removals — resurrecting nothing
-    # and deleting everything.
+    # operations interact (a registration queued ahead of an
+    # add_input must be replayed first, or the target would not be
+    # registered yet).
     enum WaveOpKind
-      RegisterTask         # task + explicit_id
-      AddInput             # task_key + input
-      RegisterSubtaskLink  # subtask_id + master_id
-      RemoveSubtask        # subtask_id
-      RemoveMasterSubtasks # master_id
+      RegisterTask # task + explicit_id
+      AddInput     # task_key + input
     end
 
     private record WaveOp,
@@ -82,16 +76,14 @@ module Croupier
       task : Task?,
       explicit_id : String?,
       task_key : String?,
-      input : String?,
-      subtask_id : String?,
-      master_id : String?
+      input : String?
 
     @pending_wave_ops = [] of WaveOp
 
     def register_or_defer(task : Task, explicit_id : String?) : Nil
       deferred = @data_mutex.synchronize do
         if @parallel_wave_active
-          @pending_wave_ops << WaveOp.new(WaveOpKind::RegisterTask, task, explicit_id, nil, nil, nil, nil)
+          @pending_wave_ops << WaveOp.new(WaveOpKind::RegisterTask, task, explicit_id, nil, nil)
           true
         else
           false
@@ -100,71 +92,14 @@ module Croupier
       task.register_with_manager(explicit_id) unless deferred
     end
 
-    # Register a subtask with the task manager.
-    #
-    # Thread-safe like add_input: during a parallel wave the link is
-    # queued and applied at the barrier; outside waves it applies
-    # immediately, and the graph is invalidated inside the same lock
-    # acquisition (the fields it touches are not atomic).
-    def register_subtask(master_id : String, subtask : Task)
-      @data_mutex.synchronize do
-        if @parallel_wave_active
-          @pending_wave_ops << WaveOp.new(WaveOpKind::RegisterSubtaskLink, nil, nil, nil, nil, subtask.id, master_id)
-        else
-          link_subtask(master_id, subtask.id)
-          invalidate_graph_cache
-        end
-      end
-    end
-
-    # Remove one subtask by id: both registry views (tasks and
-    # tasks_by_id) and any master's tracking. This is the supported
-    # way to do per-file subtask cleanup (as in the README's
-    # master-task example): deleting from TaskManager.tasks directly
-    # leaves a stale tasks_by_id entry behind, and the next task
-    # registered under the same id — exactly what the
-    # deterministic subtask ids of that pattern produce on re-adding
-    # a deleted file — is rejected as a duplicate id.
-    #
-    # Thread-safe like register_subtask.
-    def remove_subtask(subtask_id : String)
-      @data_mutex.synchronize do
-        if @parallel_wave_active
-          @pending_wave_ops << WaveOp.new(WaveOpKind::RemoveSubtask, nil, nil, nil, nil, subtask_id, nil)
-        else
-          deregister_subtasks(Set{subtask_id})
-          invalidate_graph_cache
-        end
-      end
-    end
-
-    # Remove all subtasks belonging to a master task.
-    #
-    # Thread-safe like register_subtask.
-    def remove_subtasks(master_id : String)
-      @data_mutex.synchronize do
-        if @parallel_wave_active
-          @pending_wave_ops << WaveOp.new(WaveOpKind::RemoveMasterSubtasks, nil, nil, nil, nil, nil, master_id)
-        elsif master = tasks[master_id]?
-          ids = Set(String).new
-          ids.concat master.subtask_ids
-          deregister_subtasks(ids)
-          master.subtask_ids.clear
-          invalidate_graph_cache
-        end
-      end
-    end
-
     private def queue_add_input(task_key : String, input : String) : Nil
-      @pending_wave_ops << WaveOp.new(WaveOpKind::AddInput, nil, nil, task_key, input, nil, nil)
+      @pending_wave_ops << WaveOp.new(WaveOpKind::AddInput, nil, nil, task_key, input)
     end
 
     # Replay the wave operations in call order (assumes the caller
     # holds @data_mutex: the wave barrier replays inside its single
     # critical section, where no worker can observe intermediate
-    # states). A master-wide removal is evaluated at REPLAY time
-    # against the master's then-current tracking, so it removes
-    # exactly what the same serial call sequence would.
+    # states).
     #
     # A failed registration (duplicate explicit id, unmergeable
     # collision, mismatched flags) is caught per entry and returned:
@@ -190,16 +125,6 @@ module Croupier
         op.task.try &.register_with_manager(op.explicit_id)
       when WaveOpKind::AddInput
         apply_add_input(op)
-      when WaveOpKind::RegisterSubtaskLink
-        if (subtask_id = op.subtask_id) && (master_id = op.master_id)
-          link_subtask(master_id, subtask_id)
-        end
-      when WaveOpKind::RemoveSubtask
-        if subtask_id = op.subtask_id
-          deregister_subtasks(Set{subtask_id})
-        end
-      when WaveOpKind::RemoveMasterSubtasks
-        apply_remove_master_subtasks(op)
       end
     end
 
@@ -208,38 +133,6 @@ module Croupier
         # Set#<< is idempotent: duplicates collapse on their own
         task.inputs << input
       end
-    end
-
-    private def apply_remove_master_subtasks(op : WaveOp) : Nil
-      if master_id = op.master_id
-        if master = tasks[master_id]?
-          ids = Set(String).new
-          ids.concat master.subtask_ids
-          deregister_subtasks(ids)
-          master.subtask_ids.clear
-        end
-      end
-    end
-
-    # Link a subtask id to its master (assumes the caller holds
-    # @data_mutex)
-    private def link_subtask(master_id : String, subtask_id : String) : Nil
-      if master = tasks[master_id]?
-        master.subtask_ids << subtask_id
-      end
-    end
-
-    # Drop a set of subtasks from both registry views and every
-    # master's tracking, in shared passes: one registry scan for the
-    # removals, one id-index pass, one tracking sweep. A per-id loop
-    # would rescan the registry for every removed id — O(M*N) for a
-    # master with M subtasks over N registered tasks (assumes the
-    # caller holds @data_mutex).
-    private def deregister_subtasks(subtask_ids : Set(String)) : Nil
-      return if subtask_ids.empty?
-      tasks.reject! { |_key, task| subtask_ids.includes?(task.id) }
-      subtask_ids.each { |subtask_id| tasks_by_id.delete(subtask_id) }
-      tasks.each_value { |task| task.subtask_ids.reject! { |id| subtask_ids.includes?(id) } }
     end
 
     # Invalidate the cached task graph. Only touches in-memory state:
@@ -270,7 +163,7 @@ module Croupier
         @graph_sorted = [] of String
         @graph_invalidated = false
         # Invalidate the all_inputs cache so it is rebuilt with the
-        # new subtask inputs
+        # new dynamically created tasks
         @all_inputs = nil
 
         # All inputs are vertices

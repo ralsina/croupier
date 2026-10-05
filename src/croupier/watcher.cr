@@ -120,7 +120,7 @@ module Croupier
     end
 
     # One iteration of the autorun loop: process queued changes,
-    # re-run tasks, expand the graph if master tasks added subtasks,
+    # re-run tasks, expand the graph if procs created new tasks,
     # and fold the cycle's hashes into last_run. The non-auto path
     # reloads those hashes from the state file every run, but the
     # auto branch never refreshes last_run, so without the fold every
@@ -158,7 +158,7 @@ module Croupier
         # Call the before_run_hook if set, passing the changed files.
         # User code must not run under a library lock
         before_run_hook.call(hook_changes) unless hook_changes.empty?
-        # Run tasks - if master tasks create new subtasks, the graph
+        # Run tasks - if procs created new tasks, the graph
         # will be invalidated and we need to run again to execute them
         initial_task_count = tasks.size
         run_tasks(targets: targets, parallel: false)
@@ -166,7 +166,7 @@ module Croupier
         # again with the expanded graph
         if @graph_invalidated || tasks.size > initial_task_count
           targets = tasks.keys
-          # And re-watch: the new subtasks' inputs were not
+          # And re-watch: the new tasks' inputs were not
           # known when watch() was last called, so changes to
           # them would be invisible to the watcher
           watch(targets)
