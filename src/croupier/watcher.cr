@@ -3,21 +3,17 @@ module Croupier
   class TaskManagerType
     # Files with changes detected in auto_run
     @queued_changes : Set(String) = Set(String).new
-    # Guards @queued_changes. The filesystem watcher may run on its own
-    # fiber or OS thread, and hashing inputs resizes the default execution
-    # context to several OS threads, so the watcher and the
-    # autorun fiber can genuinely run in parallel even though auto mode
-    # executes tasks serially. A Set is not thread-safe: every access
-    # from either fiber goes through this lock.
+    # Guards @queued_changes. The watcher callback and the autorun
+    # fiber can run on different OS threads (input hashing resizes the
+    # default execution context), even though auto mode runs tasks
+    # serially.
     @queued_changes_lock = Sync::Mutex.new
 
     @autorun_control = Channel(Bool).new
-    # Whether the autorun fiber is live: auto_stop's send would block
-    # forever on the unbuffered control channel if nothing is running
-    # (e.g. cleanup without auto_run). Atomic because it is written by
-    # the autorun fiber (stop_autorun) and read from whatever fiber
-    # calls auto_stop, and those genuinely run in parallel once the
-    # execution context has been resized for parallel task runs.
+    # Whether the autorun fiber is live. auto_stop checks it because
+    # sending on the unbuffered control channel would block forever
+    # with nothing receiving. Atomic: it is written by the autorun
+    # fiber and read by whichever fiber calls auto_stop.
     @autorun_running = Atomic(Bool).new(false)
 
     # Autorun retry backoff bounds, in seconds: consecutive failures
@@ -26,23 +22,15 @@ module Croupier
     AUTORUN_RETRY_MIN_DELAY = 0.01
     AUTORUN_RETRY_MAX_DELAY =  1.0
 
-    # Guards @@watcher: watch() can be called from the autorun fiber
-    # (graph growth re-watch) while cleanup's close_watcher runs on
-    # another fiber, and an unsynchronized read-modify-write of the
-    # class variable could leak a watcher nobody closes.
+    # Guards @@watcher: the autorun fiber may re-watch while cleanup's
+    # close_watcher runs on another fiber, and an unguarded swap could
+    # leak a watcher nobody closes.
     @@watcher_lock = Sync::Mutex.new
 
-    # Serializes stop callers through the whole shutdown handshake:
-    # the first caller to take the mutex runs it (and flips the
-    # running flag only at the end), every other caller either
-    # blocks on the mutex until the handshake completed or — once
-    # the flag is down — returns knowing the stop is done. That
-    # keeps auto_stop's synchronous contract under concurrency:
-    # when it returns, the autorun fiber is no longer running,
-    # whoever performed the stop. Without the mutex a second
-    # concurrent caller raced past the flag check and blocked
-    # forever on the unbuffered control channel (or raised on it
-    # once the first stop closed it).
+    # Serializes auto_stop callers through the whole shutdown
+    # handshake. The first caller performs it; the others wait on the
+    # mutex and then find the running flag down. Either way, when
+    # auto_stop returns the autorun fiber has stopped.
     @@stop_mutex = Sync::Mutex.new
 
     def auto_stop
@@ -79,14 +67,12 @@ module Croupier
     def auto_run(targets : Array(String) = [] of String)
       @auto_mode = true
       targets = tasks.keys if targets.empty?
-      # Only want dependencies that are not tasks
+      # Every input of the targets and their dependencies
       inputs = inputs(targets)
       Log.info { "Auto_run: targets=#{targets.inspect}, inputs=#{inputs.inspect}" }
       raise UsageError.new("No inputs to watch, can't auto_run") if inputs.empty?
 
-      # Auto_run always runs serially to avoid watcher thread safety issues
-      # File watching and parallel execution don't mix well due to
-      # shared state and filesystem watcher limitations
+      # Auto mode always runs tasks serially, on the autorun fiber
       Log.info { "Auto_run mode: forcing serial execution (parallel disabled)" }
 
       watch(targets)
@@ -105,13 +91,10 @@ module Croupier
       end
     end
 
-    # Handle the stop order (runs on the autorun fiber). Teardown
-    # happens BEFORE closing the control channel: the closing is the
-    # acknowledgement auto_stop's receive? waits on, so it may only
-    # fire once the watcher is shut down and this fiber has no
-    # remaining cleanup — otherwise auto_stop returns (and a
-    # subsequent auto_run could install a new watcher) while this
-    # fiber is still tearing the old one down.
+    # Handle the stop order (runs on the autorun fiber). Closing the
+    # control channel is the acknowledgement auto_stop waits for, so it
+    # happens last: otherwise auto_stop could return, and a new
+    # auto_run install a watcher, while the old one is still closing.
     private def stop_autorun : Nil
       Log.info { "Stopping automatic run" }
       close_watcher
@@ -119,65 +102,50 @@ module Croupier
       @autorun_control.close
     end
 
-    # One iteration of the autorun loop: process queued changes,
-    # re-run tasks, run again if the graph changed mid-run (proc
-    # add_input), and fold the cycle's hashes into last_run. The non-auto path
-    # reloads those hashes from the state file every run, but the
-    # auto branch never refreshes last_run, so without the fold every
-    # cycle looks like the first one (no early cutoff, and unchanged
-    # rewrites keep re-staling their dependents). this_run holds the
-    # scanned input hashes, next_run the recorded output hashes.
+    # One iteration of the autorun loop: process queued changes, run
+    # the tasks (again if a proc's add_input changed the graph), and
+    # fold the cycle's hashes into last_run. Auto mode never reloads
+    # the state file, so without the fold every cycle would compare
+    # against the first one (no early cutoff, and unchanged rewrites
+    # would keep re-staling dependents). this_run holds the scanned
+    # input hashes, next_run the recorded output hashes.
     #
-    # Returns the updated retry delay and target list (the targets
-    # may grow when the graph grew).
+    # Returns the next retry delay and the (unchanged) targets.
     private def autorun_cycle(targets : Array(String), retry_delay : Float64) : {Float64, Array(String)}
-      # Sleep early is better for race conditions in tests
-      # If we sleep late, it's likely that we'll get the
-      # stop order and break the loop without running, so we
-      # can't see the side effects without sleeping in the
-      # tests.
+      # Sleep first: sleeping at the end would make it likely that a
+      # stop order arrives before the run, so tests couldn't observe
+      # its side effects
       sleep retry_delay.seconds
       changes = queued_changes_snapshot
-      # modified is checked under the lock: task procs may mark kv
-      # keys modified from parallel workers
+      # set() may mark kv keys modified from other fibers
       modified_pending = @modified_lock.synchronize { !@modified.empty? }
       return {retry_delay, targets} if changes.empty? && !modified_pending
       begin
         Log.info { "Detected changes in #{changes}" }
-        # No need to mark targets stale here: propagate_staleness,
-        # called at the start of every run, resets every task's
-        # staleness from scratch.
+        # No need to mark targets stale: propagate_staleness resets
+        # every task's staleness at the start of each run
         hook_changes = @modified_lock.synchronize do
-          # In-place mutation: reassigning the set would leave
-          # readers of the `modified` property holding a stale
-          # reference
+          # Mutate in place: reassigning would leave readers of the
+          # `modified` property holding a stale set
           changes.each { |change| @modified << change }
           @modified.dup
         end
         Log.debug { "Modified: #{hook_changes}" }
-        # Call the before_run_hook if set, passing the changed files.
         # User code must not run under a library lock
         before_run_hook.call(hook_changes) unless hook_changes.empty?
-        # Run tasks - add_input calls from procs invalidate the
-        # graph, and tasks that became buildable need a second pass
         run_tasks(targets: targets, parallel: false)
         if @graph_invalidated
-          # The graph changed mid-run (a proc discovered a new
-          # dependency): re-watch so the added inputs are watched,
-          # and run again with the same targets
+          # A proc added a dependency with add_input: watch the new
+          # inputs and run again with the same targets
           watch(targets)
           run_tasks(targets: targets, parallel: false)
         end
-        # Drop only what this cycle consumed. The old blanket clear
-        # also erased kv:// flags that set() marked while the run was
-        # executing, silently losing that change: the next cycle
-        # found an empty queue and an empty modified set and did
-        # nothing. Dropping by key alone can't tell a consumed
-        # kv:// entry from a mid-run re-mark of the same key, so a
-        # taken kv:// entry is dropped only when the current store
-        # value matches what the fold just recorded. Reading the
-        # store under this lock is safe: set() takes both locks
-        # sequentially, never nested in the reverse order.
+        # Drop only what this cycle consumed. set() may re-mark a
+        # kv:// key while the run executes, so a kv:// entry is
+        # dropped only when the store's current value matches what
+        # was recorded for it. Reading the store under this lock is
+        # safe: set() never holds @store_lock while taking
+        # @modified_lock.
         unqueue_changes(changes)
         @modified_lock.synchronize do
           consumed = @modified.select do |path|
@@ -188,29 +156,25 @@ module Croupier
           end
           consumed.each { |path| @modified.delete(path) }
         end
-        # In auto mode this fiber is the only writer of the run-hash
-        # trio (tasks run serially on it), so the merge needs no lock
+        # Tasks run serially on this fiber, so it is the only writer
+        # of the run hashes and the merge needs no lock
         last_run.merge!(this_run).merge!(next_run)
         {AUTORUN_RETRY_MIN_DELAY, targets}
       rescue ex
-        # Every failure retries with backoff: auto mode is a
-        # long-lived watcher, and stopping it on the first error
-        # would leave the process blind. What differs per failure
-        # is how loud it is.
+        # Every failure retries with backoff: stopping on the first
+        # error would leave a long-lived watcher blind. Only the log
+        # level differs.
         delay = Math.min(retry_delay * 2, AUTORUN_RETRY_MAX_DELAY)
         case ex
         when UnknownInputsError
-          # Not all inputs exist yet: the routine auto-mode
-          # condition, retry quietly
+          # Not all inputs exist yet: routine in auto mode, retry
+          # quietly
         when RunFailure
-          # A task failed (mid-edit source, broken command): warn,
-          # still normal in auto mode
+          # A task failed (a half-edited source, a broken command)
           Log.warn { "Automatic run failed (will retry): #{ex.message}" }
         else
-          # Anything else is a bug (in a before_run_hook or in
-          # croupier itself: task proc failures arrive wrapped in
-          # RunFailure). Error level with the backtrace, so it can't
-          # be confused with the quiet retry above.
+          # Anything else is a bug, in a before_run_hook or in
+          # croupier (task failures arrive wrapped in RunFailure)
           Log.error { "Automatic run crashed (bug, will retry): #{ex.inspect_with_backtrace}" }
         end
         {delay, targets}
@@ -234,30 +198,22 @@ module Croupier
         end
       end
 
-      # Watch for changes in inputs.
-      # If an input has been changed BEFORE calling this method,
-      # it will NOT be detected as a change.
-      #
-      # Changes are added to queued_changes
-
+      # Watch the inputs of `targets` (all tasks by default) and queue
+      # changed paths in @queued_changes. Changes made before this call
+      # are not detected.
       def watch(targets : Array(String) = [] of String)
         targets = tasks.keys if targets.empty?
         watcher, target_inputs = @@watcher_lock.synchronize do
-          # Events arriving in the close/re-watch window below are
-          # lost: the kernel can't queue them on a watcher that no
-          # longer exists. Whatever they changed is caught by the
-          # next cycle's input scan instead.
+          # Events in the close/re-watch window are lost; the next
+          # cycle's input scan catches what they changed
           @@watcher.try(&.close)
           new_watcher = Inotify::Watcher.new(recursive: true)
           @@watcher = new_watcher
           {new_watcher, inputs(targets)}
         end
 
-        # Prefix matching runs on every filesystem event, so the
-        # normalized forms (trailing slash, "dir/" matches everything
-        # under dir) are computed once here instead of allocating a
-        # string per watched input per event. Exact matches need no
-        # preprocessing: target_inputs is a Set, already O(1).
+        # Directory prefixes ("dir/" matches everything under dir) are
+        # computed once here, not per event
         prefix_inputs = target_inputs.map do |input|
           normalized = input.ends_with?("/") ? input : "#{input}/"
           {normalized, input}
@@ -267,11 +223,8 @@ module Croupier
         watch_inputs(watcher, target_inputs)
       end
 
-      # inotify flags shared by every watched path.
-      #
-      # NOT watching IN_DELETE_SELF, IN_MOVE_SELF because
-      # when those are triggered we have no input file to
-      # process.
+      # inotify flags shared by every watched path. IN_DELETE_SELF and
+      # IN_MOVE_SELF are left out: they carry no input path to queue.
       private def watch_flags
         LibInotify::IN_DELETE |
           LibInotify::IN_CREATE |
@@ -281,20 +234,16 @@ module Croupier
           LibInotify::IN_ATTRIB
       end
 
-      # Attach the event handler, then watch every input; an input
-      # that doesn't exist yet is covered by watching its parent
-      # directory, so its creation is seen.
+      # Watch every input. An input that doesn't exist yet is covered
+      # by watching its parent directory, so its creation is seen.
       private def watch_inputs(watcher : Inotify::Watcher, target_inputs : Set(String)) : Nil
         target_inputs.each do |input|
-          # Don't watch for changes in k/v store
+          # k/v keys are not files
           next if input.lchop?("kv://")
           if File.exists? input
             watcher.watch input, watch_flags
             Log.info { "Watching: #{input}" }
           else
-            # It's a file that doesn't exist. To detect it
-            # being created, we watch the parent directory
-            # if we are not already watching it.
             path = (Path[input].parent).to_s
             if !watcher.watching.includes?(path)
               watcher.watch path, watch_flags
@@ -315,23 +264,22 @@ module Croupier
         prefix_inputs : Array({String, String}),
       ) : Proc(Inotify::Event, Nil)
         ->(event : Inotify::Event) do
-          # Path of the changed file; when the event carries no name
-          # there is nothing to match, so fall back to the bare path
-          # ("" if absent) which matches no input below
+          # Path of the changed file. Without a name, fall back to the
+          # bare path ("" if absent), which matches no input.
           path = if event.path && event.name
                    Path["#{event.path}/#{event.name}"].normalize.to_s
                  else
                    event.path || ""
                  end
 
-          # Debug logging
           Log.debug do
             "inotify event: path=#{event.path.inspect}, name=#{event.name.inspect}, " \
             "mask=#{event.mask.inspect}, constructed=#{path.inspect}, " \
             "target_inputs=#{target_inputs.inspect}"
           end
 
-          # If watch was removed (e.g., editor deleted/replaced the file), re-add it
+          # The watch was removed (an editor deleted or replaced the
+          # file): watch it again, or its parent if it's gone
           if event.type_is?(LibInotify::IN_IGNORED)
             if ep = event.path
               if target_inputs.includes?(ep)
@@ -339,7 +287,6 @@ module Croupier
                   watcher.watch ep, watch_flags
                   Log.debug { "Re-watched file after editor replacement: #{ep}" }
                 else
-                  # File doesn't exist, watch parent directory for creation
                   parent = Path[ep].parent.to_s
                   unless watcher.watching.includes?(parent)
                     watcher.watch parent, watch_flags
@@ -349,7 +296,6 @@ module Croupier
             end
           end
 
-          # If path matches a watched path, add it to the queue
           matched = false
           if target_inputs.includes? path
             queue_change(path)
@@ -357,9 +303,7 @@ module Croupier
             matched = true
           else
             prefix_inputs.each do |normalized, input|
-              # If we are watching a folder in path, add the folder to
-              # the queue. A path equal to an input was already caught
-              # by the exact match above.
+              # A change inside a watched directory queues the directory
               if path.starts_with?(normalized)
                 queue_change(input)
                 Log.debug { "Detected change in #{input} (prefix match: #{path} starts with #{normalized})" }
@@ -373,8 +317,8 @@ module Croupier
         end
       end
     {% elsif flag?(:darwin) %}
-      # macOS filesystem watcher. The task-manager API and queued paths are
-      # identical to Linux; only the kernel event backend differs.
+      # macOS filesystem watcher. Same API and queued paths as Linux;
+      # only the kernel event backend differs.
       @@watcher : KqueueWatcher | Nil = nil
 
       private def close_watcher : Nil
@@ -389,9 +333,8 @@ module Croupier
       def watch(targets : Array(String) = [] of String) : Nil
         targets = tasks.keys if targets.empty?
         watcher, target_inputs = @@watcher_lock.synchronize do
-          # Events arriving in the close/re-watch window are lost
-          # (the kernel can't queue them on a watcher that no longer
-          # exists); the next cycle's input scan catches up instead.
+          # Events in the close/re-watch window are lost; the next
+          # cycle's input scan catches what they changed
           if old_watcher = @@watcher
             old_watcher.close
             @@watcher = nil

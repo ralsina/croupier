@@ -5,36 +5,28 @@ module Croupier
     @_store : Kiwi::Store = Kiwi::MemoryStore.new
     @_store_path : String? = nil
 
-    # Read-through cache for the k/v store: with a persistent
-    # (FileStore) store, every staleness check is a SHA1 of the key
-    # plus a stat and a file read, all under @store_lock — and
-    # propagate_staleness / waiting_for check every kv output of every
-    # task. Values (and misses, which are the hot case in a
-    # from-scratch run: every unbuilt producer's key) are remembered
-    # in memory; keys only appear through set(), which invalidates
-    # both. Cleared whenever the store is swapped or cleaned up;
-    # pre-existing keys on disk are picked up lazily on first read.
+    # Read-through cache for the k/v store. With a FileStore every
+    # lookup is a hash, a stat and a file read, and staleness checks
+    # and readiness sweeps look up every kv key of every task. Values
+    # and misses are both remembered; set() keeps them current. Both
+    # are cleared when the store is swapped or cleaned up.
     @store_cache = Hash(String, String).new
     @store_misses = Set(String).new
 
     # Every key written through set() in this process. Kiwi stores
-    # expose no iteration API, so this bookkeeping is what lets
-    # use_persistent_store migrate data through the public get/[]=
-    # instead of reaching into Kiwi::MemoryStore's internals.
+    # can't be iterated, so use_persistent_store needs this list to
+    # migrate data through the public get/[]= API.
     @store_keys = Set(String).new
 
-    # Store a value, returning whether it CHANGED: a same-value set is a
-    # no-op for staleness, so kv outputs holding identical values don't
-    # re-stale their dependents on every run.
+    # Store a value and return whether it changed. A same-value set
+    # is a no-op, so identical kv outputs don't re-stale their
+    # dependents.
     def set(key, value) : Bool
       Log.debug { "Setting k/v data for #{key}" }
       changed = false
       @store_lock.synchronize do
         changed = store_read(key) != value
-        # An unchanged write is skipped entirely: store_read answered
-        # from the cache or the backing store, and either way the disk
-        # already holds `value`, so with a persistent store this saves a
-        # rewrite per identical kv output per run.
+        # Skip unchanged writes: the store already holds `value`
         if changed
           @_store.set(key, value)
           @store_keys << key
@@ -50,7 +42,7 @@ module Croupier
       @store_lock.synchronize { store_read(key) }
     end
 
-    # Unsynchronized read-through lookup (callers hold @store_lock).
+    # Read-through lookup. Callers hold @store_lock.
     private def store_read(key) : String?
       if value = @store_cache[key]?
         return value
@@ -70,17 +62,13 @@ module Croupier
     def use_persistent_store(path : String)
       return if path == @_store_path
       raise UsageError.new("Can't change persistent k/v store path") unless @_store_path.nil?
-      # The whole swap happens under @store_lock: without it, a set()
-      # from a task worker could write to the old store (or read the
-      # cache) mid-swap and be lost
+      # Swap under @store_lock so a concurrent set() can't write to
+      # the old store mid-swap
       @store_lock.synchronize do
         new_store = Kiwi::FileStore.new(path)
-        # Migrate everything written so far through the public API:
-        # set() is the only way data entered the old store, and it
-        # remembers every key, so get/[]= is enough — no reaching
-        # into Kiwi internals. A pre-existing file store may hold more
-        # keys from a previous process; the read-through cache picks
-        # those up lazily after the swap
+        # Copy everything written so far. A pre-existing file store
+        # may also hold keys from an earlier process; the cache picks
+        # those up on first read.
         @store_keys.each do |key|
           if value = @_store.get(key)
             new_store[key] = value
@@ -88,8 +76,6 @@ module Croupier
         end
         @_store = new_store
         @_store_path = path
-        # New backing store: drop cached answers, lazily re-prime from
-        # the file store (which may carry data from a previous process)
         @store_cache.clear
         @store_misses.clear
       end

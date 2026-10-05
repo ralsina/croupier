@@ -1,21 +1,19 @@
-# Every exception croupier raises on purpose, in one hierarchy so
-# callers can rescue by type (`rescue Croupier::Error`) instead of
-# matching message strings.
+# Every exception croupier raises on purpose, in one hierarchy, so
+# callers can rescue by type (`rescue Croupier::Error`).
 module Croupier
   # Base class of every exception croupier raises deliberately.
   class Error < Exception
   end
 
-  # A task definition is invalid (empty kv:// key, missing outputs and
+  # A task definition is invalid (empty kv:// key, no outputs and no
   # id, duplicate id), or two colliding definitions can't be merged.
-  # Raised at declaration time, before anything runs.
+  # Raised by Task.new.
   class TaskDefinitionError < Error
   end
 
-  # A dependency cycle. Three unrelated places detect one — a task
-  # whose inputs and outputs overlap, adding one of a task's own keys
-  # as its input, and a cycle found while sorting the whole graph —
-  # and the message says which site fired.
+  # A dependency cycle: a task whose inputs and outputs overlap,
+  # add_input with one of the task's own keys, or a cycle found while
+  # sorting the graph. The message says which.
   class CycleError < Error
   end
 
@@ -23,11 +21,10 @@ module Croupier
   class UnknownTaskError < Error
   end
 
-  # Raised when a task can't run yet because an input is not
-  # satisfiable: it is neither a fresh task, an existing file, nor a
-  # kv:// key. In auto mode this is an expected transient state (inputs
-  # appear incrementally), so the autorun loop rescues this class and
-  # retries with backoff instead of logging a warning on every cycle.
+  # An input can't be satisfied: it is not a task, an existing file
+  # or a kv:// key (checked before a run), or a task is still waiting
+  # for one mid-run. In auto mode this is expected while inputs
+  # appear, so the autorun loop retries quietly.
   class UnknownInputsError < Error
   end
 
@@ -36,17 +33,15 @@ module Croupier
   class TaskVerificationError < Error
   end
 
-  # Raised when a task's proc raises: it carries the task context
-  # in its message and keeps the original exception (with its backtrace)
-  # available as `#cause`.
+  # A task's proc raised. The message names the task; the original
+  # exception is `#cause`.
   class TaskFailure < Error
   end
 
-  # Raised when a run has failing tasks. Without `keep_going` the run
-  # aborts on the first failure (state is not saved); with
-  # `keep_going: true` the run completes everything it can and saves
-  # its state, then this is raised at the end. `#errors` carries every
-  # task failure, since `Exception#cause` can only chain one.
+  # A run had failing tasks. Without `keep_going` the run stops at
+  # the first failure and doesn't save state. With `keep_going` it
+  # runs what it can, saves state, then raises. `#errors` holds every
+  # failure.
   class RunFailure < Error
     getter errors : Array(Exception)
 
@@ -59,9 +54,9 @@ module Croupier
   class UnreachableTaskError < Error
   end
 
-  # The library was configured or used in a way it does not support:
-  # an unsupported platform for auto mode, changing the persistent
-  # k/v store path, auto-running with nothing to watch.
+  # Unsupported use: changing the task set during a run, auto mode
+  # on an unsupported platform or with nothing to watch, changing the
+  # persistent k/v store path.
   class UsageError < Error
   end
 end

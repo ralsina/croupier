@@ -172,15 +172,12 @@
       end
 
       # Root plus, if it is a directory, every entry under it
-      # (dotfiles included). The tree is walked explicitly with
-      # Dir.each_child instead of interpolating root into a glob
-      # pattern: metacharacters in a path's own name (a directory
-      # literally named "assets[2]") must be taken literally, not
-      # interpreted as a pattern — the same fix hash_state.cr's
-      # collect_directory_entries made for directory hashing. A
-      # symlinked root IS followed (matching the previous glob);
-      # symlinked directories inside the tree are not descended
-      # into (the glob's follow_symlinks: false behavior).
+      # (dotfiles included), or the nearest existing parent if the
+      # root doesn't exist. The tree is walked explicitly rather than
+      # globbed, so metacharacters in a name are taken literally. A
+      # symlinked root is followed; symlinked directories inside the
+      # tree are not descended into (same rules as
+      # collect_directory_entries in hash_state.cr).
       private def watch_paths(root : String, root_exists : Bool) : Array(String)
         return [existing_parent(root)] unless root_exists
 

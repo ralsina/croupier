@@ -9,8 +9,7 @@ module Croupier
     end
 
     # Record `new_hash` for `output` and return the hash the last run
-    # recorded for it, in a single locked step: task workers call this
-    # once per output instead of a record-then-previous round-trip.
+    # recorded for it, in one locked step.
     def swap_output_hash(output : String, new_hash : String) : String?
       @hashes_lock.synchronize do
         previous = last_run[output]?
@@ -25,21 +24,15 @@ module Croupier
     end
 
     # Files known to exist during the current run, so readiness sweeps
-    # don't re-stat every plain-file input of every task on every wave.
-    # Only positive answers are cached: a file that appeared since the
-    # last check must still be discovered (negative results would
-    # deadlock tasks waiting on side-effect files), while a file that
-    # already exists stays satisfied. Cleared when a run starts and on
-    # cleanup.
+    # don't re-stat every input on every wave. Only positive answers
+    # are cached: a missing file may still appear (a side effect of
+    # another task), and caching the miss would leave tasks waiting
+    # forever. Cleared when a run starts and on cleanup.
     @existing_files = Set(String).new
 
-    # File-existence check with a per-run positive cache. The cache
-    # check and the insert take @files_lock, but the stat itself does
-    # NOT: holding the mutex across a syscall serialized every worker's
-    # readiness checks on the filesystem. Positive-only caching is
-    # preserved (misses are re-checked, so files appearing mid-run are
-    # still found), and racing inserters of the same path are
-    # idempotent.
+    # File-existence check with the per-run positive cache. The stat
+    # runs outside @files_lock so workers don't serialize on the
+    # filesystem; racing inserts of the same path are harmless.
     def file_exists?(path : String) : Bool
       return true if @files_lock.synchronize { @existing_files.includes?(path) }
       if File.exists?(path)
@@ -51,29 +44,21 @@ module Croupier
     end
 
     # Scan the given inputs (all of them by default) and return a hash
-    # with their sha1.
-    #
-    # Plain files and the contents of directory inputs are hashed in
-    # parallel (a pool of worker fibers bounded by CPU count), since both
-    # the disk read and the hashing are independent per file.
+    # with their sha1. Files, including those inside directory inputs,
+    # are hashed in parallel by a worker pool bounded by CPU count.
     def scan_inputs(scope : Set(String) | Nil = nil)
       hash = {} of String => String
       inputs = scope || all_inputs
 
-      # Partition inputs into kv keys, files (hashable in parallel)
-      # and directories. One stat per path classifies it (instead of
-      # the three File.file?/directory?/info? calls this used to
-      # cost) — but every file is then HASHED: this is content mode,
-      # and its guarantee is that staleness decisions rest on file
-      # contents, never on metadata trust. mtime-based shortcuts are
-      # what fast mode is for.
+      # One stat per path classifies it. Every regular file is then
+      # hashed: content mode never trusts metadata (that is what fast
+      # mode is for).
       file_inputs = [] of String
       inputs.each do |path|
         if key = path.lchop?("kv://")
-          # A kv input's "hash" is the digest of its current value, so
-          # kv modifications are detected exactly like file
-          # modifications (a missing key hashes as "" and matches an
-          # absent state-file entry)
+          # A kv input hashes its current value, so kv changes are
+          # detected like file changes. A missing key hashes as "",
+          # which matches an absent state-file entry.
           value = get(key)
           hash[path] = value.nil? ? "" : Digest::SHA1.hexdigest(value)
         elsif info = File.info?(path)
@@ -82,15 +67,10 @@ module Croupier
           elsif info.directory?
             hash[path] = hash_directory(path)
           else
-            # An existing thing that is neither file nor directory
-            # (fifo, socket, device): reading it could block forever
+            # A fifo, socket or device: reading it could block forever
             # (a fifo has no EOF until a writer appears), so hash its
-            # metadata instead. Dropping it — the old behavior — made
-            # it invisible to modification detection. A path that
-            # doesn't stat at all (deleted file, dangling symlink) is
-            # still dropped, exactly like deleted regular files; a
-            # dangling symlink starts being hashed (as a file) once its
-            # target appears.
+            # metadata instead. Paths that don't stat at all (deleted
+            # files, dangling symlinks) are left out.
             hash[path] = Digest::SHA1.hexdigest("#{info.type}:#{info.modification_time.to_unix_f}:#{info.size}")
           end
         end
@@ -104,47 +84,35 @@ module Croupier
 
     # Hash a single directory input.
     #
-    # The directory digest is a hash-of-hashes: every file in the tree is
-    # hashed independently (in parallel), and those per-file hashes are
-    # folded into a final SHA1 along with the sorted entry list. This is
-    # the Merkle-tree pattern (as used by git tree objects): collision
-    # resistance is preserved, and per-file hashing parallelizes the
-    # expensive part while leaving the door open to a future per-file
-    # mtime+size cache.
+    # The digest is a hash of hashes, like a git tree: every file in
+    # the tree is hashed (in parallel), and the per-file hashes are
+    # folded into one SHA1 together with the sorted entry list. The
+    # entry list and the file hashes are separate, delimited fields,
+    # so two different trees can't produce the same input bytes.
     #
-    # The path list and the file-hash list are framed as separate,
-    # newline-joined fields with a distinct separator so two different
-    # trees can't collide by construction (the previous scheme folded raw
-    # file bytes directly into the same context with no boundary).
-    #
-    # Public because Task#run hashes no_save directory outputs with it:
-    # the digest MUST match what scan_inputs computes for the same
-    # directory when a later task consumes it as an input, or that
-    # dependent would re-run on every invocation. Uses only local
-    # channels (via hash_files_parallel), so it is safe to call from
-    # parallel task workers.
+    # Public because Task#run hashes no_save directory outputs with it.
+    # The digest must match what scan_inputs computes for the same
+    # directory, or a task consuming it would re-run every time. Safe
+    # to call from parallel task workers (it only uses local channels).
     def hash_directory(path : String) : String
-      # Walk the tree once and reuse the list. Hidden entries count:
-      # an added/removed/changed .env must change the digest. The tree
-      # is traversed explicitly instead of interpolating `path` into a
-      # glob pattern: metacharacters in a path's own name (a directory
-      # literally named "assets[2]") must be taken literally, not
-      # interpreted as a pattern.
+      # Hidden entries count: adding, removing or changing a dotfile
+      # changes the digest. The tree is walked explicitly rather than
+      # globbed, so metacharacters in a name (a directory called
+      # "assets[2]") are taken literally.
       entries = [] of String
       collect_directory_entries(path, entries)
       entries.sort!
 
       return Digest::SHA1.hexdigest(entries.join("\n")) if @fast_dirs
 
-      # Hash every file in the tree in parallel.
       files = entries.select(&->File.file?(String))
       file_hashes = hash_files_parallel(files)
 
       Digest::SHA1.hexdigest do |ctx|
-        # Field 1: the sorted entry list (captures tree structure).
+        # Field 1: the sorted entry list (tree structure)
         ctx.update(entries.join("\n"))
         ctx.update("\n\n")
-        # Field 2: each file's path + content hash (captures contents).
+        # Field 2: each file's path and content hash
         files.each do |f|
           ctx.update(f)
           ctx.update("\0")
@@ -154,14 +122,11 @@ module Croupier
       end
     end
 
-    # Every path under `dir` (files and subdirectories, dotfiles
-    # included, `dir` itself excluded) appended to `entries`. A
-    # symlinked `dir` IS followed, so its real contents are hashed;
-    # symlinked directories inside the tree are not descended into
-    # (the old glob's follow_symlinks: false behavior). The entry
-    # list is the basis of the directory digest, so its shape is
-    # pinned by specs: changing it would silently re-stale every
-    # directory input.
+    # Append every path under `dir` (files and subdirectories, dotfiles
+    # included, `dir` itself excluded) to `entries`. A symlinked `dir`
+    # is followed; symlinked directories inside the tree are not
+    # descended into. The digest is built from this list, so changing
+    # its shape re-stales every directory input (specs pin it).
     private def collect_directory_entries(dir : String, entries : Array(String)) : Nil
       Dir.each_child(dir) do |child|
         entry = File.join(dir, child)
@@ -171,12 +136,9 @@ module Croupier
     end
 
     # Hash a list of files concurrently, returning a {path => sha1} map.
-    # Uses a shared channel of work and a small pool of worker fibers
-    # bounded by CPU count. Work and results travel in chunks: every
-    # channel operation costs a lock, so one message per file meant two
-    # lock round-trips per input; chunks amortize that to ~2 per 64
-    # files. Small batches are hashed inline, skipping the pool
-    # machinery entirely.
+    # A pool of worker fibers (bounded by CPU count) takes work in
+    # chunks of SCAN_CHUNK_SIZE files, which keeps channel overhead
+    # low. Lists of up to one chunk are hashed inline.
     private def hash_files_parallel(file_inputs : Array(String)) : Hash(String, String)
       hash = {} of String => String
       return hash if file_inputs.empty?
@@ -193,8 +155,8 @@ module Croupier
       result_queue = Channel({Hash(String, String), Exception?}).new(chunks.size)
 
       chunks.each { |chunk| task_queue.send(chunk) }
-      # Close the queue so workers exit (receive? returns nil) instead
-      # of parking forever on the drained channel
+      # Closing lets workers exit (receive? returns nil) once the
+      # queue is drained
       task_queue.close
 
       num_workers.times do |worker_index|
@@ -204,10 +166,9 @@ module Croupier
             break unless chunk
             results = {} of String => String
             error = nil
-            # A worker that died here (unreadable file, deleted between
-            # the File.file? check and the hash) would park the
-            # collector below on result_queue.receive forever: report
-            # the failure through the queue instead, like run_wave does
+            # Report failures (an unreadable or just-deleted file)
+            # through the queue: a worker dying here would leave the
+            # collector below waiting forever
             begin
               chunk.each { |path| results[path] = Croupier.hash_file(path) }
             rescue ex
@@ -229,13 +190,12 @@ module Croupier
     end
 
     # Resize the default fiber execution context so worker fibers spread
-    # across OS threads (real parallelism, not just concurrency). Cheap and
-    # idempotent, so it's safe to call once per batch / per call.
+    # across OS threads. Cheap and idempotent.
     #
-    # The API only exists on Crystal >= 1.21 without -Dpreview_mt (the
-    # deprecated flag selects the old runtime, which lacks execution
-    # contexts). Guard on both so the call compiles everywhere; elsewhere
-    # this degrades to a no-op, same as before the resize existed.
+    # The API exists only on Crystal >= 1.21 without -Dpreview_mt (that
+    # flag selects the old runtime, which has no execution contexts).
+    # Elsewhere this is a no-op and workers run concurrently on one
+    # thread.
     private def enable_parallelism(workers : Int) : Nil
       workers = 1 if workers < 1
       {% if !flag?(:preview_mt) && compare_versions(Crystal::VERSION, "1.21.0") >= 0 %}
@@ -244,51 +204,44 @@ module Croupier
     end
 
     # How many files each scan worker hashes at a time: small enough
-    # that a slow huge file doesn't strand a whole core's worth of
-    # work behind it, big enough that channel overhead stays negligible
+    # that one huge file doesn't hold up much other work, big enough
+    # that channel overhead stays negligible
     SCAN_CHUNK_SIZE = 64
 
     # Version of the state-file schema, stored as __version. A
-    # mismatch (including files written before versioning existed)
-    # discards all recorded hashes: one full rebuild instead of
-    # silently comparing hashes computed by a different scheme (the
-    # directory digest already changed shape once).
-    #
+    # mismatch (or a file with no version) discards all recorded
+    # hashes: one full rebuild instead of comparing hashes computed
+    # by a different scheme.
     STATE_VERSION = "1"
 
-    # We ran all tasks, store the current state. Written to a
-    # temporary file and renamed into place, so a crash mid-write
-    # can't leave a truncated state file behind. The temp name carries
-    # the PID: two croupier processes sharing a directory would
-    # otherwise race on the same temp file and one could rename a
-    # half-written state into place.
+    # Save the current state. It is written to a temporary file and
+    # renamed into place, so a crash can't leave a truncated state
+    # file. The temp name includes the PID so two processes sharing a
+    # directory never write the same temp file.
     def save_run
       state = {"__version"   => STATE_VERSION,
                "__scan_time" => @scan_started.to_s}.merge(this_run.merge(next_run))
       temp_file = "#{@state_file}.tmp.#{Process.pid}"
       File.open(temp_file, "w") do |file|
         file << YAML.dump(state)
-        # Push the YAML out of the IO buffers and onto the disk
-        # BEFORE the rename: without an fsync a crash could leave
-        # the renamed state file empty. Self-heals (a full rebuild)
-        # but loses the run's recorded work for no good reason.
+        # fsync before the rename, or a crash could leave the renamed
+        # file empty (which would cost a full rebuild)
         file.fsync
       end
       File.rename(temp_file, @state_file)
     end
 
-    # Serialize runs against the same state file across PROCESSES:
-    # two croupier processes in one directory would otherwise race
-    # their read-scan-run-save cycles, and the last writer would
-    # silently erase the other's results (PID-suffixed temp names
-    # prevent torn files, not lost writes).
+    # Serialize runs on the same state file across processes. Without
+    # this, two processes in one directory would race their
+    # read-scan-run-save cycles and the last writer would erase the
+    # other's results.
     #
-    # flock is kernel-managed: a crashed holder releases it
-    # automatically, so there is no stale-lock cleanup. The lock file
-    # is never unlinked — deleting it would let a third process lock
-    # a fresh inode while the old one is still held. Contention is
-    # polled non-blocking so fibers keep running while waiting. Not
-    # reentrant: nothing inside a run may call run_tasks again.
+    # flock is released by the kernel when the holder dies, so there
+    # is no stale lock to clean up. The lock file is never deleted:
+    # that would let a third process lock a new inode while the old
+    # one is still held. The lock is polled without blocking so other
+    # fibers keep running while waiting. Not reentrant: nothing inside
+    # a run may call run_tasks again.
     def with_state_lock(dry_run : Bool, &)
       # A dry run never writes state, and atomic renames make its
       # reads safe against concurrent writers
@@ -311,24 +264,23 @@ module Croupier
       false
     end
 
-    # Read the state file, guarding against corruption and schema
-    # drift: anything unexpected means we know nothing about the
-    # previous run, which makes every input look modified (a full
-    # rebuild) — safe, and self-healing on the next save.
-    # When the run being loaded started its scan (unix_f), recorded so
-    # fast mode compares mtimes against the previous run's scan start;
-    # nil for state files written before it was recorded
+    # When the loaded run started its scan (unix time). Fast mode
+    # compares input mtimes against it; nil when the state file has
+    # no __scan_time entry.
     @last_scan_time : Float64? = nil
     # Scan start of the run in progress; written to the state file
     @scan_started : Float64 = 0.0
 
+    # Read the state file. Anything unexpected (corrupt YAML, wrong
+    # version, wrong shape) returns an empty hash, which makes every
+    # input look modified: a safe full rebuild, fixed by the next save.
     private def load_state_file : Hash(String, String)
-      # Full reset on every load: an early return must not leave a
-      # stale scan time from a previous state file leaking in
+      # Reset first so an early return can't keep the scan time of a
+      # previously loaded file
       @last_scan_time = nil
-      # An explicit as_h? check instead of a broad rescue, so a bug in
-      # the mapping handling below raises instead of masquerading as
-      # "unusable state, rebuild everything"
+      # Check the shape explicitly instead of rescuing broadly, so a
+      # bug in the code below raises instead of looking like an
+      # unusable state file
       parsed = YAML.parse(File.read(@state_file)).as_h?
       return {} of String => String if parsed.nil?
       return {} of String => String if parsed["__version"]?.try(&.to_s) != STATE_VERSION
@@ -336,10 +288,8 @@ module Croupier
       entries = {} of String => String
       parsed.each do |key, value|
         next if {"__version", "__scan_time"}.includes?(key.to_s)
-        # A non-string value means this file is not our schema at
-        # all: coercing it with to_s used to quietly turn arrays and
-        # maps into garbage hash entries. Treat the whole state as
-        # unusable, like a version mismatch does.
+        # A non-string value means the file isn't our schema: treat
+        # the whole state as unusable, like a version mismatch
         unless hash = value.as_s?
           Log.warn { "State file #{@state_file} has a non-string entry for #{key}, rebuilding everything" }
           return {} of String => String
@@ -348,8 +298,6 @@ module Croupier
       end
       entries
     rescue ex : YAML::ParseException | File::Error
-      # Invalid YAML or an unreadable file means we know nothing about
-      # the previous run: a full rebuild, self-healed on the next save
       Log.warn { "State file #{@state_file} is unusable (#{ex.message}), rebuilding everything" }
       {} of String => String
     end
