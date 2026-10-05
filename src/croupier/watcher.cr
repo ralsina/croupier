@@ -182,19 +182,19 @@ module Croupier
     end
 
     {% if flag?(:linux) %}
-      # Linux filesystem watcher
-      @@watcher : Inotify::Watcher | Nil = nil
+      private alias FileSystemWatcher = LinuxWatcher
+    {% elsif flag?(:darwin) %}
+      private alias FileSystemWatcher = KqueueWatcher
+    {% end %}
+
+    {% if flag?(:linux) || flag?(:darwin) %}
+      # The platform filesystem watcher (LinuxWatcher or KqueueWatcher)
+      @@watcher : FileSystemWatcher | Nil = nil
 
       private def close_watcher : Nil
         @@watcher_lock.synchronize do
-          return unless watcher = @@watcher
-          begin
-            watcher.close
-          rescue ex : Inotify::Error
-            # Closing an already-closed inotify descriptor is harmless here.
-          ensure
-            @@watcher = nil
-          end
+          @@watcher.try(&.close)
+          @@watcher = nil
         end
       end
 
@@ -207,139 +207,7 @@ module Croupier
           # Events in the close/re-watch window are lost; the next
           # cycle's input scan catches what they changed
           @@watcher.try(&.close)
-          new_watcher = Inotify::Watcher.new(recursive: true)
-          @@watcher = new_watcher
-          {new_watcher, inputs(targets)}
-        end
-
-        # Directory prefixes ("dir/" matches everything under dir) are
-        # computed once here, not per event
-        prefix_inputs = target_inputs.map do |input|
-          normalized = input.ends_with?("/") ? input : "#{input}/"
-          {normalized, input}
-        end
-
-        watcher.on_event(&event_handler(watcher, target_inputs, prefix_inputs))
-        watch_inputs(watcher, target_inputs)
-      end
-
-      # inotify flags shared by every watched path. IN_DELETE_SELF and
-      # IN_MOVE_SELF are left out: they carry no input path to queue.
-      private def watch_flags
-        LibInotify::IN_DELETE |
-          LibInotify::IN_CREATE |
-          LibInotify::IN_MODIFY |
-          LibInotify::IN_MOVED_TO |
-          LibInotify::IN_CLOSE_WRITE |
-          LibInotify::IN_ATTRIB
-      end
-
-      # Watch every input. An input that doesn't exist yet is covered
-      # by watching its parent directory, so its creation is seen.
-      private def watch_inputs(watcher : Inotify::Watcher, target_inputs : Set(String)) : Nil
-        target_inputs.each do |input|
-          # k/v keys are not files
-          next if input.lchop?("kv://")
-          if File.exists? input
-            watcher.watch input, watch_flags
-            Log.info { "Watching: #{input}" }
-          else
-            path = (Path[input].parent).to_s
-            if !watcher.watching.includes?(path)
-              watcher.watch path, watch_flags
-              Log.info { "Watching parent: #{path}" }
-            end
-          end
-        end
-
-        Log.info { "Watching: #{watcher.watching.inspect}" }
-      end
-
-      # The inotify event handler: re-watch files replaced by editors
-      # (IN_IGNORED), and queue changes matching a watched input,
-      # exactly or by directory prefix.
-      private def event_handler(
-        watcher : Inotify::Watcher,
-        target_inputs : Set(String),
-        prefix_inputs : Array({String, String}),
-      ) : Proc(Inotify::Event, Nil)
-        ->(event : Inotify::Event) do
-          # Path of the changed file. Without a name, fall back to the
-          # bare path ("" if absent), which matches no input.
-          path = if event.path && event.name
-                   Path["#{event.path}/#{event.name}"].normalize.to_s
-                 else
-                   event.path || ""
-                 end
-
-          Log.debug do
-            "inotify event: path=#{event.path.inspect}, name=#{event.name.inspect}, " \
-            "mask=#{event.mask.inspect}, constructed=#{path.inspect}, " \
-            "target_inputs=#{target_inputs.inspect}"
-          end
-
-          # The watch was removed (an editor deleted or replaced the
-          # file): watch it again, or its parent if it's gone
-          if event.type_is?(LibInotify::IN_IGNORED)
-            if ep = event.path
-              if target_inputs.includes?(ep)
-                if File.exists?(ep)
-                  watcher.watch ep, watch_flags
-                  Log.debug { "Re-watched file after editor replacement: #{ep}" }
-                else
-                  parent = Path[ep].parent.to_s
-                  unless watcher.watching.includes?(parent)
-                    watcher.watch parent, watch_flags
-                  end
-                end
-              end
-            end
-          end
-
-          matched = false
-          if target_inputs.includes? path
-            queue_change(path)
-            Log.debug { "Detected change in #{path} (exact match)" }
-            matched = true
-          else
-            prefix_inputs.each do |normalized, input|
-              # A change inside a watched directory queues the directory
-              if path.starts_with?(normalized)
-                queue_change(input)
-                Log.debug { "Detected change in #{input} (prefix match: #{path} starts with #{normalized})" }
-                matched = true
-                break
-              end
-            end
-          end
-
-          Log.debug { "Event NOT matched for path=#{path}, target_inputs=#{target_inputs.inspect}" } unless matched
-        end
-      end
-    {% elsif flag?(:darwin) %}
-      # macOS filesystem watcher. Same API and queued paths as Linux;
-      # only the kernel event backend differs.
-      @@watcher : KqueueWatcher | Nil = nil
-
-      private def close_watcher : Nil
-        @@watcher_lock.synchronize do
-          if watcher = @@watcher
-            watcher.close
-            @@watcher = nil
-          end
-        end
-      end
-
-      def watch(targets : Array(String) = [] of String) : Nil
-        targets = tasks.keys if targets.empty?
-        watcher, target_inputs = @@watcher_lock.synchronize do
-          # Events in the close/re-watch window are lost; the next
-          # cycle's input scan catches what they changed
-          if old_watcher = @@watcher
-            old_watcher.close
-            @@watcher = nil
-          end
-          new_watcher = KqueueWatcher.new(->(input : String) {
+          new_watcher = FileSystemWatcher.new(->(input : String) {
             queue_change(input)
             Log.debug { "Detected change in #{input}" }
           })
@@ -348,6 +216,7 @@ module Croupier
         end
 
         target_inputs.each do |input|
+          # k/v keys are not files
           next if input.lchop?("kv://")
           watcher.watch(input)
           Log.info { "Watching: #{input}" }

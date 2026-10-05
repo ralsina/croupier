@@ -9,6 +9,7 @@ require "./croupier/watcher"
 require "digest/sha1"
 {% if flag?(:linux) %}
   require "inotify"
+  require "./croupier/linux_watcher"
 {% elsif flag?(:darwin) %}
   require "./croupier/kqueue_watcher"
 {% end %}
