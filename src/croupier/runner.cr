@@ -79,8 +79,10 @@ module Croupier
       end
     end
 
-    # Internal helper to run tasks serially
-    def _run_tasks(
+    # Internal helper to run tasks serially. Private on purpose: the
+    # run_active guard around task creation holds only if run_tasks
+    # is the only way into a run.
+    private def _run_tasks(
       task_names,
       run_all : Bool = false,
       dry_run : Bool = false,
@@ -184,7 +186,7 @@ module Croupier
     # bookkeeping (finished / failed / error collections, stale
     # transitions, early-cutoff notifications), so none of it needs a
     # lock. Receiving batch.size results is the wave barrier.
-    def _run_tasks_parallel(
+    private def _run_tasks_parallel(
       task_names : Array(String) = [] of String,
       run_all : Bool = false,
       dry_run : Bool = false,

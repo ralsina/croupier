@@ -68,7 +68,9 @@ module Croupier
         raise UsageError.new(
           "Cannot create tasks while a run is in progress; build the task graph " \
           "before running (stop auto mode, rebuild, start again)"
-        ) if @parallel_wave_active || @run_active > 0
+          # @parallel_wave_active implies @run_active > 0 (a wave only
+          # runs inside a run), so the run counter alone decides
+        ) if @run_active > 0
         task.register_with_manager(explicit_id)
       end
     end
@@ -479,11 +481,17 @@ module Croupier
 
       # Build reverse dependency graph (who depends on me) into the cached
       # @reverse_deps field, reused later by the early-cutoff scans.
+      # One pass per unique task: `tasks` is keyed per output, so a
+      # multi-output task would re-traverse its inputs once per key.
       @reverse_deps.clear
-      tasks.each do |output, task|
+      seen_tasks = Set(Task).new
+      tasks.each_value do |task|
+        next unless seen_tasks.add?(task)
         task.inputs.each do |input|
           if tasks.has_key?(input)
-            @reverse_deps[input] << output
+            # Every key of the dependent task is a staleness carrier:
+            # when this input goes stale, the whole task goes stale
+            @reverse_deps[input].concat(task.keys)
           end
         end
       end
@@ -517,9 +525,12 @@ module Croupier
         end
       end
 
-      # Mark non-stale tasks as fresh
-      tasks.each do |output, task|
-        task.stale = stale_tasks.includes?(output)
+      # Mark non-stale tasks as fresh (once per unique task; a
+      # multi-output task's keys enter stale_tasks jointly)
+      seen_tasks.clear
+      tasks.each_value do |task|
+        next unless seen_tasks.add?(task)
+        task.stale = task.keys.any? { |key| stale_tasks.includes?(key) }
       end
 
       Log.debug { "Propagated staleness: #{stale_tasks.size} stale, #{tasks.size - stale_tasks.size} fresh" }
@@ -534,9 +545,15 @@ module Croupier
     private def find_stale_roots : Set(String)
       stale_tasks = Set(String).new
 
-      tasks.each do |output, task|
+      # One staleness evaluation per unique task: `tasks` is keyed
+      # per output, so iterating it directly would re-stat every
+      # output of a multi-output task once per key
+      seen_tasks = Set(Task).new
+      tasks.each_value do |task|
+        next unless seen_tasks.add?(task)
+
         if task.always_run? || task.inputs.empty?
-          stale_tasks << output
+          stale_tasks.concat(task.keys)
           next
         end
 
@@ -547,15 +564,14 @@ module Croupier
         missing_outputs = file_outputs.any? { |o| !File.exists?(o) } ||
                           kv_outputs.any? { |o| !TaskManager.get(o) }
         if missing_outputs
-          stale_tasks << output
+          stale_tasks.concat(task.keys)
           next
         end
 
         # Check if inputs are modified
         modified_inputs = task.inputs.any? { |i| modified?(i) }
         if modified_inputs
-          stale_tasks << output
-          next
+          stale_tasks.concat(task.keys)
         end
       end
 
