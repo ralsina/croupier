@@ -198,6 +198,44 @@ describe "TaskManager" do
       end
     end
 
+    it "should keep auto mode working over a persistent store" do
+      with_scenario("empty") do
+        # kv:// traffic in auto mode must flow through the file
+        # store: the cycle's hash comparisons and set()'s modified
+        # flags all go through the same cache+store path
+        TaskManager.use_persistent_store("store")
+        File.write("seed", "v1")
+        runs = 0
+        Task.new(output: "kv://result", inputs: ["seed"]) { runs += 1; "run_#{runs}" }
+
+        TaskManager.auto_run
+        Fiber.yield
+        # Auto mode idles until the watcher sees a change: both runs
+        # are driven by real seed rewrites. A rewrite can emit
+        # multiple watcher events and straddle cycles, so counts are
+        # compared against a baseline instead of asserted exactly
+        # (the pattern the kv rerun specs below use): settle after
+        # the first run, record the count, then require the second
+        # rewrite to exceed it.
+        File.write("seed", "v2")
+        wait_until(message: "first change never ran the task") { runs >= 1 }
+        wait_until(message: "first cycle never settled") { auto_cycle_settled? }
+        baseline = runs
+
+        File.write("seed", "v3")
+        wait_until(message: "second change never ran the task again") { runs > baseline }
+        wait_until(message: "second cycle never settled") { auto_cycle_settled? }
+        TaskManager.auto_stop
+
+        # The persisted value tracks the final count, so the check
+        # holds however many cycles the watcher delivered
+        TaskManager.get("result").should eq "run_#{runs}"
+        # The value is really on disk, not just in the read-through
+        # cache: a fresh store handle reads the same directory
+        Kiwi::FileStore.new("store").get("result").should eq "run_2"
+      end
+    end
+
     it "should not run when no inputs have changed" do
       with_scenario("empty") do
         x = 0
