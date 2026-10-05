@@ -176,37 +176,49 @@ module Croupier
       ops = @pending_wave_ops
       @pending_wave_ops = [] of WaveOp
       ops.each do |op|
-        case op.kind
-        when WaveOpKind::RegisterTask
-          op.task.try &.register_with_manager(op.explicit_id)
-        when WaveOpKind::AddInput
-          if (task_key = op.task_key) && (input = op.input) && (task = tasks[task_key]?)
-            # Set#<< is idempotent: duplicates collapse on their own
-            task.inputs << input
-          end
-        when WaveOpKind::RegisterSubtaskLink
-          if (subtask_id = op.subtask_id) && (master_id = op.master_id)
-            link_subtask(master_id, subtask_id)
-          end
-        when WaveOpKind::RemoveSubtask
-          if subtask_id = op.subtask_id
-            deregister_subtasks(Set{subtask_id})
-          end
-        when WaveOpKind::RemoveMasterSubtasks
-          if master_id = op.master_id
-            if master = tasks[master_id]?
-              ids = Set(String).new
-              ids.concat master.subtask_ids
-              deregister_subtasks(ids)
-              master.subtask_ids.clear
-            end
-          end
-        end
+        apply_wave_op(op)
       rescue ex
         failures << ex
         Log.error { "Deferred operation #{op.kind} failed: #{ex.message}" }
       end
       failures
+    end
+
+    private def apply_wave_op(op : WaveOp) : Nil
+      case op.kind
+      when WaveOpKind::RegisterTask
+        op.task.try &.register_with_manager(op.explicit_id)
+      when WaveOpKind::AddInput
+        apply_add_input(op)
+      when WaveOpKind::RegisterSubtaskLink
+        if (subtask_id = op.subtask_id) && (master_id = op.master_id)
+          link_subtask(master_id, subtask_id)
+        end
+      when WaveOpKind::RemoveSubtask
+        if subtask_id = op.subtask_id
+          deregister_subtasks(Set{subtask_id})
+        end
+      when WaveOpKind::RemoveMasterSubtasks
+        apply_remove_master_subtasks(op)
+      end
+    end
+
+    private def apply_add_input(op : WaveOp) : Nil
+      if (task_key = op.task_key) && (input = op.input) && (task = tasks[task_key]?)
+        # Set#<< is idempotent: duplicates collapse on their own
+        task.inputs << input
+      end
+    end
+
+    private def apply_remove_master_subtasks(op : WaveOp) : Nil
+      if master_id = op.master_id
+        if master = tasks[master_id]?
+          ids = Set(String).new
+          ids.concat master.subtask_ids
+          deregister_subtasks(ids)
+          master.subtask_ids.clear
+        end
+      end
     end
 
     # Link a subtask id to its master (assumes the caller holds
