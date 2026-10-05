@@ -218,26 +218,38 @@ module Croupier
 
     # Unsorted transitive closure of `outputs`, memoized so shared
     # dependencies are visited once.
-    def _dependencies(outputs : Array(String))
-      _dependencies_impl(outputs, {} of String => Set(String))
+    #
+    # Both closure queries run through memoized_closure: `dependencies`
+    # walks upstream along a task's inputs, `depends_on` walks
+    # downstream along an input's consumers. The memo holds each
+    # node's own closure, never its siblings'.
+    private def _dependencies(outputs : Array(String))
+      self_if_task = ->(node : String) { tasks.has_key?(node) ? [node] : [] of String }
+      inputs_of = ->(node : String) { tasks[node]?.try(&.@inputs.to_a) || [] of String }
+      memoized_closure(outputs, {} of String => Set(String), self_if_task, inputs_of)
     end
 
+    # Memoized transitive closure over `nodes`: each node contributes
+    # itself when `include_node` says so, then its `edges` recurse.
     # The memo holds each node's own closure, never its siblings'.
-    private def _dependencies_impl(outputs : Array(String), memo : Hash(String, Set(String)))
+    private def memoized_closure(
+      nodes : Array(String),
+      memo : Hash(String, Set(String)),
+      seed : String -> Array(String),
+      edges : String -> Array(String),
+    ) : Set(String)
       result = Set(String).new
-      outputs.each do |output|
-        if memo.has_key?(output)
-          result.concat memo[output]
+      nodes.each do |node|
+        if cached = memo[node]?
+          result.concat cached
           next
         end
 
-        if tasks.has_key?(output)
-          node_result = Set(String).new
-          node_result << output
-          node_result.concat(_dependencies_impl(tasks[output].@inputs.to_a, memo))
-          memo[output] = node_result
-          result.concat(node_result)
-        end
+        node_result = Set(String).new
+        node_result.concat(seed.call(node))
+        node_result.concat(memoized_closure(edges.call(node), memo, seed, edges))
+        memo[node] = node_result
+        result.concat(node_result)
       end
       result
     end
@@ -251,7 +263,16 @@ module Croupier
       # Raises CycleError on a cycle, where the recursive walk would
       # never terminate
       sorted_task_keys
-      depends_on_impl(inputs, {} of String => Set(String), consumers_index)
+      consumers = consumers_index
+      # Walk the downstream graph in task space (memo keyed by task
+      # id): a task seeds its outputs, and the next nodes are the
+      # tasks consuming any of those outputs
+      outputs_of = ->(task_id : String) { tasks_by_id[task_id].outputs }
+      downstream = ->(task_id : String) {
+        tasks_by_id[task_id].outputs.flat_map { |output| consumers.fetch(output, nil) || [] of Task }.map(&.id).uniq!
+      }
+      starts = inputs.flat_map { |input| consumers.fetch(input, nil) || [] of Task }.map(&.id).uniq!
+      memoized_closure(starts, {} of String => Set(String), outputs_of, downstream)
     end
 
     # Input => tasks that consume it.
@@ -269,30 +290,6 @@ module Croupier
       consumers
     end
 
-    # The memo holds each input's own closure (the outputs of its
-    # consumers, plus theirs), never other inputs'.
-    private def depends_on_impl(
-      inputs : Array(String),
-      memo : Hash(String, Set(String)),
-      consumers : Hash(String, Array(Task)),
-    )
-      result = Set(String).new
-      inputs.each do |input|
-        if memo.has_key?(input)
-          result.concat memo[input]
-          next
-        end
-
-        node_result = Set(String).new
-        consumers.fetch(input, nil).try &.each do |task|
-          node_result.concat task.outputs
-          node_result.concat(depends_on_impl(task.outputs, memo, consumers))
-        end
-        memo[input] = node_result
-        result.concat(node_result)
-      end
-      result
-    end
 
     # Compare inputs against the last run and leave the changed ones
     # in @modified for propagate_staleness. Three modes:
