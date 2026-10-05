@@ -259,6 +259,77 @@ describe "TaskManager" do
       end
     end
 
+    it "should rebuild a subtask removed and recreated by the same wave" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        master = Task.new(id: "test_master", inputs: [] of String,
+          always_run: true, master_task: true) { nil }
+        Task.new(id: "render_a", inputs: ["seed"], outputs: ["out_a"]) { "old" }
+        TaskManager.register_subtask("test_master", TaskManager.tasks_by_id["render_a"])
+
+        Task.new(id: "rebuilder", output: "out_r", inputs: ["seed"]) do
+          # The documented rebuild pattern, inside one wave: remove
+          # the previous subtask, then create a fresh one under the
+          # same deterministic id
+          TaskManager.remove_subtask("render_a")
+          Task.new(id: "render_a", inputs: ["seed"], outputs: ["out_a"]) { "new" }
+          TaskManager.register_subtask("test_master", TaskManager.tasks_by_id["render_a"])
+          "r"
+        end
+
+        TaskManager.run_tasks(run_all: true, parallel: true)
+
+        # Call order preserved: the removal applies before the
+        # recreation, so the fresh task does NOT merge into the one
+        # it replaced and nothing is left dangling
+        TaskManager.tasks["out_a"].@procs.size.should eq 1
+        TaskManager.tasks_by_id.has_key?("render_a").should be_true
+        master.subtask_ids.should contain("render_a")
+      end
+    end
+
+    it "should allow add_input on a task created during the same wave" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        Task.new(id: "creator", output: "out_c", inputs: ["seed"]) do
+          Task.new(id: "sub_i", output: "out_i", inputs: [] of String) { "i" }
+          # The target is not registered yet — its Task.new was queued
+          # ahead of this call and registers at the barrier
+          TaskManager.add_input("out_i", "seed")
+          "c"
+        end
+
+        TaskManager.run_tasks(parallel: true)
+
+        TaskManager.tasks["out_i"].@inputs.should contain("seed")
+        # A target that is neither registered nor queued is still a
+        # real unknown-task error
+        expect_raises(Croupier::UnknownTaskError, "Unknown task") do
+          TaskManager.add_input("nope_mid_run", "x")
+        end
+      end
+    end
+
+    it "should report a bad deferred registration as a run failure" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        Task.new(id: "taken", output: "out_t") { "t" }
+        ran = false
+        Task.new(id: "creator", output: "out_c", inputs: ["seed"]) do
+          # Duplicate explicit id: an invalid definition discovered at
+          # the barrier must fail the run through its normal error
+          # reporting — not abort the barrier, drop the remaining
+          # queued operations and skip the state save
+          Task.new(id: "taken", output: "out_d") { "d" }
+          ran = true
+          "c"
+        end
+
+        expect_raises(Croupier::RunFailure) { TaskManager.run_tasks(parallel: true) }
+        ran.should be_true
+        # The creator completed and registered; only the bad
+        # registration failed
+        TaskManager.tasks_by_id.has_key?("creator").should be_true
+      end
+    end
+
     it "should not run a subtask removed by an earlier wave" do
       with_scenario("empty", to_create: {"seed" => "x"}) do
         d_ran = 0

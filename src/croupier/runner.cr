@@ -279,6 +279,7 @@ module Croupier
 
       Log.debug { "Starting work-stealing execution of #{batch.size} tasks with #{num_workers} workers" }
 
+      barrier_failures = [] of Exception
       @data_mutex.synchronize { @parallel_wave_active = true }
       begin
         num_workers.times do |worker_index|
@@ -339,18 +340,22 @@ module Croupier
         # is held (Sync::Mutex is not reentrant).
         @data_mutex.synchronize do
           @parallel_wave_active = false
-          applied = !@pending_inputs.empty? || !@pending_subtask_ops.empty? ||
-                    !@pending_registrations.empty?
-          # Registrations replay first: a worker's call order is
-          # Task.new, then any add_input / subtask operations on it
-          replay_pending_registrations_locked
-          replay_pending_inputs_locked
-          replay_pending_subtask_ops_locked
+          applied = !@pending_wave_ops.empty?
+          # Replay in the workers' call order. A failed deferred
+          # registration is returned, not raised: raising here would
+          # drop the remaining queued operations and skip the run's
+          # epilogue (state save, failure reporting)
+          barrier_failures = replay_pending_wave_ops_locked
           # Nothing changed in a wave with no queued operations:
           # invalidating would force a pointless graph rebuild
           invalidate_graph_cache if applied
         end
       end
+      # Deferred operations that failed at the barrier fail the run
+      # through its normal error reporting (RunFailure#errors). If
+      # the wave body itself raised, that exception keeps precedence
+      # and the barrier failures were logged by the replay.
+      errors.concat(barrier_failures)
       errors
     end
 
