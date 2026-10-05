@@ -218,26 +218,45 @@ module Croupier
 
     # Unsorted transitive closure of `outputs`, memoized so shared
     # dependencies are visited once.
-    def _dependencies(outputs : Array(String))
-      _dependencies_impl(outputs, {} of String => Set(String))
+    #
+    # Both closure queries run through memoized_closure: `dependencies`
+    # walks upstream along a task's inputs, `depends_on` walks
+    # downstream along an input's consumers. The memo holds each
+    # node's own closure, never its siblings'.
+    private def _dependencies(outputs : Array(String))
+      self_if_task = ->(node : String) { tasks.has_key?(node) ? [node] : [] of String }
+      inputs_of = ->(node : String) { tasks[node]?.try(&.inputs.to_a) || [] of String }
+      memoized_closure(outputs, {} of String => Set(String), self_if_task, inputs_of)
     end
 
-    # The memo holds each node's own closure, never its siblings'.
-    private def _dependencies_impl(outputs : Array(String), memo : Hash(String, Set(String)))
+    # Memoized transitive closure over `nodes`: each node contributes
+    # `seed(node)` (upstream: the node itself when it is a task;
+    # downstream: the task's outputs), then `edges(node)` recurse. The
+    # memo holds each node's own closure, never its siblings'. Raises
+    # CycleError if the edges lead back to a node still being walked:
+    # both callers sort first (which raises with the cycle's members),
+    # so this is a backstop for future callers.
+    private def memoized_closure(
+      nodes : Array(String),
+      memo : Hash(String, Set(String)),
+      seed : String -> Array(String),
+      edges : String -> Array(String),
+      visiting : Set(String) = Set(String).new,
+    ) : Set(String)
       result = Set(String).new
-      outputs.each do |output|
-        if memo.has_key?(output)
-          result.concat memo[output]
+      nodes.each do |node|
+        if cached = memo[node]?
+          result.concat cached
           next
         end
+        raise CycleError.new("Cycle detected in the task graph: #{visiting.to_a.sort.join(", ")}") unless visiting.add?(node)
 
-        if tasks.has_key?(output)
-          node_result = Set(String).new
-          node_result << output
-          node_result.concat(_dependencies_impl(tasks[output].@inputs.to_a, memo))
-          memo[output] = node_result
-          result.concat(node_result)
-        end
+        node_result = Set(String).new
+        node_result.concat(seed.call(node))
+        node_result.concat(memoized_closure(edges.call(node), memo, seed, edges, visiting))
+        visiting.delete(node)
+        memo[node] = node_result
+        result.concat(node_result)
       end
       result
     end
@@ -251,8 +270,37 @@ module Croupier
       # Raises CycleError on a cycle, where the recursive walk would
       # never terminate
       sorted_task_keys
-      depends_on_impl(inputs, {} of String => Set(String), consumers_index)
+      consumers = consumers_index
+      # Walk the downstream graph in task space: a task seeds its
+      # outputs, and the next nodes are the tasks consuming any of
+      # those outputs. Nodes are the task's REPRESENTATIVE REGISTRY
+      # KEY, not its id: ids are not unique task identities (an
+      # output-less task may reuse an output-producing task's id, and
+      # generated ids hash the comma-joined outputs, so ["a,b"] and
+      # ["a", "b"] collide), while the representative key resolves
+      # back to exactly this task object in `tasks`.
+      outputs_of = ->(key : String) { tasks[key]?.try(&.outputs) || [] of String }
+      downstream = ->(key : String) { downstream_task_keys(key, consumers) }
+      starts = inputs.flat_map { |input| consumers.fetch(input, NO_CONSUMERS) }
+        .compact_map { |task| task.keys.find { |key| tasks[key]?.same?(task) } }
+        .uniq!
+      memoized_closure(starts, {} of String => Set(String), outputs_of, downstream)
     end
+
+    # Registry keys of the tasks consuming any output of the task
+    # registered as `key` (each task is represented by the first of
+    # its keys that resolves back to it)
+    private def downstream_task_keys(key : String, consumers : Hash(String, Array(Task))) : Array(String)
+      task = tasks[key]?
+      return [] of String unless task
+      task.outputs
+        .flat_map { |output| consumers.fetch(output, NO_CONSUMERS) }
+        .compact_map { |consumer| consumer.keys.find { |k| tasks[k]?.same?(consumer) } }
+        .uniq!
+    end
+
+    # Shared empty for consumers.fetch misses
+    NO_CONSUMERS = [] of Task
 
     # Input => tasks that consume it.
     private def consumers_index
@@ -267,31 +315,6 @@ module Croupier
         end
       end
       consumers
-    end
-
-    # The memo holds each input's own closure (the outputs of its
-    # consumers, plus theirs), never other inputs'.
-    private def depends_on_impl(
-      inputs : Array(String),
-      memo : Hash(String, Set(String)),
-      consumers : Hash(String, Array(Task)),
-    )
-      result = Set(String).new
-      inputs.each do |input|
-        if memo.has_key?(input)
-          result.concat memo[input]
-          next
-        end
-
-        node_result = Set(String).new
-        consumers.fetch(input, nil).try &.each do |task|
-          node_result.concat task.outputs
-          node_result.concat(depends_on_impl(task.outputs, memo, consumers))
-        end
-        memo[input] = node_result
-        result.concat(node_result)
-      end
-      result
     end
 
     # Compare inputs against the last run and leave the changed ones

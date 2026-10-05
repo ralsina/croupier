@@ -995,6 +995,30 @@ describe "TaskManager" do
       end
     end
 
+    it "should not confuse tasks whose generated ids collide" do
+      with_scenario("empty", to_create: {"source" => "s", "source2" => "s2"}) do
+        # Generated ids hash the comma-joined outputs: ["a,b"] and
+        # ["a", "b"] produce the same id, so tasks_by_id cannot be the
+        # downstream identity
+        Task.new(outputs: ["a,b"], inputs: ["source"]) { "x" }
+        Task.new(outputs: ["a", "b"], inputs: ["source2"]) { "y" }
+
+        TaskManager.depends_on("source").to_set.should eq Set.new(["a,b"])
+        TaskManager.depends_on("source2").to_set.should eq Set.new(["a", "b"])
+      end
+    end
+
+    it "should find dependents of a task whose id was reused by an output-less task" do
+      with_scenario("empty", to_create: {"source" => "s"}) do
+        Task.new(id: "shared", output: "out", inputs: ["source"]) { "o" }
+        # An output-less task reusing the id: it takes over the id
+        # index entry, so the id no longer identifies the producer
+        Task.new(id: "shared") { "none" }
+
+        TaskManager.depends_on("source").to_set.should eq Set.new(["out"])
+      end
+    end
+
     it "should preserve input hashes across fast-mode runs" do
       with_scenario("empty", to_create: {"seed" => "one"}) do
         runs = 0

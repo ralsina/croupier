@@ -85,13 +85,13 @@ describe "TaskManager" do
         Task.new(outputs: ["sink"], inputs: ["left", "right"]) { "sink" }
 
         # Querying several outputs at once exercises the shared memo.
-        TaskManager._dependencies(["left", "right", "sink"])
+        TaskManager.dependencies(["left", "right", "sink"])
 
         # Each node's own closure must be exact, regardless of query order.
-        TaskManager._dependencies(["sink"]).should eq Set.new(["root", "left", "right", "sink"])
-        TaskManager._dependencies(["left"]).should eq Set.new(["root", "left"])
-        TaskManager._dependencies(["right"]).should eq Set.new(["root", "right"])
-        TaskManager._dependencies(["root"]).should eq Set.new(["root"])
+        TaskManager.dependencies(["sink"]).to_set.should eq Set.new(["root", "left", "right", "sink"])
+        TaskManager.dependencies(["left"]).to_set.should eq Set.new(["root", "left"])
+        TaskManager.dependencies(["right"]).to_set.should eq Set.new(["root", "right"])
+        TaskManager.dependencies(["root"]).to_set.should eq Set.new(["root"])
 
         # And the public API returns the full diamond in dependency order.
         TaskManager.dependencies("sink").should eq ["root", "left", "right", "sink"]
