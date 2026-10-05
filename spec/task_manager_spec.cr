@@ -981,8 +981,6 @@ describe "TaskManager" do
         TaskManager.run_tasks
         attempts.should eq 1
         sha_a = Digest::SHA1.hexdigest("a1")
-        state = File.read(".croupier")
-        frame_a = state.lines.find!(&.starts_with?("a:")).split(": ", 2)[1]
 
         # Rewrite "a" with identical bytes (the rewrite gets a fresh
         # mtime; no utime restore, or the frame would be
