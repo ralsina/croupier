@@ -29,13 +29,12 @@ describe "Task" do
     it "should be yaml serializable" do
       with_scenario("basic") do
         expected = {
-          "id"          => "77012200e4c39aa279b0d3e16dca43a7b02eb4a5",
-          "inputs"      => [] of String,
-          "outputs"     => ["output1"],
-          "always_run"  => false,
-          "no_save"     => false,
-          "mergeable"   => true,
-          "master_task" => false,
+          "id"         => "77012200e4c39aa279b0d3e16dca43a7b02eb4a5",
+          "inputs"     => [] of String,
+          "outputs"    => ["output1"],
+          "always_run" => false,
+          "no_save"    => false,
+          "mergeable"  => true,
         }
         YAML.parse(TaskManager.tasks["output1"].to_yaml).should eq expected
       end
@@ -167,18 +166,6 @@ describe "Task" do
         end
         # And the registry is untouched by the refusal
         TaskManager.tasks["o"].should eq first
-      end
-    end
-
-    it "should merge subtask ids" do
-      with_scenario("empty") do
-        first = Task.new(output: "o", inputs: [] of String) { "a" }
-        first.subtask_ids << "s1"
-        second = Task.new(output: "p", inputs: [] of String) { "b" }
-        second.subtask_ids << "s2"
-
-        first.merge(second)
-        first.subtask_ids.should eq Set.new(["s1", "s2"])
       end
     end
   end

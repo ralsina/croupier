@@ -1,25 +1,23 @@
-# Croupier SSG - Master/Subtask Example
+# Croupier SSG Example
 
-A simple static site generator demonstrating Croupier's **hierarchical (master/subtask) tasks** feature.
+A simple static site generator demonstrating incremental builds: one
+Croupier task per markdown file, each depending on its source.
 
 ## What This Demonstrates
 
-This example shows how to use master tasks to dynamically create and manage subtasks:
-
-- **Master Task** (`content_master`) - Watches the `content/` folder and automatically creates a subtask for each markdown file
-- **Subtasks** - Regular tasks that render individual markdown files to HTML
-- **Dynamic Scaling** - Add or remove markdown files, and the build system adapts automatically
+- **One task per page** - Each markdown file gets a render task whose
+  input is the source file, so only changed pages rebuild
 - **Incremental Builds** - Only processes files that have changed
+- **Directory structure** - `content/blog/` maps to `output/blog/`
 
 ## Features
 
 - ✨ Real markdown parsing with [markd](https://github.com/icyleaf/markd)
 - 🎨 Beautiful HTML output with [PicoCSS](https://picocss.com/)
 - 📁 Preserves directory structure (e.g., `content/blog/` → `output/blog/`)
-- 🔄 Automatic subtask management
 - ⚡ Incremental builds (only re-renders changed files)
-- 👁️ **Auto mode** - Watch for changes and rebuild automatically, including detecting new files
-- 🗑️ Cleanup of deleted files
+- 👁️ **Auto mode** - Watch for changes and rebuild modified pages automatically
+- 🗑️ Cleanup of outputs for deleted sources
 
 ## Installation
 
@@ -57,13 +55,16 @@ In auto mode, the SSG will:
 
 1. Build the site initially
 2. Watch the `content/` folder for changes
-3. Automatically rebuild when:
-   - Files are created
-   - Files are modified
-   - Files are deleted or moved
-4. Only reprocess the files that changed
+3. Automatically rebuild the pages whose source files changed
 
 Press `Ctrl+C` to stop watching.
+
+**Note:** the task set is built at startup — Croupier runs a fixed
+task graph. Files added or removed while watching are picked up on
+the next restart: stop the program and run it again (this matches
+the "stop / rebuild / start" contract documented in the main
+README). Deleted sources leave their output behind until the next
+run cleans it up.
 
 ### Command-line options
 
@@ -112,80 +113,39 @@ Delete a markdown file and the corresponding HTML file will be removed automatic
 
 ## How It Works
 
-### The Master Task
+One render task per markdown file, created up front from the
+`content/` tree:
 
 ```crystal
-master_task = Croupier::Task.new(
-  id: "content_master",
-  inputs: ["content/"],  # Watch the content folder
-  always_run: true,
-  master_task: true,     # This is a master task
-) do
-  # Scan content/ folder for markdown files
-  current_files = Dir.glob("content/**/*.md").to_set
+Dir.glob("content/**/*.md").each do |md_file|
+  output_file = md_file.sub("content", "output").sub(".md", ".html")
+  FileUtils.mkdir_p(File.dirname(output_file))
 
-  # Compare with previous run (from k/v store)
-  previous_files = ... # load from k/v store
-
-  # Remove subtasks for deleted files
-  (previous_files - current_files).each do |deleted_file|
-    subtask_id = "render_#{Digest::SHA1.hexdigest(deleted_file)[0..6]}"
-    # Remove the subtask and its output file
+  Croupier::Task.new(
+    inputs: [md_file],
+    outputs: [output_file],
+  ) do
+    render_markdown(File.read(md_file), md_file)
   end
+end
 
-  # Create subtasks for new files
-  (current_files - previous_files).each do |new_file|
-    subtask = Croupier::Task.new(
-      id: "render_#{Digest::SHA1.hexdigest(new_file)[0..6]}",
-      inputs: [new_file],
-      outputs: [output_file],
-    ) do
-      render_markdown(File.read(new_file), new_file)
-    end
-
-    Croupier::TaskManager.register_subtask("content_master", subtask)
-  end
+# Remove outputs whose source was deleted
+expected_outputs = Dir.glob("content/**/*.md").map do |md_file|
+  md_file.sub("content", "output").sub(".md", ".html")
+end.to_set
+Dir.glob("output/**/*.html").each do |html|
+  File.delete?(html) unless expected_outputs.includes?(html)
 end
 ```
 
-### Subtasks
+Each render task:
 
-Each subtask is a regular Croupier task that:
-
-1. Takes a markdown file as input
-2. Renders it to HTML
+1. Takes its markdown file as input
+2. Renders it to HTML with the PicoCSS template
 3. Writes the output file
 
-```crystal
-subtask = Croupier::Task.new(
-  id: "render_#{file_hash}",
-  inputs: [markdown_file],
-  outputs: [html_output_file],
-) do
-  render_markdown(File.read(markdown_file), markdown_file)
-end
-```
-
-## Benefits of Master/Subtask Pattern
-
-### Traditional Approach ❌
-
-```crystal
-# Must manually define a task for each file
-Task.new(inputs: ["content/index.md"], outputs: ["output/index.html"]) { ... }
-Task.new(inputs: ["content/about.md"], outputs: ["output/about.html"]) { ... }
-Task.new(inputs: ["content/blog/post1.md"], outputs: ["output/blog/post1.html"]) { ... }
-# ... and so on for every file
-```
-
-### Master/Subtask Approach ✅
-
-```crystal
-# One master task handles everything
-Task.new(master_task: true) do
-  # Automatically creates subtasks for each file
-end
-```
+Re-running does nothing until a source file changes — then only that
+page's task re-runs, and downstream pages are untouched.
 
 ## Project Structure
 

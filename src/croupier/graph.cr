@@ -21,225 +21,56 @@ module Croupier
     # it. Raises if `task_key` is not a registered task, or if the input
     # is one of the task's own keys (that would be a cycle).
     @parallel_wave_active = false
+    # How many runs are executing right now (two can overlap in one
+    # process: an auto cycle and a manual run_tasks waiting on the
+    # state lock). Task creation is a setup-time operation, and
+    # creating tasks mid-run is rejected instead of racing the run's
+    # unlocked registry reads.
+    @run_active = 0
 
     def add_input(task_key : String, input : String) : Bool
       @data_mutex.synchronize do
-        # The target may legitimately be unregistered mid-wave: its
-        # Task.new was queued ahead of this call and registers at the
-        # barrier. A target that is neither registered nor queued is
-        # a real unknown-task error, raised here like always.
-        target = tasks[task_key]? || pending_registration_target(task_key)
-        raise UnknownTaskError.new("Unknown task #{task_key}") unless target
-        raise CycleError.new("Cycle detected: #{input} is a key of task #{task_key} itself") if target.keys.includes?(input)
-        return false if target.inputs.includes?(input)
+        task = tasks[task_key]?
+        raise UnknownTaskError.new("Unknown task #{task_key}") unless task
+        raise CycleError.new("Cycle detected: #{input} is a key of task #{task_key} itself") if task.keys.includes?(input)
+        return false if task.inputs.includes?(input)
 
         if @parallel_wave_active
-          queue_add_input(task_key, input)
+          # Deferred to the wave barrier: mutating an input set while
+          # the coordinator iterates it is a data race
+          @pending_inputs << {task_key, input}
         else
-          target.inputs << input
+          task.inputs << input
           invalidate_graph_cache
         end
         true
       end
     end
 
-    # The task a queued registration will register, when its keys
-    # cover `task_key`
-    private def pending_registration_target(task_key : String) : Task?
-      @pending_wave_ops.each do |op|
-        next unless op.kind.register_task?
-        if task = op.task
-          return task if task.keys.includes?(task_key)
-        end
-      end
-      nil
-    end
+    # add_input calls queued while a parallel wave is executing,
+    # applied by the coordinating fiber at the wave barrier: mutating
+    # an input set from a worker fiber while the coordinator iterates
+    # it (readiness sweeps, early-cutoff staleness recomputes) is a
+    # data race. Applied in call order inside the barrier's single
+    # critical section.
+    @pending_inputs = [] of {String, String}
 
-    # Operations queued while a parallel wave is executing, replayed
-    # in call order by the coordinating fiber at the wave barrier:
-    # Task.new writes the registries, add_input mutates task inputs,
-    # and the subtask operations mutate the registries and master
-    # tracking — none of that may happen while other workers read
-    # them (the worker-side reads take no lock).
-    #
-    # ONE ordered queue for every kind, not per-kind queues: a
-    # worker's call order must be preserved across kinds, because the
-    # operations interact. The documented subtask rebuild (remove the
-    # old render_x, then Task.new a fresh one under the same id)
-    # would merge the fresh task into the one queued for removal if
-    # registrations replayed ahead of removals — resurrecting nothing
-    # and deleting everything.
-    enum WaveOpKind
-      RegisterTask         # task + explicit_id
-      AddInput             # task_key + input
-      RegisterSubtaskLink  # subtask_id + master_id
-      RemoveSubtask        # subtask_id
-      RemoveMasterSubtasks # master_id
-    end
-
-    private record WaveOp,
-      kind : WaveOpKind,
-      task : Task?,
-      explicit_id : String?,
-      task_key : String?,
-      input : String?,
-      subtask_id : String?,
-      master_id : String?
-
-    @pending_wave_ops = [] of WaveOp
-
-    def register_or_defer(task : Task, explicit_id : String?) : Nil
-      deferred = @data_mutex.synchronize do
-        if @parallel_wave_active
-          @pending_wave_ops << WaveOp.new(WaveOpKind::RegisterTask, task, explicit_id, nil, nil, nil, nil)
-          true
-        else
-          false
-        end
-      end
-      task.register_with_manager(explicit_id) unless deferred
-    end
-
-    # Register a subtask with the task manager.
-    #
-    # Thread-safe like add_input: during a parallel wave the link is
-    # queued and applied at the barrier; outside waves it applies
-    # immediately, and the graph is invalidated inside the same lock
-    # acquisition (the fields it touches are not atomic).
-    def register_subtask(master_id : String, subtask : Task)
+    # Register a freshly constructed task. Task creation is a
+    # setup-time operation: the task set is fixed before the first
+    # run, and a mid-run creation would write the registries while
+    # the run's reads take no lock. To change the task set, stop (in
+    # auto mode), rebuild the graph, and start again.
+    def register_task(task : Task, explicit_id : String?) : Nil
+      # Check and register inside the same lock acquisition: with the
+      # call outside, a run starting in between would slip past the
+      # check (the immediate add_input path does the same)
       @data_mutex.synchronize do
-        if @parallel_wave_active
-          @pending_wave_ops << WaveOp.new(WaveOpKind::RegisterSubtaskLink, nil, nil, nil, nil, subtask.id, master_id)
-        else
-          link_subtask(master_id, subtask.id)
-          invalidate_graph_cache
-        end
+        raise UsageError.new(
+          "Cannot create tasks while a run is in progress; build the task graph " \
+          "before running (stop auto mode, rebuild, start again)"
+        ) if @parallel_wave_active || @run_active > 0
+        task.register_with_manager(explicit_id)
       end
-    end
-
-    # Remove one subtask by id: both registry views (tasks and
-    # tasks_by_id) and any master's tracking. This is the supported
-    # way to do per-file subtask cleanup (as in the README's
-    # master-task example): deleting from TaskManager.tasks directly
-    # leaves a stale tasks_by_id entry behind, and the next task
-    # registered under the same id — exactly what the
-    # deterministic subtask ids of that pattern produce on re-adding
-    # a deleted file — is rejected as a duplicate id.
-    #
-    # Thread-safe like register_subtask.
-    def remove_subtask(subtask_id : String)
-      @data_mutex.synchronize do
-        if @parallel_wave_active
-          @pending_wave_ops << WaveOp.new(WaveOpKind::RemoveSubtask, nil, nil, nil, nil, subtask_id, nil)
-        else
-          deregister_subtasks(Set{subtask_id})
-          invalidate_graph_cache
-        end
-      end
-    end
-
-    # Remove all subtasks belonging to a master task.
-    #
-    # Thread-safe like register_subtask.
-    def remove_subtasks(master_id : String)
-      @data_mutex.synchronize do
-        if @parallel_wave_active
-          @pending_wave_ops << WaveOp.new(WaveOpKind::RemoveMasterSubtasks, nil, nil, nil, nil, nil, master_id)
-        elsif master = tasks[master_id]?
-          ids = Set(String).new
-          ids.concat master.subtask_ids
-          deregister_subtasks(ids)
-          master.subtask_ids.clear
-          invalidate_graph_cache
-        end
-      end
-    end
-
-    private def queue_add_input(task_key : String, input : String) : Nil
-      @pending_wave_ops << WaveOp.new(WaveOpKind::AddInput, nil, nil, task_key, input, nil, nil)
-    end
-
-    # Replay the wave operations in call order (assumes the caller
-    # holds @data_mutex: the wave barrier replays inside its single
-    # critical section, where no worker can observe intermediate
-    # states). A master-wide removal is evaluated at REPLAY time
-    # against the master's then-current tracking, so it removes
-    # exactly what the same serial call sequence would.
-    #
-    # A failed registration (duplicate explicit id, unmergeable
-    # collision, mismatched flags) is caught per entry and returned:
-    # it fails the run through the normal error reporting instead of
-    # aborting the barrier, which would drop the remaining queued
-    # operations and skip the run's epilogue.
-    private def replay_pending_wave_ops_locked : Array(Exception)
-      failures = [] of Exception
-      ops = @pending_wave_ops
-      @pending_wave_ops = [] of WaveOp
-      ops.each do |op|
-        apply_wave_op(op)
-      rescue ex
-        failures << ex
-        Log.error { "Deferred operation #{op.kind} failed: #{ex.message}" }
-      end
-      failures
-    end
-
-    private def apply_wave_op(op : WaveOp) : Nil
-      case op.kind
-      when WaveOpKind::RegisterTask
-        op.task.try &.register_with_manager(op.explicit_id)
-      when WaveOpKind::AddInput
-        apply_add_input(op)
-      when WaveOpKind::RegisterSubtaskLink
-        if (subtask_id = op.subtask_id) && (master_id = op.master_id)
-          link_subtask(master_id, subtask_id)
-        end
-      when WaveOpKind::RemoveSubtask
-        if subtask_id = op.subtask_id
-          deregister_subtasks(Set{subtask_id})
-        end
-      when WaveOpKind::RemoveMasterSubtasks
-        apply_remove_master_subtasks(op)
-      end
-    end
-
-    private def apply_add_input(op : WaveOp) : Nil
-      if (task_key = op.task_key) && (input = op.input) && (task = tasks[task_key]?)
-        # Set#<< is idempotent: duplicates collapse on their own
-        task.inputs << input
-      end
-    end
-
-    private def apply_remove_master_subtasks(op : WaveOp) : Nil
-      if master_id = op.master_id
-        if master = tasks[master_id]?
-          ids = Set(String).new
-          ids.concat master.subtask_ids
-          deregister_subtasks(ids)
-          master.subtask_ids.clear
-        end
-      end
-    end
-
-    # Link a subtask id to its master (assumes the caller holds
-    # @data_mutex)
-    private def link_subtask(master_id : String, subtask_id : String) : Nil
-      if master = tasks[master_id]?
-        master.subtask_ids << subtask_id
-      end
-    end
-
-    # Drop a set of subtasks from both registry views and every
-    # master's tracking, in shared passes: one registry scan for the
-    # removals, one id-index pass, one tracking sweep. A per-id loop
-    # would rescan the registry for every removed id — O(M*N) for a
-    # master with M subtasks over N registered tasks (assumes the
-    # caller holds @data_mutex).
-    private def deregister_subtasks(subtask_ids : Set(String)) : Nil
-      return if subtask_ids.empty?
-      tasks.reject! { |_key, task| subtask_ids.includes?(task.id) }
-      subtask_ids.each { |subtask_id| tasks_by_id.delete(subtask_id) }
-      tasks.each_value { |task| task.subtask_ids.reject! { |id| subtask_ids.includes?(id) } }
     end
 
     # Invalidate the cached task graph. Only touches in-memory state:
@@ -270,7 +101,7 @@ module Croupier
         @graph_sorted = [] of String
         @graph_invalidated = false
         # Invalidate the all_inputs cache so it is rebuilt with the
-        # new subtask inputs
+        # new dynamically created tasks
         @all_inputs = nil
 
         # All inputs are vertices

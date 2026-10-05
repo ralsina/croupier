@@ -1,27 +1,24 @@
-# My First Blog Post
+# First Post
 
-Welcome to my blog! This post is automatically generated from markdown.
+A sample blog post rendered by the Croupier SSG example.
 
-## Why I Love Crystal
+## Why So Simple?
 
-Crystal is awesome because:
+The generator is a demonstration of incremental builds, not of
+blogging: each markdown file in `content/` becomes one HTML page,
+and only the pages whose sources changed are re-rendered on the
+next run.
 
-1. **Ruby-like syntax** - Beautiful and readable
-2. **Compiled** - Fast performance
-3. **Type-safe** - Catches errors at compile time
+## Markdown Features
 
-### Code Example
+Code:
 
 ```crystal
-def greet(name : String) : String
-  "Hello, #{name}!"
-end
-
-puts greet("World")  # => "Hello, World!"
+puts "rendered by croupier"
 ```
 
-## Conclusion
+Lists, *emphasis*, **strong** text, and
 
-Thanks for reading! This blog post was generated using Croupier's master/subtask pattern.
+> block quotes
 
-*Published on January 30, 2026*
+all render through [markd](https://github.com/icyleaf/markd).

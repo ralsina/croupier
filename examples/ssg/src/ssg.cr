@@ -1,8 +1,8 @@
 #!/usr/bin/env crystal
 
-# This example demonstrates hierarchical (master/subtask) tasks for a static site generator.
-# A master task watches the `content/` folder and creates a subtask for each markdown file.
-# When markdown files are added or removed, the subtasks are dynamically updated.
+# This example demonstrates a static site generator built on Croupier:
+# one task per markdown file, where each render task depends on its
+# source file, so only changed pages rebuild.
 #
 # Usage:
 #   ./ssg              # Build once
@@ -11,7 +11,6 @@
 
 require "croupier"
 require "markd"
-require "digest"
 require "file_utils"
 require "option_parser"
 
@@ -98,67 +97,32 @@ FileUtils.mkdir_p("content")
 FileUtils.mkdir_p("output")
 FileUtils.mkdir_p("output/blog")
 
-# Master task watches content/ folder and creates subtask per markdown file
-Croupier::Task.new(
-  id: "content_master",
-  inputs: ["content/"],
-  always_run: true,
-  master_task: true,
-) do
-  current_files = Dir.glob("content/**/*.md").to_set
+# One render task per markdown file, created up front: each render
+# depends on its source file, so a rebuild only re-renders pages
+# whose content changed.
+current_files = Dir.glob("content/**/*.md").to_set
+current_files.each do |md_file|
+  output_file = md_file.sub("content", "output").sub(".md", ".html")
 
-  # Get previously created subtasks from k/v store
-  previous_data = Croupier::TaskManager.get("content_subtasks")
-  previous_files = previous_data ? previous_data.split("\n").to_set : Set(String).new
+  # Ensure output directory exists
+  FileUtils.mkdir_p(File.dirname(output_file))
 
-  # Remove output files for deleted sources
-  (previous_files - current_files).each do |deleted_file|
-    puts "🗑️  Removing output for deleted file: #{deleted_file}"
-    output_path = deleted_file.sub("content", "output").sub(".md", ".html")
-    File.delete?(output_path)
+  Croupier::Task.new(
+    inputs: [md_file],
+    outputs: [output_file],
+  ) do
+    puts "  📝 Rendering #{md_file} -> #{output_file}"
+    render_markdown(File.read(md_file), md_file)
   end
+end
 
-  # Rebuild the subtask set from the CURRENT files: every previous
-  # subtask is removed first, then one subtask per current file is
-  # created fresh. Creating only for *new* files breaks across
-  # processes — with a persistent k/v store, previous_files already
-  # holds every file, so existing files would never get their
-  # subtasks back after a restart. Removing first also keeps the
-  # per-file procs from accumulating through id merges. (Never
-  # delete from TaskManager.tasks directly: that leaves a stale
-  # tasks_by_id entry, and re-adding the file would then be rejected
-  # as a duplicate id.)
-  previous_files.each do |old_file|
-    Croupier::TaskManager.remove_subtask(
-      "render_#{Digest::SHA1.hexdigest(old_file)[0..6]}")
-  end
-
-  # Create one subtask per current file
-  current_files.each do |new_file|
-    puts "✨ Ensuring subtask for file: #{new_file}"
-    subtask_id = "render_#{Digest::SHA1.hexdigest(new_file)[0..6]}"
-    output_file = new_file.sub("content", "output").sub(".md", ".html")
-
-    # Ensure output directory exists
-    output_dir = File.dirname(output_file)
-    FileUtils.mkdir_p(output_dir)
-
-    subtask = Croupier::Task.new(
-      id: subtask_id,
-      inputs: [new_file],
-      outputs: [output_file],
-    ) do
-      puts "  📝 Rendering #{new_file} -> #{output_file}"
-      render_markdown(File.read(new_file), new_file)
-    end
-
-    Croupier::TaskManager.register_subtask("content_master", subtask)
-  end
-
-  # Save current list for next run
-  Croupier::TaskManager.set("content_subtasks", current_files.to_a.join("\n"))
-
-  nil # Master tasks return nil
+# Remove outputs whose source was deleted (nothing tracks deleted
+# sources anymore, so compare the output tree against the sources)
+expected_outputs = current_files.map do |md_file|
+  md_file.sub("content", "output").sub(".md", ".html")
+end.to_set
+Dir.glob("output/**/*.html").each do |html|
+  File.delete?(html) unless expected_outputs.includes?(html)
 end
 
 if auto_mode
@@ -175,8 +139,7 @@ if auto_mode
     puts "  ✓ Task completed: #{task_id}"
   end
 
-  # Build once initially to create subtasks
-  Croupier::TaskManager.run_tasks
+  # Initial build
   Croupier::TaskManager.run_tasks
 
   puts ""
@@ -185,9 +148,10 @@ if auto_mode
   puts "👀 Watching for changes... (Ctrl+C to stop)"
   puts ""
   puts "Auto mode detects:"
-  puts "  - New files added to content/"
-  puts "  - Modified files"
-  puts "  - Deleted or moved files"
+  puts "  - Modified files in content/ (rebuilds just those pages)"
+  puts ""
+  puts "Note: the task set is built at startup, so files added or"
+  puts "deleted while watching need a restart (stop, run again)."
   puts ""
 
   # Start auto mode - this will watch for changes and rebuild
@@ -197,16 +161,13 @@ if auto_mode
   sleep
 else
   puts "=" * 60
-  puts "🚀 Croupier SSG - Master/Subtask Example"
+  puts "🚀 Croupier SSG Example"
   puts "=" * 60
   puts ""
   puts "📂 Building site from content/ folder..."
   puts ""
 
-  # Run all tasks (master task will run first and create subtasks)
-  Croupier::TaskManager.run_tasks
-
-  # Run again to execute the newly created subtasks
+  # Run all render tasks; unchanged pages skip via early cutoff
   Croupier::TaskManager.run_tasks
 
   puts ""

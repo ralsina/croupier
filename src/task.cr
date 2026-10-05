@@ -56,9 +56,6 @@ module Croupier
       TaskManager.add_mutex(name) if name
     end
 
-    property? master_task : Bool = false
-    @[YAML::Field(ignore: true)]
-    property subtask_ids : Set(String) = Set(String).new
     @[YAML::Field(ignore: true)]
     property? outputs_changed : Bool = false # Track if outputs actually changed during run
 
@@ -100,13 +97,12 @@ module Croupier
       always_run : Bool = false,
       mergeable : Bool = true,
       mutex : String? = nil,
-      master_task : Bool = false,
       &block : TaskProc
     )
       # Set before delegating: the inner initialize may merge this
       # task with others, and the merge checks mutex compatibility
       @mutex = mutex
-      initialize(outputs, inputs, block, no_save, id, always_run, mergeable, master_task)
+      initialize(outputs, inputs, block, no_save, id, always_run, mergeable)
       TaskManager.add_mutex(mutex) if mutex
     end
 
@@ -118,7 +114,6 @@ module Croupier
       id : String? = nil,
       always_run : Bool = false,
       mergeable : Bool = true,
-      master_task : Bool = false,
     )
       # An empty kv:// key can never be satisfied (get("") on a store
       # that never holds it): better to fail at declaration
@@ -142,24 +137,16 @@ module Croupier
       @inputs = Set.new inputs
       @no_save = no_save
       @mergeable = mergeable
-      @master_task = master_task
 
-      # Register with the task manager — or defer the registration to
-      # the wave barrier when constructed from a worker fiber
-      # mid-wave: Task.new writes the registries, and that must not
-      # happen while other workers read them (the worker-side reads
-      # take no lock). The deferral re-runs the collision check at
-      # replay time against the then-current registry, so tasks
-      # created concurrently during one wave still merge correctly.
-      TaskManager.register_or_defer(self, id)
+      # Register with the task manager. Rejected mid-run: the task
+      # set is fixed before the first run (see TaskManager.register_task).
+      TaskManager.register_task(self, id)
     end
 
     # Register this task in the TaskManager: merge every task it has
     # an output/id collision with into one, and register the survivor
-    # on every output/id of the merged set. Called from Task.new and,
-    # for tasks created during a parallel wave, again from the wave
-    # barrier's replay — where the collision check runs against the
-    # then-current registry. Not part of the public API.
+    # on every output/id of the merged set. Called from Task.new.
+    # Not part of the public API.
     # :nodoc:
     def register_with_manager(explicit_id : String?) : Nil
       to_merge = colliding_tasks
@@ -193,8 +180,7 @@ module Croupier
     end
 
     # An explicit id on an output-ful task must be unique among tasks
-    # that stay separate: subtask tracking matches tasks BY id, so a
-    # duplicate would make remove_subtasks delete unrelated tasks.
+    # that stay separate: the id index assumes one task per id.
     # (Output-less tasks may still merge under a shared id, and a
     # collision with a merge target is fine: one task, one id.)
     # The check goes through TaskManager's id index: scanning every
@@ -217,7 +203,6 @@ module Croupier
       to_merge.each do |task|
         raise TaskDefinitionError.new("Cannot merge tasks with different no_save settings") unless task.no_save? == first.no_save?
         raise TaskDefinitionError.new("Cannot merge tasks with different always_run settings") unless task.always_run? == first.always_run?
-        raise TaskDefinitionError.new("Cannot merge master task with non-master task") unless task.master_task? == first.master_task?
         raise TaskDefinitionError.new("Cannot merge tasks with different mutexes") unless task.mutex == first.mutex
       end
     end
@@ -241,12 +226,11 @@ module Croupier
       always_run : Bool = false,
       mergeable : Bool = true,
       mutex : String? = nil,
-      master_task : Bool = false,
       &block : TaskProc
     )
       initialize(
         output ? [output] : [] of String,
-        inputs, no_save, id, always_run, mergeable, mutex, master_task,
+        inputs, no_save, id, always_run, mergeable, mutex,
         &block
       )
     end
@@ -260,7 +244,6 @@ module Croupier
       id : String? = nil,
       always_run : Bool = false,
       mergeable : Bool = true,
-      master_task : Bool = false,
     )
       initialize(
         outputs: output ? [output] : [] of String,
@@ -269,8 +252,7 @@ module Croupier
         no_save: no_save,
         id: id,
         always_run: always_run,
-        mergeable: mergeable,
-        master_task: master_task
+        mergeable: mergeable
       )
     end
 
@@ -509,7 +491,6 @@ module Croupier
     def merge(other : Task)
       raise TaskDefinitionError.new("Cannot merge tasks with different no_save settings") unless no_save? == other.no_save?
       raise TaskDefinitionError.new("Cannot merge tasks with different always_run settings") unless always_run? == other.always_run?
-      raise TaskDefinitionError.new("Cannot merge master task with non-master task") unless master_task? == other.master_task?
       # A merged task runs all procs under one mutex: silently keeping
       # only one side's would break the other's mutual exclusion
       raise TaskDefinitionError.new("Cannot merge tasks with different mutexes") unless mutex == other.mutex
@@ -519,7 +500,6 @@ module Croupier
       @outputs += other.@outputs
       @inputs += other.@inputs
       @procs += other.@procs
-      @subtask_ids |= other.@subtask_ids
       self
     end
   end

@@ -97,121 +97,27 @@ to create any output files. Other than that, it's just a regular task.
 If a task expects the TaskManager to create multiple files, it
 should return an array of strings.
 
-## Master/Subtask Tasks
+## The Task Set Is Fixed Before Running
 
-Croupier supports hierarchical tasks through the **master/subtask pattern**. This allows you to create tasks that dynamically generate and manage other tasks at runtime.
+Tasks are created at setup time, before the first `run_tasks` (or
+`auto_run`) call. Creating a task while a run is in progress raises
+`UsageError` — mid-run registration would mutate the task registries
+while the run reads them.
 
-### What are Master Tasks?
+If the task set depends on things only known at runtime (files in a
+folder, entries in a database), build the graph when those things
+change:
 
-A **master task** is a special type of task that:
+* **Batch mode**: collect the files, create the tasks, call
+  `run_tasks`. Unchanged tasks skip via early cutoff, so re-running
+  with the same set is cheap.
+* **Auto mode**: stop with `auto_stop`, rebuild the task graph, and
+  call `auto_run` again. (`TaskManager.cleanup` resets everything if
+  you want to build from scratch.)
 
-* Has `master_task: true` in its definition
-* Runs on every build (typically with `always_run: true`)
-* Dynamically creates, removes, or manages **subtasks** based on runtime conditions
-* Has no outputs of its own (returns `nil`)
-
-### When to Use Master/Subtask Pattern
-
-The master/subtask pattern is ideal when:
-
-* You have a variable number of similar tasks (e.g., processing files in a directory)
-* Tasks need to be created dynamically based on folder contents
-* You want to avoid manually defining a task for each file
-* The set of tasks changes frequently (files added/removed)
-
-### Example: Static Site Generator
-
-```crystal
-require "croupier"
-
-# Master task watches content/ folder and creates subtasks for each markdown file
-master_task = Croupier::Task.new(
-  id: "content_master",
-  inputs: ["content/"],
-  always_run: true,
-  master_task: true,
-) do
-  current_files = Dir.glob("content/**/*.md").to_set
-
-  # Get previously created subtasks from k/v store
-  previous_data = Croupier::TaskManager.get("content_subtasks")
-  previous_files = previous_data ? previous_data.split("\n").to_set : Set(String).new
-
-  # Remove output files for deleted sources
-  (previous_files - current_files).each do |deleted_file|
-    puts "🗑️  Removing output for deleted file: #{deleted_file}"
-    output_path = deleted_file.sub("content", "output").sub(".md", ".html")
-    File.delete?(output_path)
-  end
-
-  # Rebuild the subtask set from the CURRENT files: every previous
-  # subtask is removed first, then one subtask per current file is
-  # created fresh. Creating only for *new* files breaks across
-  # processes — with a persistent k/v store, previous_files already
-  # holds every file, so existing files would never get their
-  # subtasks back after a restart. remove_subtask cleans up every
-  # registry view (deleting from TaskManager.tasks directly would
-  # leave a stale tasks_by_id entry that rejects the same
-  # deterministic id on re-registration), and removing first keeps
-  # the per-file procs from accumulating through id merges.
-  previous_files.each do |old_file|
-    Croupier::TaskManager.remove_subtask(
-      "render_#{Digest::SHA1.hexdigest(old_file)[0..6]}")
-  end
-
-  # Create one subtask per current file
-  current_files.each do |new_file|
-    puts "✨ Ensuring subtask for file: #{new_file}"
-    subtask_id = "render_#{Digest::SHA1.hexdigest(new_file)[0..6]}"
-    output_file = new_file.sub("content", "output").sub(".md", ".html")
-
-    subtask = Croupier::Task.new(
-      id: subtask_id,
-      inputs: [new_file],
-      outputs: [output_file],
-    ) do
-      # Render markdown to HTML
-      content = File.read(new_file)
-      Markd.to_html(content)
-    end
-
-    Croupier::TaskManager.register_subtask("content_master", subtask)
-  end
-
-  # Save current list for next run
-  Croupier::TaskManager.set("content_subtasks", current_files.to_a.join("\n"))
-
-  nil  # Master tasks return nil
-end
-
-# Run tasks (master task creates subtasks, then we run again to execute them)
-Croupier::TaskManager.run_tasks
-Croupier::TaskManager.run_tasks
-```
-
-### Key Methods
-
-* **`register_subtask(master_id, subtask)`**: Register a newly created subtask with a master task
-* **`remove_subtasks(master_id)`**: Remove all subtasks belonging to a master task
-* **`invalidate_graph_cache`**: Force the task graph to rebuild (called automatically when subtasks are added/removed)
-
-### Important Notes
-
-1. **Double Execution**: When using master tasks, call `run_tasks` twice:
-   * First run: Master task executes and creates/removes subtasks
-   * Second run: Newly created subtasks execute
-
-   In auto mode, this is handled automatically - Croupier detects when the task graph changes and runs tasks again as needed.
-
-2. **Subtasks are Regular Tasks**: Subtasks participate in the task graph just like any other task. They can have dependencies, outputs, and are subject to incremental builds.
-
-3. **Graph Invalidation**: When `register_subtask` or `remove_subtasks` is called, the task graph is automatically invalidated and rebuilt on the next `run_tasks` call.
-
-4. **State Persistence**: Use the k/v store to persist state between runs (e.g., the list of files from the previous build).
-
-### See It In Action
-
-For a complete working example, see the `examples/ssg/` directory, which contains a full static site generator using the master/subtask pattern.
+Tasks can still discover dependencies at runtime: `add_input` grows
+an existing task's inputs from inside a proc, and is safe during
+parallel runs (the addition is deferred to the end of the wave).
 
 ## Installation
 
