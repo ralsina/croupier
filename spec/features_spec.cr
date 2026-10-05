@@ -190,6 +190,14 @@ describe "TaskManager" do
           # instead of mutating registries the coordinator iterates
           TaskManager.remove_subtask("sub_a")
           TaskManager.register_subtask("test_master", TaskManager.tasks_by_id["sub_b"])
+          # Deferral check, no timing assumptions: the coordinator
+          # cannot apply queued operations until this worker
+          # finishes, so right here the registries must still be
+          # untouched
+          TaskManager.tasks.has_key?("out_a").should be_true
+          TaskManager.tasks_by_id.has_key?("sub_a").should be_true
+          master.subtask_ids.should contain("sub_a")
+          master.subtask_ids.should_not contain("sub_b")
           ran = true
           "w"
         end
@@ -202,6 +210,59 @@ describe "TaskManager" do
         TaskManager.tasks_by_id.has_key?("sub_b").should be_true
         master.subtask_ids.should contain("sub_b")
         master.subtask_ids.should_not contain("sub_a")
+      end
+    end
+
+    it "should not run a subtask removed by an earlier wave" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        d_ran = 0
+        # sub_d waits for the producer's output, so it is not ready
+        # in wave 1; the producer removes it during wave 1. Without
+        # pruning the wave candidates against the registry, sub_d
+        # would run in wave 2 and recreate its output.
+        Task.new(id: "sub_d", output: "out_d", inputs: ["out_p"]) { d_ran += 1; "d" }
+        Task.new(id: "producer", output: "out_p", inputs: ["seed"]) do
+          TaskManager.remove_subtask("sub_d")
+          "p"
+        end
+
+        TaskManager.run_tasks(parallel: true)
+
+        d_ran.should eq 0
+        File.exists?("out_d").should be_false
+        TaskManager.tasks.has_key?("out_d").should be_false
+        TaskManager.tasks_by_id.has_key?("sub_d").should be_false
+      end
+    end
+
+    it "should replay ordered subtask operations consistently" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        master = Task.new(id: "test_master", inputs: [] of String,
+          always_run: true, master_task: true) { nil }
+        Task.new(id: "sub_c", inputs: ["seed"], outputs: ["out_c"]) { "c" }
+        Task.new(id: "sub_d", inputs: ["seed"], outputs: ["out_d"]) { "d" }
+
+        ran = false
+        Task.new(id: "wave_member", inputs: [] of String, outputs: ["out_w"]) do
+          # register then remove the same subtask: the replay must
+          # keep the call order (a per-kind queue would apply the
+          # removal first and the link would resurrect the id), and
+          # register-then-remove_all must remove both
+          TaskManager.register_subtask("test_master", TaskManager.tasks_by_id["sub_c"])
+          TaskManager.remove_subtask("sub_c")
+          TaskManager.register_subtask("test_master", TaskManager.tasks_by_id["sub_d"])
+          TaskManager.remove_subtasks("test_master")
+          ran = true
+          "w"
+        end
+
+        TaskManager.run_tasks(run_all: true, parallel: true)
+        ran.should be_true
+        TaskManager.tasks.has_key?("out_c").should be_false
+        TaskManager.tasks.has_key?("out_d").should be_false
+        TaskManager.tasks_by_id.has_key?("sub_c").should be_false
+        TaskManager.tasks_by_id.has_key?("sub_d").should be_false
+        master.subtask_ids.should be_empty
       end
     end
 

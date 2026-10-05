@@ -195,6 +195,12 @@ module Croupier
       errors = [] of Exception
 
       loop do
+        # A prior wave's barrier may have deregistered candidates
+        # (master-task subtask removals): prune them so a removed
+        # task can't run in a later wave and recreate its outputs —
+        # the parallel counterpart of the serial runner's per-task
+        # registry lookups
+        _tasks = _tasks.select { |task| task.keys.any? { |key| tasks.fetch(key, nil) == task } }
         batch = next_batch(_tasks, run_all, finished_tasks, failed_tasks, keep_going)
         if batch.nil?
           break

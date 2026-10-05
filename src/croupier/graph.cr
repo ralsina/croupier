@@ -72,23 +72,42 @@ module Croupier
     # worker fiber while the coordinator iterates them — readiness
     # sweeps, early-cutoff scans, results bookkeeping — is a data
     # race no mutex can fix, because those iterations take no lock.
-    @pending_subtask_links = [] of {String, String}
-    @pending_subtask_removals = [] of String
+    # Subtask operations queued while a parallel wave is executing,
+    # replayed in order by the coordinating fiber at the wave barrier
+    # (same lifecycle as @pending_inputs): mutating the registries
+    # from a worker fiber while the coordinator iterates them —
+    # readiness sweeps, early-cutoff scans, results bookkeeping — is
+    # a data race no mutex can fix, because those iterations take no
+    # lock.
+    #
+    # ONE ordered queue, not per-kind queues: a worker calling
+    # register(master, s) then remove(s.id) must replay in that
+    # order, or a link applied after the removal would resurrect it.
+    # The tuple is (kind, subtask_id, master_id); master_id is only
+    # meaningful for Register and RemoveMasterSubtasks.
+    enum SubtaskOp
+      Register
+      Remove
+      RemoveMasterSubtasks
+    end
+
+    @pending_subtask_ops = [] of {SubtaskOp, String, String}
 
     # Register a subtask with the task manager.
     #
     # Thread-safe like add_input: during a parallel wave the link is
     # queued and applied at the barrier; outside waves it applies
-    # immediately.
+    # immediately, and the graph is invalidated inside the same lock
+    # acquisition (the fields it touches are not atomic).
     def register_subtask(master_id : String, subtask : Task)
       @data_mutex.synchronize do
         if @parallel_wave_active
-          @pending_subtask_links << {master_id, subtask.id}
+          @pending_subtask_ops << {SubtaskOp::Register, subtask.id, master_id}
         else
           link_subtask(master_id, subtask.id)
+          invalidate_graph_cache
         end
       end
-      invalidate_graph_cache
     end
 
     # Remove one subtask by id: both registry views (tasks and
@@ -104,12 +123,12 @@ module Croupier
     def remove_subtask(subtask_id : String)
       @data_mutex.synchronize do
         if @parallel_wave_active
-          @pending_subtask_removals << subtask_id
+          @pending_subtask_ops << {SubtaskOp::Remove, subtask_id, ""}
         else
-          deregister_subtask(subtask_id)
+          deregister_subtasks(Set{subtask_id})
+          invalidate_graph_cache
         end
       end
-      invalidate_graph_cache
     end
 
     # Remove all subtasks belonging to a master task.
@@ -117,29 +136,45 @@ module Croupier
     # Thread-safe like register_subtask.
     def remove_subtasks(master_id : String)
       @data_mutex.synchronize do
-        if master = tasks[master_id]?
-          if @parallel_wave_active
-            @pending_subtask_removals.concat(master.subtask_ids)
-          else
-            master.subtask_ids.each { |subtask_id| deregister_subtask(subtask_id) }
-          end
+        if @parallel_wave_active
+          @pending_subtask_ops << {SubtaskOp::RemoveMasterSubtasks, "", master_id}
+        elsif master = tasks[master_id]?
+          ids = Set(String).new
+          ids.concat master.subtask_ids
+          deregister_subtasks(ids)
           master.subtask_ids.clear
+          invalidate_graph_cache
         end
       end
-      invalidate_graph_cache
     end
 
-    # Apply the subtask operations queued during a wave. Runs on the
-    # coordinating fiber at the barrier, where nothing iterates the
-    # registries concurrently.
+    # Replay the subtask operations queued during a wave, in call
+    # order. Runs on the coordinating fiber at the barrier, where
+    # nothing iterates the registries concurrently. A master-wide
+    # removal is evaluated at REPLAY time against the master's
+    # then-current tracking, so it removes exactly what the same
+    # serial call sequence would — including subtasks registered by
+    # earlier ops of the same batch.
     private def apply_pending_subtask_ops : Nil
+      return if @pending_subtask_ops.empty?
       @data_mutex.synchronize do
-        removals = @pending_subtask_removals.dup
-        @pending_subtask_removals.clear
-        links = @pending_subtask_links.dup
-        @pending_subtask_links.clear
-        removals.each { |subtask_id| deregister_subtask(subtask_id) }
-        links.each { |master_id, subtask_id| link_subtask(master_id, subtask_id) }
+        ops = @pending_subtask_ops.dup
+        @pending_subtask_ops.clear
+        ops.each do |kind, subtask_id, master_id|
+          case kind
+          when SubtaskOp::Register
+            link_subtask(master_id, subtask_id)
+          when SubtaskOp::Remove
+            deregister_subtasks(Set{subtask_id})
+          when SubtaskOp::RemoveMasterSubtasks
+            if master = tasks[master_id]?
+              ids = Set(String).new
+              ids.concat master.subtask_ids
+              deregister_subtasks(ids)
+              master.subtask_ids.clear
+            end
+          end
+        end
       end
       invalidate_graph_cache
     end
@@ -152,12 +187,17 @@ module Croupier
       end
     end
 
-    # Drop a subtask from both registry views and any master's
-    # tracking (assumes the caller holds @data_mutex)
-    private def deregister_subtask(subtask_id : String) : Nil
-      tasks.reject! { |_key, task| task.id == subtask_id }
-      tasks_by_id.delete(subtask_id)
-      tasks.each_value(&.subtask_ids.delete(subtask_id))
+    # Drop a set of subtasks from both registry views and every
+    # master's tracking, in shared passes: one registry scan for the
+    # removals, one id-index pass, one tracking sweep. A per-id loop
+    # would rescan the registry for every removed id — O(M*N) for a
+    # master with M subtasks over N registered tasks (assumes the
+    # caller holds @data_mutex).
+    private def deregister_subtasks(subtask_ids : Set(String)) : Nil
+      return if subtask_ids.empty?
+      tasks.reject! { |_key, task| subtask_ids.includes?(task.id) }
+      subtask_ids.each { |subtask_id| tasks_by_id.delete(subtask_id) }
+      tasks.each_value { |task| task.subtask_ids.reject! { |id| subtask_ids.includes?(id) } }
     end
 
     # Invalidate the cached task graph. Only touches in-memory state:
