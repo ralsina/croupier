@@ -32,19 +32,27 @@ module Croupier
     # class variable could leak a watcher nobody closes.
     @@watcher_lock = Sync::Mutex.new
 
+    # Serializes stop callers through the whole shutdown handshake:
+    # the first caller to take the mutex runs it (and flips the
+    # running flag only at the end), every other caller either
+    # blocks on the mutex until the handshake completed or — once
+    # the flag is down — returns knowing the stop is done. That
+    # keeps auto_stop's synchronous contract under concurrency:
+    # when it returns, the autorun fiber is no longer running,
+    # whoever performed the stop. Without the mutex a second
+    # concurrent caller raced past the flag check and blocked
+    # forever on the unbuffered control channel (or raised on it
+    # once the first stop closed it).
+    @@stop_mutex = Sync::Mutex.new
+
     def auto_stop
-      # CAS gate: exactly one caller runs the shutdown handshake.
-      # A plain flag check let two concurrent callers through, and
-      # the second one then blocked forever sending to the
-      # unbuffered control channel (or raised on it once the first
-      # stop had closed it). Losers of the CAS see the flag already
-      # false and return — either the autorun fiber was never
-      # started, or someone else is stopping it.
-      won_stop, _previous = @autorun_running.compare_and_set(true, false)
-      return unless won_stop
-      @autorun_control.send true
-      @autorun_control.receive?
-      @autorun_control = Channel(Bool).new
+      @@stop_mutex.synchronize do
+        return unless @autorun_running.get
+        @autorun_control.send true
+        @autorun_control.receive?
+        @autorun_control = Channel(Bool).new
+        @autorun_running.set(false)
+      end
     end
 
     # Snapshot of the queued changes, safe to call from the watcher callback
