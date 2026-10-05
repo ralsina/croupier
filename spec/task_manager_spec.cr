@@ -968,6 +968,35 @@ describe "TaskManager" do
       end
     end
 
+    it "should remove a task from every registry view with remove_task" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        Task.new(id: "gone", output: "out_g", inputs: ["seed"]) { "g" }
+        TaskManager.tasks_by_id.has_key?("gone").should be_true
+
+        TaskManager.remove_task("out_g")
+
+        TaskManager.tasks.has_key?("out_g").should be_false
+        TaskManager.tasks_by_id.has_key?("gone").should be_false
+        expect_raises(Croupier::UnknownTaskError) { TaskManager.remove_task("out_g") }
+
+        # Re-creating under the same id works: raw tasks.delete used
+        # to leave the id index stale and reject the replacement
+        Task.new(id: "gone", output: "out_g", inputs: ["seed"]) { "g2" }
+        TaskManager.tasks_by_id["gone"].@procs.size.should eq 1
+        TaskManager.run_tasks
+        File.read("out_g").should eq "g2"
+      end
+    end
+
+    it "should remove every key of a multi-output task" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        Task.new(outputs: ["out_a", "out_b"], inputs: ["seed"]) { ["a", "b"] }
+        TaskManager.remove_task("out_a")
+        TaskManager.tasks.has_key?("out_a").should be_false
+        TaskManager.tasks.has_key?("out_b").should be_false
+      end
+    end
+
     it "should preserve input hashes across fast-mode runs" do
       with_scenario("empty", to_create: {"seed" => "one"}) do
         runs = 0

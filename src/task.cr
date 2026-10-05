@@ -33,8 +33,10 @@ module Croupier
     # procs on parallel workers races and, even done safely, cannot
     # affect the current run (wave planning happens before workers
     # start). Use `TaskManager.add_input`, which is guarded and
-    # invalidates the caches a later run needs.
-    property inputs : Set(String) = Set(String).new
+    # invalidates the caches a later run needs. Read-only by design:
+    # every write goes through add_input (or the registration path),
+    # both under the manager's data lock.
+    getter inputs : Set(String) = Set(String).new
     property outputs : Array(String) = [] of String
     # Tri-state staleness in a single atomic field, so reads from
     # parallel workers are safe without extra locking. The stale,

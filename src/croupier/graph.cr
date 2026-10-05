@@ -60,6 +60,8 @@ module Croupier
     # run, and a mid-run creation would write the registries while
     # the run's reads take no lock. To change the task set, stop (in
     # auto mode), rebuild the graph, and start again.
+    # @parallel_wave_active implies @run_active > 0 (a wave only runs
+    # inside a run), so the run counter alone decides
     def register_task(task : Task, explicit_id : String?) : Nil
       # Check and register inside the same lock acquisition: with the
       # call outside, a run starting in between would slip past the
@@ -68,10 +70,27 @@ module Croupier
         raise UsageError.new(
           "Cannot create tasks while a run is in progress; build the task graph " \
           "before running (stop auto mode, rebuild, start again)"
-          # @parallel_wave_active implies @run_active > 0 (a wave only
-          # runs inside a run), so the run counter alone decides
         ) if @run_active > 0
         task.register_with_manager(explicit_id)
+      end
+    end
+
+    # Remove a task by key: drops every registry key that resolves to
+    # it (a multi-output task is registered under each output) and its
+    # id-index entry, so re-creating a task under the same id works.
+    # This is the supported removal — raw `TaskManager.tasks.delete`
+    # leaves tasks_by_id stale, and the duplicate-id check then
+    # rejects the replacement. Raises UnknownTaskError when the key
+    # is not registered.
+    def remove_task(task_key : String) : Nil
+      @data_mutex.synchronize do
+        task = tasks[task_key]?
+        raise UnknownTaskError.new("Unknown task #{task_key}") unless task
+        task.keys.each do |key|
+          tasks.delete(key) if tasks[key]?.same?(task)
+        end
+        tasks_by_id.delete(task.id) if tasks_by_id[task.id]?.same?(task)
+        invalidate_graph_cache
       end
     end
 
