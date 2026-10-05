@@ -91,26 +91,12 @@ describe "TaskManager" do
     end
   end
 
-  describe "sorted_task_graph" do
-    it "should create a topologically sorted task graph" do
-      expected = {
-        Croupier::ROOT_VERTEX => Set{"input", "input2", "output1", "output2"},
-        "input"               => Set{"output3"},
-        "input2"              => Set{"output5"},
-        "output1"             => Set(String).new,
-        "output2"             => Set(String).new,
-        "output3"             => Set{"output4"},
-        "output4"             => Set(String).new,
-        "output5"             => Set(String).new,
-      }
+  describe "dependency order" do
+    it "should put every task after the tasks it depends on" do
       with_scenario("basic") do
-        g, s = TaskManager.sorted_task_graph
-        g.should eq expected
-        s.size.should eq TaskManager.tasks.size
-        # The exact order among independent tasks is unspecified (it
-        # only needs to be deterministic); what matters is that every
-        # task comes after its dependencies
-        positions = s.map_with_index { |name, index| {name, index} }.to_h
+        order = TaskManager.dependencies(TaskManager.tasks.keys)
+        order.size.should eq TaskManager.tasks.size
+        positions = order.map_with_index { |name, index| {name, index} }.to_h
         TaskManager.tasks.each_value do |task|
           task.inputs.each do |input|
             if TaskManager.tasks.has_key?(input)
@@ -121,67 +107,48 @@ describe "TaskManager" do
       end
     end
 
-    it "should detect cycles in the graph" do
-      with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-        Task.new("input", ["output4"])
-        expect_raises(Exception, "Cycle detected") do
-          TaskManager.sorted_task_graph
-        end
+    it "should order independent tasks by name" do
+      with_scenario("empty") do
+        Task.new(output: "b") { "b" }
+        Task.new(output: "a") { "a" }
+        Task.new(output: "c") { "c" }
+
+        TaskManager.dependencies(TaskManager.tasks.keys).should eq ["a", "b", "c"]
       end
     end
 
-    it "should not confuse a task output named start with the graph root" do
+    it "should not confuse a task output named start with anything special" do
       with_scenario("empty") do
         Task.new(output: "start", inputs: [] of String) { "s" }
         Task.new(output: "end", inputs: ["start"]) { "e" }
 
-        _, sorted = TaskManager.sorted_task_graph
-        # The root used to be literally "start": a task by that name
-        # became the root vertex instead of hanging off it
-        sorted.should eq ["start", "end"]
-      end
-    end
-  end
-
-  describe "topological_sort" do
-    it "reports unreachable vertices instead of claiming a cycle" do
-      graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
-      graph["start"] << "a"
-      # An acyclic island the DFS from "start" never sees
-      graph["island"] << "island2"
-
-      expect_raises(Exception, /unreachable.*island/i) do
-        Croupier.topological_sort(graph)
+        TaskManager.dependencies(TaskManager.tasks.keys).should eq ["start", "end"]
       end
     end
 
-    it "still reports a cycle among unreachable vertices" do
-      graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
-      graph["start"] << "a"
-      graph["x"] << "y"
-      graph["y"] << "x"
-
-      expect_raises(Exception, "Cycle detected") do
-        Croupier.topological_sort(graph)
+    it "should detect cycles in the graph" do
+      with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
+        Task.new("input", ["output4"])
+        expect_raises(Croupier::CycleError, "Cycle detected") do
+          TaskManager.dependencies(TaskManager.tasks.keys)
+        end
       end
     end
 
-    it "accepts plain hashes without a default block" do
-      graph = {Croupier::ROOT_VERTEX => Set{"a"}} of String => Set(String)
+    it "should detect a cycle reachable from an input, naming only its members" do
+      with_scenario("empty", to_create: {"file1" => "x"}) do
+        Task.new(output: "a_out", inputs: ["file1", "b_out"]) { "a" }
+        Task.new(output: "b_out", inputs: ["a_out"]) { "b" }
+        # Downstream of the cycle, but not on it
+        Task.new(output: "c_out", inputs: ["a_out"]) { "c" }
 
-      Croupier.topological_sort(graph).should contain "a"
-    end
-
-    it "visits siblings in a deterministic order" do
-      graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
-      graph[Croupier::ROOT_VERTEX] << "b"
-      graph[Croupier::ROOT_VERTEX] << "a"
-      graph[Croupier::ROOT_VERTEX] << "c"
-
-      # Sorted adjacency: the exact sibling order is part of the
-      # contract, so a stdlib hash-layout change can't silently
-      # reshuffle serial run order
-      Croupier.topological_sort(graph).should eq [Croupier::ROOT_VERTEX, "a", "b", "c"]
+        expect_raises(Croupier::CycleError, "Cycle detected in the task graph: a_out, b_out") do
+          TaskManager.dependencies(TaskManager.tasks.keys)
+        end
+        [false, true].each do |parallel|
+          expect_raises(Croupier::CycleError) { TaskManager.run_tasks(parallel: parallel) }
+        end
+      end
     end
   end
 

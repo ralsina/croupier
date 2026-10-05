@@ -52,7 +52,7 @@ describe "Task" do
         TaskManager.all_inputs.should contain("seed")
         TaskManager.all_inputs.should_not contain("./a_out")
 
-        sorted = TaskManager.sorted_task_graph[1]
+        sorted = TaskManager.dependencies(TaskManager.tasks.keys)
         # The edge a_out -> b_out puts a_out first
         producer_position = sorted.index("a_out") || sorted.size
         consumer_position = sorted.index("b_out") || sorted.size
@@ -238,7 +238,7 @@ describe "Task" do
 
         TaskManager.tasks.keys.should eq ["t1", "t2"]
         # Should respect dependencies even if they are just IDs
-        TaskManager.sorted_task_graph[1].should eq ["t2", "t1"]
+        TaskManager.dependencies(TaskManager.tasks.keys).should eq ["t2", "t1"]
       end
     end
 

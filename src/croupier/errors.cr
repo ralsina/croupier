@@ -50,10 +50,6 @@ module Croupier
     end
   end
 
-  # Tasks no dependency path leads to from the graph's root.
-  class UnreachableTaskError < Error
-  end
-
   # Unsupported use: changing the task set during a run, auto mode
   # on an unsupported platform or with nothing to watch, changing the
   # persistent k/v store path.
