@@ -65,9 +65,9 @@ module Croupier
       # Real runs read-modify-write the state file under the
       # cross-process lock, so concurrent croupier processes
       # serialize instead of silently overwriting each other
-      # A run is executing: task creation is rejected until it ends
-      # (see TaskManager.register_task)
-      @data_mutex.synchronize { @run_active = true }
+      # A run is executing: task creation is rejected until every
+      # overlapping run ends (see TaskManager.register_task)
+      @data_mutex.synchronize { @run_active += 1 }
       begin
         if parallel
           with_state_lock(dry_run) { _run_tasks_parallel(task_names, run_all, dry_run, keep_going, early_cutoff) }
@@ -75,7 +75,7 @@ module Croupier
           with_state_lock(dry_run) { _run_tasks(task_names, run_all, dry_run, keep_going, early_cutoff) }
         end
       ensure
-        @data_mutex.synchronize { @run_active = false }
+        @data_mutex.synchronize { @run_active -= 1 }
       end
     end
 

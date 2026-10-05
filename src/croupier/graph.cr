@@ -21,10 +21,12 @@ module Croupier
     # it. Raises if `task_key` is not a registered task, or if the input
     # is one of the task's own keys (that would be a cycle).
     @parallel_wave_active = false
-    # Whether a run is executing right now: task creation is a
-    # setup-time operation, and creating tasks mid-run is rejected
-    # instead of racing the run's unlocked registry reads
-    @run_active = false
+    # How many runs are executing right now (two can overlap in one
+    # process: an auto cycle and a manual run_tasks waiting on the
+    # state lock). Task creation is a setup-time operation, and
+    # creating tasks mid-run is rejected instead of racing the run's
+    # unlocked registry reads.
+    @run_active = 0
 
     def add_input(task_key : String, input : String) : Bool
       @data_mutex.synchronize do
@@ -59,13 +61,16 @@ module Croupier
     # the run's reads take no lock. To change the task set, stop (in
     # auto mode), rebuild the graph, and start again.
     def register_task(task : Task, explicit_id : String?) : Nil
+      # Check and register inside the same lock acquisition: with the
+      # call outside, a run starting in between would slip past the
+      # check (the immediate add_input path does the same)
       @data_mutex.synchronize do
         raise UsageError.new(
           "Cannot create tasks while a run is in progress; build the task graph " \
           "before running (stop auto mode, rebuild, start again)"
-        ) if @parallel_wave_active || @run_active
+        ) if @parallel_wave_active || @run_active > 0
+        task.register_with_manager(explicit_id)
       end
-      task.register_with_manager(explicit_id)
     end
 
     # Invalidate the cached task graph. Only touches in-memory state:
