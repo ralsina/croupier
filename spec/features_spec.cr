@@ -29,6 +29,30 @@ describe "TaskManager" do
       end
     end
 
+    it "should reject remove_task while a run is in progress" do
+      with_scenario("empty", to_create: {"seed" => "x"}) do
+        Task.new(id: "target", output: "out_t", inputs: ["seed"]) { "t" }
+        Task.new(id: "mutator", output: "out_m", inputs: ["seed"]) do
+          begin
+            TaskManager.remove_task("out_t")
+          rescue Croupier::UsageError
+            nil
+          end
+          # The registry is untouched: the task is still registered
+          TaskManager.tasks.has_key?("out_t").should be_true
+          nil
+        end
+
+        # Serial
+        expect_raises(Croupier::RunFailure) { TaskManager.run_tasks }
+        TaskManager.tasks.has_key?("out_t").should be_true
+
+        # And parallel (mutator re-runs via run_all)
+        expect_raises(Croupier::RunFailure) { TaskManager.run_tasks(run_all: true, parallel: true) }
+        TaskManager.tasks.has_key?("out_t").should be_true
+      end
+    end
+
     it "should reject task creation while a serial run is in progress" do
       with_scenario("empty", to_create: {"seed" => "x"}) do
         Task.new(id: "creator", output: "out_c", inputs: ["seed"]) do

@@ -52,7 +52,7 @@ module Croupier
     # concurrently during run_tasks. To grow a task's dependencies
     # between runs, use `add_input` instead of mutating `tasks` or
     # `Task#inputs` directly.
-    property tasks = {} of String => Croupier::Task
+    getter tasks : Hash(String, Croupier::Task) = {} of String => Croupier::Task
     # Registry of modified files, which will make tasks stale.
     #
     # Unlike the run-hash trio below, this set IS touched from parallel
@@ -101,7 +101,7 @@ module Croupier
     # O(1) instead of a linear scan over every registered task (which
     # made creating N tasks O(N^2); a 4000-task site spent ~200ms in
     # the scan alone)
-    property tasks_by_id = {} of String => Task
+    getter tasks_by_id : Hash(String, Task) = {} of String => Task
     @graph_invalidated : Bool = false
 
     def add_mutex(name : String)
@@ -148,8 +148,11 @@ module Croupier
       # the cleared manager halfway through cleanup
       auto_stop
       @modified_lock.synchronize { modified.clear }
-      tasks.clear
-      tasks_by_id.clear
+      # Locked: cleanup can race a live autorun cycle's registry reads
+      @data_mutex.synchronize do
+        tasks.clear
+        tasks_by_id.clear
+      end
       last_run.clear
       this_run.clear
       next_run.clear
