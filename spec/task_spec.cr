@@ -192,6 +192,17 @@ describe "Task" do
       end
     end
 
+    it "should keep one lock per mutex name across registrations" do
+      with_scenario("empty") do
+        Task.new(output: "a", mutex: "db") { "a" }
+        lock = TaskManager.mutexes["db"]
+        Task.new(output: "b", mutex: "db") { "b" }
+        TaskManager.tasks["a"].mutex = "db"
+
+        TaskManager.mutexes["db"].should be(lock)
+      end
+    end
+
     it "should accept a mutex in the proc form" do
       with_scenario("empty") do
         Task.new(output: "out", proc: TaskProc.new { "x" }, mutex: "db")

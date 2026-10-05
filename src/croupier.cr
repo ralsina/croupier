@@ -114,8 +114,11 @@ module Croupier
     getter tasks_by_id : Hash(String, Task) = {} of String => Task
     @graph_invalidated : Bool = false
 
+    # Register the mutex `name`, keeping the existing lock if there is
+    # one: replacing it could swap out a lock a running task holds,
+    # and tasks sharing the name would stop excluding each other.
     def add_mutex(name : String)
-      @data_mutex.synchronize { mutexes[name] = Sync::Mutex.new }
+      @data_mutex.synchronize { mutexes[name] ||= Sync::Mutex.new }
     end
 
     def lock_mutex(name : String)
