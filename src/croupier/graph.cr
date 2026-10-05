@@ -61,16 +61,14 @@ module Croupier
     # the run's reads take no lock. To change the task set, stop (in
     # auto mode), rebuild the graph, and start again.
     # @parallel_wave_active implies @run_active > 0 (a wave only runs
-    # inside a run), so the run counter alone decides
+    # inside a run), so the run counter alone decides. Registration
+    # and removal both check-and-apply inside one lock acquisition:
+    # the run's registry reads take no lock, so ANY registry mutation
+    # mid-run is a race, and a run starting between check and apply
+    # would slip past (the immediate add_input path does the same).
     def register_task(task : Task, explicit_id : String?) : Nil
-      # Check and register inside the same lock acquisition: with the
-      # call outside, a run starting in between would slip past the
-      # check (the immediate add_input path does the same)
       @data_mutex.synchronize do
-        raise UsageError.new(
-          "Cannot create tasks while a run is in progress; build the task graph " \
-          "before running (stop auto mode, rebuild, start again)"
-        ) if @run_active > 0
+        reject_registry_mutation_during_run
         task.register_with_manager(explicit_id)
       end
     end
@@ -81,9 +79,12 @@ module Croupier
     # This is the supported removal — raw `TaskManager.tasks.delete`
     # leaves tasks_by_id stale, and the duplicate-id check then
     # rejects the replacement. Raises UnknownTaskError when the key
-    # is not registered.
+    # is not registered, and UsageError while a run is in progress
+    # (change the task set between runs: stop auto mode, rebuild,
+    # start again).
     def remove_task(task_key : String) : Nil
       @data_mutex.synchronize do
+        reject_registry_mutation_during_run
         task = tasks[task_key]?
         raise UnknownTaskError.new("Unknown task #{task_key}") unless task
         task.keys.each do |key|
@@ -92,6 +93,14 @@ module Croupier
         tasks_by_id.delete(task.id) if tasks_by_id[task.id]?.same?(task)
         invalidate_graph_cache
       end
+    end
+
+    private def reject_registry_mutation_during_run : Nil
+      return unless @run_active > 0
+      raise UsageError.new(
+        "Cannot change the task set while a run is in progress; build the task graph " \
+        "before running (stop auto mode, rebuild, start again)"
+      )
     end
 
     # Invalidate the cached task graph. Only touches in-memory state:
