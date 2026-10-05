@@ -196,6 +196,33 @@ describe "TaskManager" do
       end
     end
 
+    it "should watch inputs added by add_input during a cycle" do
+      with_scenario("empty") do
+        File.write("seed", "v1")
+        File.write("extra", "v1")
+        runs = 0
+        Task.new(output: "out", inputs: ["seed"]) {
+          runs += 1
+          TaskManager.add_input("out", "extra")
+          "data"
+        }
+
+        TaskManager.auto_run
+        Fiber.yield
+        File.write("seed", "v2")
+        wait_until(message: "seed change never ran the task") { runs >= 1 }
+        wait_until(message: "first cycle never settled") { auto_cycle_settled? }
+        TaskManager.tasks["out"].inputs.should contain "extra"
+        baseline = runs
+
+        # Only reaches the task if the cycle re-watched after the
+        # deferred add_input was applied
+        File.write("extra", "v2")
+        wait_until(message: "extra change never ran the task") { runs > baseline }
+        TaskManager.auto_stop
+      end
+    end
+
     it "should keep auto mode working over a persistent store" do
       with_scenario("empty") do
         # kv:// traffic in auto mode must flow through the file

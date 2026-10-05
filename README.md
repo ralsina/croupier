@@ -117,7 +117,8 @@ change:
 
 Tasks can still discover dependencies at runtime: `add_input` grows
 an existing task's inputs from inside a proc, and is safe during
-parallel runs (the addition is deferred to the end of the wave).
+parallel runs. The addition is deferred until the run ends, so it
+takes effect on the next run.
 
 ## Installation
 

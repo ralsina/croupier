@@ -159,10 +159,14 @@ module Croupier
       # the cleared manager halfway through cleanup
       auto_stop
       @modified_lock.synchronize { modified.clear }
-      # Locked: cleanup can race a live autorun cycle's registry reads
+      # Locked: cleanup can race a live autorun cycle's registry reads,
+      # and a run ending in another fiber (which applies the add_input
+      # queue and decrements the run counter)
       @data_mutex.synchronize do
         tasks.clear
         tasks_by_id.clear
+        @pending_inputs.clear
+        @run_active = 0
       end
       last_run.clear
       this_run.clear
@@ -187,8 +191,6 @@ module Croupier
       @state_file = ".croupier"
       @early_cutoff = true
       mutexes.clear
-      @pending_inputs.clear
-      @run_active = 0
       @progress_callback = ->(_id : String) { }
       @before_run_hook = ->(_changes : Set(String)) { }
       close_watcher
