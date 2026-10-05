@@ -981,19 +981,26 @@ describe "TaskManager" do
         TaskManager.run_tasks
         attempts.should eq 1
         sha_a = Digest::SHA1.hexdigest("a1")
+        recorded_a = File.read(".croupier").lines.find!(&.starts_with?("a:")).split(": ", 2)[1]
 
-        # Rewrite "a" with identical bytes (the rewrite gets a fresh
-        # mtime; no utime restore, or the frame would be
-        # indistinguishable from run 1's) while "b" genuinely
-        # changes: the task runs again and fails, so
-        # drop_unfinished_inputs reverts its inputs for the retry.
-        # The genuinely changed input must revert to the recorded
-        # hash, but the unchanged one must keep its fresh frame —
-        # reverting the mtime too would defeat hash reuse for
-        # identical rewrites (the same-sha branch in
-        # drop_unfinished_inputs this spec covers).
+        # Rewrite "a" with identical bytes AFTER the clock has moved
+        # past run 1's recorded frame, so the scan must produce a
+        # fresh frame (a same-tick rewrite would be reusable on a
+        # coarse-mtime filesystem and the assertion below would pass
+        # vacuously); the precondition makes that explicit. While "a"
+        # is rewritten, "b" genuinely changes: the task runs again
+        # and fails, so drop_unfinished_inputs reverts its inputs for
+        # the retry. The genuinely changed input must revert to the
+        # recorded hash, but the unchanged one must keep its fresh
+        # frame — reverting the mtime too would defeat hash reuse for
+        # identical rewrites (the same-sha branch this spec covers).
+        sleep 20.milliseconds
         File.write("a", "a1")
         File.write("b", "b2")
+        pre_mtime = File.info("a").modification_time
+        pre_parts = recorded_a.split('|')
+        (pre_mtime.to_unix * 1_000_000_000 + pre_mtime.nanosecond)
+          .should be > (pre_parts[0].to_i64 * 1_000_000_000 + pre_parts[1].to_i64)
         expect_raises(Croupier::RunFailure) { TaskManager.run_tasks(keep_going: true) }
         attempts.should eq 2
 
