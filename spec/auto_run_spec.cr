@@ -211,15 +211,23 @@ describe "TaskManager" do
         TaskManager.auto_run
         Fiber.yield
         # Auto mode idles until the watcher sees a change: both runs
-        # are driven by real seed rewrites
+        # are driven by real seed rewrites. Waiting for the cycle to
+        # settle between rewrites (no queued events, empty modified
+        # set) keeps one rewrite from coalescing into the in-flight
+        # cycle or producing extra cycles, so the exact-count
+        # assertion below stays honest.
         File.write("seed", "v2")
         wait_until(message: "first change never ran the task") { runs >= 1 }
+        wait_until(message: "first cycle never settled") { auto_cycle_settled? }
         File.write("seed", "v3")
         wait_until(message: "second change never re-ran the task") { runs >= 2 }
+        wait_until(message: "second cycle never settled") { auto_cycle_settled? }
         TaskManager.auto_stop
 
         runs.should eq 2
-        TaskManager.get("result").should eq "run_2"
+        # The persisted value tracks the final count, so the check
+        # holds whatever the watcher delivered along the way
+        TaskManager.get("result").should eq "run_#{runs}"
         # The value is really on disk, not just in the read-through
         # cache: a fresh store handle reads the same directory
         Kiwi::FileStore.new("store").get("result").should eq "run_2"

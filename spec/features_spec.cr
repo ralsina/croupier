@@ -712,20 +712,29 @@ describe "TaskManager" do
       end
     end
 
-    it "should be called from every worker of a parallel run" do
+    it "should be called once per task of a parallel run, on worker fibers" do
       with_scenario("empty", to_create: {"seed" => "x"}) do
-        # The callback fires on worker fibers, so the shared array
-        # needs a guard the serial case never exercises
+        # The callback fires on worker fibers, so the shared arrays
+        # need a guard the serial case never exercises. Work stealing
+        # does not guarantee every spawned worker receives a task, so
+        # the worker-name set is asserted to be a non-empty subset of
+        # the pool, not equal to it.
         lock = Sync::Mutex.new
-        reported = [] of String
-        TaskManager.progress_callback = ->(id : String) { lock.synchronize { reported << id } }
+        reported = [] of {String, String}
+        TaskManager.progress_callback = ->(id : String) {
+          lock.synchronize { reported << {id, Fiber.current.name || ""} }
+        }
         4.times { |i| Task.new(output: "out_#{i}", inputs: ["seed"]) { "data_#{i}" } }
 
         TaskManager.run_tasks(parallel: true)
 
         reported.size.should eq 4
         expected = (0...4).map { |i| TaskManager.tasks["out_#{i}"].id }.to_set
-        reported.to_set.should eq expected
+        reported.map(&.[0]).to_set.should eq expected
+        worker_names = reported.map(&.[1]).to_set
+        worker_names.all?(&.starts_with?("croupier-worker-")).should be_true
+        worker_names.size.should be > 0
+        worker_names.size.should be <= 4
       end
     end
   end
