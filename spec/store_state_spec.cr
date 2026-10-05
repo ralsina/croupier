@@ -40,7 +40,7 @@ describe "TaskManager" do
         {"input"  => "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
          "input2" => "62cdb7020ff920e5aa642c3d4066950dd1f01f4d"}.each do |path, sha1|
           entry = state[path].to_s
-          entry.should match(/^[\d.]+\|\d+\|[0-9a-f]{40}$/)
+          entry.should match(/^\d+\|\d+\|\d+\|[0-9a-f]{40}$/)
           Croupier.recorded_sha1(entry).should eq sha1
         end
         # Outputs (and kv/digest entries) stay bare sha1s

@@ -15,7 +15,14 @@ module Croupier
       @hashes_lock.synchronize do
         previous = last_run[output]?
         next_run[output] = new_hash
-        previous
+        # Callers (Task#save_file_output, verify_no_save_outputs)
+        # compare the returned value against a bare sha1. An idle
+        # run can have persisted the entry framed as
+        # "mtime|size|sha1" (outputs are scanned as inputs too), and
+        # comparing framed against bare would report an unchanged
+        # output as changed, disabling early cutoff and re-running
+        # its dependents for nothing.
+        previous.try { |entry| Croupier.recorded_sha1(entry) }
       end
     end
 
@@ -106,8 +113,14 @@ module Croupier
           # Frame the stat with the hash so the NEXT run can reuse it;
           # the mtime is captured before reading, so a change landing
           # mid-read produces a mixed hash with a stale stat and the
-          # next run's stat comparison re-hashes — self-correcting
-          hash[path] = "#{info.modification_time.to_unix_f}|#{info.size}|#{sha1}"
+          # next run's stat comparison re-hashes — self-correcting.
+          # The timestamp is stored as integer unix seconds plus
+          # nanoseconds: a Float64 unix_f loses precision around the
+          # current epoch (distinct nanosecond mtimes can collapse to
+          # the same Float64), which would let a same-size rewrite
+          # pass the stat comparison unhashed.
+          mtime = info.modification_time
+          hash[path] = "#{mtime.to_unix}|#{mtime.nanosecond}|#{info.size}|#{sha1}"
         else
           hash[path] = sha1
         end
@@ -278,19 +291,22 @@ module Croupier
     private def reusable_hash?(path : String, info : File::Info) : Bool
       return false unless entry = last_run[path]?
       return false unless meta = parse_file_meta(entry)
-      meta[0] == info.modification_time.to_unix_f && meta[1] == info.size
+      mtime = info.modification_time
+      meta[0] == mtime.to_unix && meta[1] == mtime.nanosecond && meta[2] == info.size
     end
 
-    # The mtime and size of a framed file entry
-    # ("mtime|size|sha1"), or nil when the entry is not framed
-    # (kv values, directory digests, output hashes, pre-v2 files)
-    private def parse_file_meta(entry : String) : {Float64, Int64}?
+    # The exact mtime (unix seconds, nanoseconds) and size of a
+    # framed file entry ("seconds|nanos|size|sha1"), or nil when the
+    # entry is not framed (kv values, directory digests, output
+    # hashes, pre-v2 files)
+    private def parse_file_meta(entry : String) : {Int64, Int64, Int64}?
       parts = entry.split('|')
-      return unless parts.size == 3
-      mtime = parts[0].to_f?
-      size = parts[1].to_i64?
-      return unless mtime && size
-      {mtime, size}
+      return unless parts.size == 4
+      seconds = parts[0].to_i64?
+      nanos = parts[1].to_i64?
+      size = parts[2].to_i64?
+      return unless seconds && nanos && size
+      {seconds, nanos, size}
     end
 
     # We ran all tasks, store the current state. Written to a

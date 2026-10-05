@@ -770,7 +770,7 @@ describe "TaskManager" do
           # File entries are mtime|size framed now; compare the hash
           # they carry and check the framing is really there
           Croupier.recorded_sha1(scanned[path]).should eq sha1
-          scanned[path].should match(/^[\d.]+\|\d+\|[0-9a-f]{40}$/)
+          scanned[path].should match(/^\d+\|\d+\|\d+\|[0-9a-f]{40}$/)
         end
       end
     end
@@ -967,6 +967,38 @@ describe "TaskManager" do
         File.write("seed", "cc")
         TaskManager.run_tasks
         runs.should eq 2
+      end
+    end
+
+    it "should keep early cutoff when an output entry is framed by an idle run" do
+      with_scenario("empty", to_create: {"seed" => "v1"}) do
+        c_runs = 0
+        Task.new(output: "out", inputs: ["seed"]) { "same-bytes" }
+        # C goes stale whenever the producer goes stale (its only
+        # input is the producer's output), so only the early-cutoff
+        # notification — the producer's outputs being byte-identical
+        # — can save its run
+        Task.new(output: "c_out", inputs: ["out"]) { c_runs += 1; "c" }
+        TaskManager.run_tasks
+        c_runs.should eq 1
+
+        # Idle run of a FRESH process: next_run starts empty there,
+        # so the scan's framed entry for out survives into the saved
+        # state (simulated here by clearing the in-memory next_run,
+        # which a real second process would not have). Without this,
+        # the in-memory bare hash from run 1 would win the merge and
+        # the framed entry would never be persisted.
+        TaskManager.next_run.clear
+        TaskManager.run_tasks
+        c_runs.should eq 1
+
+        # Producer re-runs with byte-identical output: the framed
+        # prior value must normalize to the bare sha1, or the
+        # unchanged output would count as changed, disable early
+        # cutoff and re-run C for nothing
+        File.write("seed", "v2")
+        TaskManager.run_tasks
+        c_runs.should eq 1
       end
     end
 
