@@ -298,7 +298,13 @@ module Croupier
     # The exact mtime (unix seconds, nanoseconds) and size of a
     # framed file entry ("seconds|nanos|size|sha1"), or nil when the
     # entry is not framed (kv values, directory digests, output
-    # hashes, pre-v2 files)
+    # hashes, pre-v2 files) or is malformed. The hash field must be
+    # a bare sha1: a corrupted value like "not-a-sha" would
+    # otherwise be reused verbatim on a stat match, and the
+    # normalized old/new comparison would agree with itself forever,
+    # keeping the task fresh and the bad entry alive. Malformed
+    # entries fall back to the re-hash path, which rewrites the
+    # state and self-heals.
     private def parse_file_meta(entry : String) : {Int64, Int64, Int64}?
       parts = entry.split('|')
       return unless parts.size == 4
@@ -306,6 +312,7 @@ module Croupier
       nanos = parts[1].to_i64?
       size = parts[2].to_i64?
       return unless seconds && nanos && size
+      return unless parts[3].matches?(/^[0-9a-f]{40}$/)
       {seconds, nanos, size}
     end
 

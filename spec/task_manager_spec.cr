@@ -970,6 +970,48 @@ describe "TaskManager" do
       end
     end
 
+    it "should keep the fresh frame of an unchanged input when a run fails" do
+      with_scenario("empty", to_create: {"a" => "a1", "b" => "b1"}) do
+        attempts = 0
+        Task.new(output: "out", inputs: ["a", "b"]) do
+          attempts += 1
+          raise "boom" if attempts > 1
+          "o"
+        end
+        TaskManager.run_tasks
+        attempts.should eq 1
+        sha_a = Digest::SHA1.hexdigest("a1")
+        state = File.read(".croupier")
+        frame_a = state.lines.find!(&.starts_with?("a:")).split(": ", 2)[1]
+
+        # Rewrite "a" with identical bytes (the rewrite gets a fresh
+        # mtime; no utime restore, or the frame would be
+        # indistinguishable from run 1's) while "b" genuinely
+        # changes: the task runs again and fails, so
+        # drop_unfinished_inputs reverts its inputs for the retry.
+        # The genuinely changed input must revert to the recorded
+        # hash, but the unchanged one must keep its fresh frame —
+        # reverting the mtime too would defeat hash reuse for
+        # identical rewrites (the same-sha branch in
+        # drop_unfinished_inputs this spec covers).
+        File.write("a", "a1")
+        File.write("b", "b2")
+        expect_raises(Croupier::RunFailure) { TaskManager.run_tasks(keep_going: true) }
+        attempts.should eq 2
+
+        state = File.read(".croupier")
+        entry_a = state.lines.find!(&.starts_with?("a:")).split(": ", 2)[1]
+        entry_b = state.lines.find!(&.starts_with?("b:")).split(": ", 2)[1]
+        # "a": fresh frame retained — the full timestamp (seconds
+        # AND nanoseconds) matches the rewrite, not run 1's scan
+        mtime = File.info("a").modification_time
+        entry_a.split('|')[0..1].join("|").should eq "#{mtime.to_unix}|#{mtime.nanosecond}"
+        Croupier.recorded_sha1(entry_a).should eq sha_a
+        # "b": reverted to the recorded hash of the old content
+        Croupier.recorded_sha1(entry_b).should eq Digest::SHA1.hexdigest("b1")
+      end
+    end
+
     it "should keep early cutoff when an output entry is framed by an idle run" do
       with_scenario("empty", to_create: {"seed" => "v1"}) do
         c_runs = 0
