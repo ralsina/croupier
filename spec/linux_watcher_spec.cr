@@ -64,20 +64,30 @@
         File.write("f.txt.tmp", "2")
         File.rename("f.txt.tmp", "f.txt")
 
-        # Write with gaps until a callback observes content >= "3":
-        # the IN_IGNORED that re-arms the watcher is delivered
-        # asynchronously, so an early write can land before the
-        # re-watch. Each write after the re-arm fires a callback that
-        # reads whatever is on disk then (>= 3, since earlier
-        # contents were "1" and "2")
-        attempt = 3
-        wait_until(message: "post-replacement write never fired") do
-          File.write("f.txt", attempt.to_s)
-          attempt += 1
-          sleep 50.milliseconds
-          observed = contents_lock.synchronize { contents.map { |c| c.to_i? || 0 }.max? || 0 }
-          observed >= 3
-        end
+        # The replacement fires exactly one more callback: the
+        # IN_IGNORED falls through to the exact-match branch (that
+        # queueing is intentional — it processes a single-save
+        # editor's content). Wait for it, then let the queue settle.
+        File.write("f.txt.tmp", "2")
+        File.rename("f.txt.tmp", "f.txt")
+        pre_rename = contents_lock.synchronize { contents.size }
+        wait_until(message: "replacement callback never fired") {
+          contents_lock.synchronize { contents.size > pre_rename }
+        }
+        baseline = 0
+        wait_until(message: "callbacks never settled") {
+          baseline = contents_lock.synchronize { contents.size }
+          3.times { Fiber.yield; sleep 5.milliseconds }
+          baseline == contents_lock.synchronize { contents.size }
+        }
+
+        # A write to the replacement inode fires only if the watcher
+        # re-armed on the new inode: without the re-watch, nothing
+        # watches it and this wait times out
+        File.write("f.txt", "3")
+        wait_until(message: "post-replacement write never fired") {
+          contents_lock.synchronize { contents.size > baseline }
+        }
         watcher.close
       end
     end
