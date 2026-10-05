@@ -171,6 +171,36 @@ describe "Task" do
   end
 
   describe "new" do
+    it "should accept a single output as a string, positionally or by name" do
+      with_scenario("empty") do
+        Task.new("a.txt", ["seed"]) { "a" }
+        Task.new(output: "b.txt", inputs: ["seed"]) { "b" }
+        Task.new(outputs: ["c.txt", "d.txt"], inputs: ["seed"]) { ["c", "d"] }
+
+        TaskManager.tasks["a.txt"].outputs.should eq ["a.txt"]
+        TaskManager.tasks["b.txt"].outputs.should eq ["b.txt"]
+        TaskManager.tasks["d.txt"].outputs.should eq ["c.txt", "d.txt"]
+      end
+    end
+
+    it "should reject output and outputs together" do
+      with_scenario("empty") do
+        expect_raises(Croupier::TaskDefinitionError, "Pass either output or outputs") do
+          Task.new(output: "a.txt", outputs: ["b.txt"]) { "a" }
+        end
+        TaskManager.tasks.should be_empty
+      end
+    end
+
+    it "should accept a mutex in the proc form" do
+      with_scenario("empty") do
+        Task.new(output: "out", proc: TaskProc.new { "x" }, mutex: "db")
+
+        TaskManager.tasks["out"].mutex.should eq "db"
+        TaskManager.mutexes.has_key?("db").should be_true
+      end
+    end
+
     it "should be possible to create a task and fetch it" do
       with_scenario("basic") do
         t = TaskManager.tasks["output1"]

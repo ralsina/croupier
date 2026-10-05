@@ -1,50 +1,24 @@
 module Croupier
   # TaskManagerType methods for running tasks, serially and in parallel.
   class TaskManagerType
-    # Run all stale tasks in dependency order
+    # Run the stale tasks needed to create or update `targets` (every
+    # task when nil), in dependency order
     #
     # If `run_all` is true, run non-stale tasks too
     # If `dry_run` is true, only log what would be done, but don't do it
     # If `parallel` is true, run tasks in parallel
     # If `keep_going` is true, keep going even if a task fails
-    # If `early_cutoff` is true, skip tasks when upstream outputs are unchanged
+    # If `early_cutoff` is true, skip tasks when upstream outputs are
+    # unchanged (defaults to TaskManager.early_cutoff?)
     def run_tasks(
+      targets : Array(String)? = nil,
       run_all : Bool = false,
       dry_run : Bool = false,
       parallel : Bool = false,
       keep_going : Bool = false,
       early_cutoff : Bool? = nil,
     )
-      _, tasks = sorted_task_graph
-      early_cutoff = @early_cutoff if early_cutoff.nil?
-      run_tasks(tasks, run_all, dry_run, parallel, keep_going, early_cutoff)
-    end
-
-    # Run the tasks needed to create or update the requested targets
-    #
-    # If `run_all` is true, run non-stale tasks too
-    # If `dry_run` is true, only log what would be done, but don't do it
-    # If `parallel` is true, run tasks in parallel
-    # If `keep_going` is true, keep going even if a task fails
-    # If `early_cutoff` is true, skip tasks when upstream outputs are unchanged
-    def run_tasks(
-      targets : Array(String),
-      run_all : Bool = false,
-      dry_run : Bool = false,
-      parallel : Bool = false,
-      keep_going : Bool = false,
-      early_cutoff : Bool? = nil,
-    )
-      # If targets is already every task in sorted order, skip the
-      # dependencies() call. The comparison is element-wise so an
-      # unsorted list (such as tasks.keys) still gets sorted, and
-      # unknown targets still raise.
-      if targets == sorted_task_graph[1]
-        Log.debug { "Skipping dependencies() call, targets already contain all #{targets.size} tasks" }
-        task_names = targets
-      else
-        task_names = dependencies(targets)
-      end
+      task_names = targets ? dependencies(targets) : sorted_task_graph[1]
 
       # Outside auto mode, a missing input fails up front as "Unknown
       # inputs" rather than mid-run as "Waiting for". Auto mode skips
@@ -61,10 +35,12 @@ module Croupier
       # croupier processes don't overwrite each other's state file.
       @data_mutex.synchronize { @run_active += 1 }
       begin
-        if parallel
-          with_state_lock(dry_run) { _run_tasks_parallel(task_names, run_all, dry_run, keep_going, early_cutoff) }
-        else
-          with_state_lock(dry_run) { _run_tasks(task_names, run_all, dry_run, keep_going, early_cutoff) }
+        with_state_lock(dry_run) do
+          if parallel
+            _run_tasks_parallel(task_names, run_all, dry_run, keep_going, early_cutoff)
+          else
+            _run_tasks(task_names, run_all, dry_run, keep_going, early_cutoff)
+          end
         end
       ensure
         @data_mutex.synchronize { @run_active -= 1 }
@@ -172,13 +148,12 @@ module Croupier
     # errors, staleness updates, early cutoff), so none of it needs a
     # lock. Private for the same reason as _run_tasks.
     private def _run_tasks_parallel(
-      task_names : Array(String) = [] of String,
+      task_names : Array(String),
       run_all : Bool = false,
       dry_run : Bool = false,
       keep_going : Bool = false,
       early_cutoff : Bool = true,
     )
-      task_names = tasks.keys if task_names.empty?
       mark_stale_inputs(run_all, task_names)
       propagate_staleness(run_all)
       _tasks = task_names.map { |name| tasks[name] }
@@ -215,11 +190,8 @@ module Croupier
       keep_going : Bool,
     ) : Array(Task)?
       done = finished_tasks | failed_tasks
-      stale_tasks = if run_all
-                      candidates.reject { |task| done.includes?(task) }
-                    else
-                      candidates.select(&.stale?).reject { |task| done.includes?(task) }
-                    end
+      stale_tasks = candidates.reject { |task| done.includes?(task) }
+      stale_tasks.select!(&.stale?) unless run_all
       return if stale_tasks.empty?
 
       # A task with several outputs appears once per output; run it
@@ -341,7 +313,7 @@ module Croupier
               notified = true
             end
             Log.debug { "Notifying #{other_task.id} that #{output} is unchanged" }
-            other_task.mark_dependency_fresh(output)
+            other_task.recompute_staleness
           end
         end
       end

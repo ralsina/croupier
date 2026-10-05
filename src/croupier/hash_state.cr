@@ -2,14 +2,9 @@ module Croupier
   # TaskManagerType methods for content hashing, input scanning and
   # the run-state file.
   class TaskManagerType
-    # Record the hash of a task output for the next run's state file.
-    # Thread-safe for parallel task workers.
-    def record_output_hash(output : String, new_hash : String) : Nil
-      @hashes_lock.synchronize { next_run[output] = new_hash }
-    end
-
-    # Record `new_hash` for `output` and return the hash the last run
-    # recorded for it, in one locked step.
+    # Record the hash of a task output for the next run's state file,
+    # and return the hash the last run recorded for it, in one locked
+    # step. Thread-safe for parallel task workers.
     def swap_output_hash(output : String, new_hash : String) : String?
       @hashes_lock.synchronize do
         previous = last_run[output]?
@@ -96,11 +91,9 @@ module Croupier
     # to call from parallel task workers (it only uses local channels).
     def hash_directory(path : String) : String
       # Hidden entries count: adding, removing or changing a dotfile
-      # changes the digest. The tree is walked explicitly rather than
-      # globbed, so metacharacters in a name (a directory called
-      # "assets[2]") are taken literally.
+      # changes the digest
       entries = [] of String
-      collect_directory_entries(path, entries)
+      Croupier.collect_tree(path, entries)
       entries.sort!
 
       return Digest::SHA1.hexdigest(entries.join("\n")) if @fast_dirs
@@ -119,19 +112,6 @@ module Croupier
           ctx.update(file_hashes[f])
           ctx.update("\n")
         end
-      end
-    end
-
-    # Append every path under `dir` (files and subdirectories, dotfiles
-    # included, `dir` itself excluded) to `entries`. A symlinked `dir`
-    # is followed; symlinked directories inside the tree are not
-    # descended into. The digest is built from this list, so changing
-    # its shape re-stales every directory input (specs pin it).
-    private def collect_directory_entries(dir : String, entries : Array(String)) : Nil
-      Dir.each_child(dir) do |child|
-        entry = File.join(dir, child)
-        entries << entry
-        collect_directory_entries(entry, entries) if File.directory?(entry) && !File.symlink?(entry)
       end
     end
 

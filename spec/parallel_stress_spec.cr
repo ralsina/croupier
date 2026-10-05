@@ -51,7 +51,7 @@ describe "Parallel stress" do
       root_count = 25
       dependent_count = 200
       # Every dependent reads every root output, so one unchanged root
-      # triggers dependent_count mark_dependency_fresh notifications.
+      # triggers dependent_count recompute_staleness notifications.
       root_outputs = (0...root_count).map { |i| "root_#{i}" }
       root_outputs.each do |output|
         Task.new(output: output, inputs: ["seed"]) { "stable content" }

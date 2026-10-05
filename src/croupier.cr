@@ -39,6 +39,21 @@ module Croupier
     end
   end
 
+  # Append every path under `dir` (files and subdirectories, dotfiles
+  # included, `dir` itself excluded) to `entries`. The tree is walked
+  # rather than globbed, so metacharacters in a name (a directory
+  # called "assets[2]") are taken literally. A symlinked `dir` is
+  # followed; symlinked directories inside the tree are not descended
+  # into. Directory digests are built from this list, so changing its
+  # shape re-stales every directory input (specs pin it).
+  def self.collect_tree(dir : String, entries : Array(String)) : Nil
+    Dir.each_child(dir) do |child|
+      entry = File.join(dir, child)
+      entries << entry
+      collect_tree(entry, entries) if File.directory?(entry) && !File.symlink?(entry)
+    end
+  end
+
   # TaskManager is a singleton that keeps track of all tasks.
   # Its methods live in focused files under src/croupier/: kv_store.cr,
   # hash_state.cr, graph.cr, runner.cr and watcher.cr.
@@ -64,7 +79,7 @@ module Croupier
     #
     # Concurrency contract shared by last_run / this_run / next_run:
     # task workers only touch them through the @hashes_lock accessors
-    # in hash_state.cr (record_output_hash, swap_output_hash). Every
+    # in hash_state.cr (swap_output_hash). Every
     # other access happens on the coordinating fiber (the run_tasks
     # caller, or the autorun fiber in auto mode), so those sites take
     # no lock.
