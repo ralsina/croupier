@@ -82,6 +82,29 @@ describe "TaskManager" do
       end
     end
 
+    it "defers additions made during a run until the run ends" do
+      with_scenario("empty", to_create: {"seed" => "seed"}) do
+        seen_inside = nil
+        results = [] of Bool
+        Task.new(output: "one", inputs: ["seed"]) {
+          # Not a file yet: applied mid-run it would block "two"
+          results << TaskManager.add_input("two", "missing")
+          results << TaskManager.add_input("two", "missing")
+          "data"
+        }
+        Task.new(output: "two", inputs: ["one"]) {
+          seen_inside = TaskManager.tasks["two"].inputs.includes?("missing")
+          "data"
+        }
+        TaskManager.run_tasks
+
+        # The duplicate queued call reports no change
+        results.should eq [true, false]
+        seen_inside.should be_false
+        TaskManager.tasks["two"].inputs.should contain "missing"
+      end
+    end
+
     it "raises for unknown tasks and self-cycles" do
       with_scenario("empty") do
         Task.new(output: "out", inputs: [] of String) { "data" }

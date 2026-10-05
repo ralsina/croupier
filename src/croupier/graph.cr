@@ -2,8 +2,6 @@ module Croupier
   # TaskManagerType methods for the dependency graph, staleness
   # computation and dependency queries.
   class TaskManagerType
-    # Set by run_wave while worker fibers are executing a batch.
-    @parallel_wave_active = false
     # How many runs are executing. Two can overlap in one process (an
     # auto cycle and a manual run_tasks waiting on the state lock).
     # While it is above zero the task set can't change.
@@ -12,10 +10,10 @@ module Croupier
     # Add `input` to the inputs of the task registered as `task_key`.
     #
     # The supported way to grow a task's dependencies, including from
-    # task procs on parallel workers. The graph, staleness and the
-    # wave plan are computed before tasks run, so the new dependency
-    # takes effect on the next run. During a parallel wave the
-    # addition is queued and applied at the wave barrier.
+    # task procs on parallel workers. The graph and staleness are
+    # computed before tasks run, so the new dependency takes effect on
+    # the next run: during a run the addition is queued, and applied
+    # when the last overlapping run ends.
     #
     # Returns false if the task already had the input. Raises
     # UnknownTaskError for an unregistered `task_key`, and CycleError
@@ -27,9 +25,9 @@ module Croupier
         raise CycleError.new("Cycle detected: #{input} is a key of task #{task_key} itself") if task.keys.includes?(input)
         return false if task.inputs.includes?(input)
 
-        if @parallel_wave_active
-          # The coordinator iterates input sets during the wave
-          @pending_inputs << {task_key, input}
+        if @run_active > 0
+          # Runs iterate input sets without a lock
+          return @pending_inputs.add?({task_key, input})
         else
           task.inputs << input
           invalidate_graph_cache
@@ -38,9 +36,25 @@ module Croupier
       end
     end
 
-    # add_input calls made during a parallel wave, applied in call
-    # order by the coordinating fiber at the wave barrier.
-    @pending_inputs = [] of {String, String}
+    # add_input calls made during a run, applied in call order when
+    # the last overlapping run ends. A Set keeps insertion order and
+    # drops repeated calls.
+    @pending_inputs = Set({String, String}).new
+
+    # Apply the queued add_input calls. Called with @data_mutex held,
+    # once no run is active. Invalidating the graph is what tells the
+    # autorun loop to re-watch and run again.
+    private def apply_pending_inputs_locked : Nil
+      return if @pending_inputs.empty?
+      @pending_inputs.each do |task_key, input|
+        # Set#<< ignores an input queued under two of a task's keys
+        if task = tasks[task_key]?
+          task.inputs << input
+        end
+      end
+      @pending_inputs.clear
+      invalidate_graph_cache
+    end
 
     # Register a newly constructed task (called by Task.new).
     #

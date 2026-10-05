@@ -43,7 +43,10 @@ module Croupier
           end
         end
       ensure
-        @data_mutex.synchronize { @run_active -= 1 }
+        @data_mutex.synchronize do
+          @run_active -= 1
+          apply_pending_inputs_locked if @run_active == 0
+        end
       end
     end
 
@@ -234,65 +237,43 @@ module Croupier
 
       Log.debug { "Starting work-stealing execution of #{batch.size} tasks with #{num_workers} workers" }
 
-      @data_mutex.synchronize { @parallel_wave_active = true }
-      begin
-        num_workers.times do |worker_index|
-          # Named so specs can tell croupier's fibers from runtime
-          # ones (GC markers, scheduler loops)
-          spawn(name: "croupier-worker-#{worker_index}") do
-            loop do
-              task = task_queue.receive?
-              break unless task # Queue is empty, exit worker
+      num_workers.times do |worker_index|
+        # Named so specs can tell croupier's fibers from runtime
+        # ones (GC markers, scheduler loops)
+        spawn(name: "croupier-worker-#{worker_index}") do
+          loop do
+            task = task_queue.receive?
+            break unless task # Queue is empty, exit worker
 
-              error : Exception? = nil
-              begin
-                task.run unless dry_run
-              rescue ex
-                error = ex
-              end
-              results.send({task, error})
+            error : Exception? = nil
+            begin
+              task.run unless dry_run
+            rescue ex
+              error = ex
             end
+            results.send({task, error})
           end
         end
+      end
 
-        # Collect every outcome: this loop is the wave barrier
-        batch.size.times do
-          task, error = results.receive
-          if failure = error
-            failed_tasks << task
-            # Keep the exception itself so RunFailure#errors has every
-            # cause
-            errors << failure
-            Log.error { "Task #{task.outputs} failed: #{failure.message}" }
-          end
-          # Only successful tasks turn fresh: a failed one stays stale
-          # so its dependents wait instead of running against a missing
-          # or half-written output
-          task.stale = !error.nil?
-          finished_tasks << task
-
-          if error.nil? && early_cutoff && !task.outputs_changed?
-            notify_dependents_unchanged(task)
-          end
+      # Collect every outcome: this loop is the wave barrier
+      batch.size.times do
+        task, error = results.receive
+        if failure = error
+          failed_tasks << task
+          # Keep the exception itself so RunFailure#errors has every
+          # cause
+          errors << failure
+          Log.error { "Task #{task.outputs} failed: #{failure.message}" }
         end
-      ensure
-        # Workers are done, so queued add_input calls can be applied
-        # here. Clearing the flag, applying the queue and invalidating
-        # happen under one lock, so an add_input arriving from another
-        # thread can't be applied ahead of the queued ones.
-        @data_mutex.synchronize do
-          @parallel_wave_active = false
-          pending = @pending_inputs
-          @pending_inputs = [] of {String, String}
-          pending.each do |task_key, input|
-            if task = tasks[task_key]?
-              # Set#<< ignores duplicates queued during the wave
-              task.inputs << input
-            end
-          end
-          # Skip invalidating when nothing was queued, to avoid a
-          # pointless graph rebuild
-          invalidate_graph_cache unless pending.empty?
+        # Only successful tasks turn fresh: a failed one stays stale
+        # so its dependents wait instead of running against a missing
+        # or half-written output
+        task.stale = !error.nil?
+        finished_tasks << task
+
+        if error.nil? && early_cutoff && !task.outputs_changed?
+          notify_dependents_unchanged(task)
         end
       end
       errors
