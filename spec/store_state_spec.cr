@@ -58,7 +58,9 @@ describe "TaskManager" do
 
     it "should report all tasks required to produce multiple outputs" do
       with_scenario("basic", to_create: {"input" => "foo", "input2" => "bar"}) do
-        TaskManager.dependencies(["output4", "output5"]).should eq ["output3", "output4", "output5"]
+        # Placed in rounds: output3 and output5 need no other task,
+        # output4 needs output3
+        TaskManager.dependencies(["output4", "output5"]).should eq ["output3", "output5", "output4"]
       end
     end
 

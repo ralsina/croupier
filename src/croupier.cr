@@ -1,7 +1,6 @@
 # Croupier describes a task graph and lets you operate on them
 require "./croupier/errors"
 require "./task"
-require "./topo_sort"
 require "./croupier/kv_store"
 require "./croupier/hash_state"
 require "./croupier/graph"
@@ -169,8 +168,7 @@ module Croupier
       this_run.clear
       next_run.clear
       @all_inputs = nil
-      @graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
-      @graph_sorted = [] of String
+      @sorted_keys = nil
       @reverse_deps.clear
       # Locked: the filesystem watcher may still deliver events while
       # cleanup runs

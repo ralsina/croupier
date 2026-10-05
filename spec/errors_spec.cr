@@ -9,7 +9,7 @@ describe "error taxonomy" do
     offenders = [] of String
     {% for klass in [Croupier::TaskDefinitionError, Croupier::CycleError, Croupier::UnknownTaskError,
                      Croupier::UnknownInputsError, Croupier::TaskVerificationError, Croupier::TaskFailure,
-                     Croupier::RunFailure, Croupier::UnreachableTaskError, Croupier::UsageError] %}
+                     Croupier::RunFailure, Croupier::UsageError] %}
       {% unless klass.ancestors.includes?(Croupier::Error) %} offenders << {{ klass.stringify }} {% end %}
     {% end %}
     offenders.should be_empty

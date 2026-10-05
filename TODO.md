@@ -82,7 +82,12 @@
 
   Not really needed.
 
-* Switch `topological_sort` to Kahn's algorithm (in-degree + queue)
+* ~~Switch `topological_sort` to Kahn's algorithm (in-degree + queue)~~
+
+  *(done in #85)* The DFS turned out to miss cycles reachable from an
+  input (#83), and Kahn detects every cycle in the same pass that
+  orders the tasks. That outweighs the speed difference below, which
+  the cache makes noise anyway.
 
   Measured 2026-08-14 on synthetic DAGs shaped like the real
   vertice_dict: the current DFS is already O(V+E) and Kahn is

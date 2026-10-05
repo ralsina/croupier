@@ -90,48 +90,70 @@ module Croupier
       @all_inputs = nil
     end
 
-    # Dependency graph as an adjacency hash (vertex => the vertices it
-    # points at). The default block adds vertices on first touch.
-    @graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
-    @graph_sorted = [] of String
+    # Task keys in dependency order; nil when not computed yet.
+    @sorted_keys : Array(String)? = nil
     # Task key => keys of the tasks that depend on it. Built by
     # propagate_staleness, reused by early cutoff.
     @reverse_deps = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
 
-    # The dependency graph and the task keys in topological order,
-    # rebuilt when invalidated.
-    def sorted_task_graph
-      if @graph_invalidated || @graph.empty?
-        @graph = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
-        @graph_sorted = [] of String
-        @graph_invalidated = false
-        @all_inputs = nil
+    # Every task key, each after the keys of the tasks producing its
+    # inputs. Cached until the graph is invalidated. Raises CycleError
+    # when tasks depend on each other in a cycle.
+    private def sorted_task_keys : Array(String)
+      cached = @sorted_keys
+      return cached if cached && !@graph_invalidated
+      @graph_invalidated = false
+      @sorted_keys = topological_order
+    end
 
-        # Inputs that are not tasks hang off the virtual root
-        all_inputs.each do |input|
-          @graph[Croupier::ROOT_VERTEX] << input unless tasks.has_key? input
+    # Kahn's algorithm over task keys: place every key whose producer
+    # tasks are all placed, then repeat. Each round is sorted by name,
+    # so the order is deterministic. Keys never placed are on or
+    # behind a cycle.
+    private def topological_order : Array(String)
+      # Key => keys of the tasks consuming it, and key => how many of
+      # its task's inputs are task keys not placed yet
+      consumers = {} of String => Array(String)
+      pending = {} of String => Int32
+      tasks.each do |key, task|
+        pending[key] = 0
+        task.@inputs.each do |input|
+          next unless tasks.has_key?(input)
+          (consumers[input] ||= [] of String) << key
+          pending[key] += 1
         end
-
-        # Each input gets an edge into the task; tasks without inputs
-        # hang off the virtual root
-        tasks.each do |output, task|
-          if task.@inputs.empty?
-            @graph[Croupier::ROOT_VERTEX] << output
-          end
-          task.@inputs.each do |input|
-            @graph[input] << output
-          end
-        end
-
-        # Make every vertex a key, so leaves appear with empty sets
-        @graph.values.flat_map(&.to_a).each do |vertex|
-          @graph[vertex]
-        end
-
-        # The sorted list holds tasks only, not plain inputs
-        @graph_sorted = Croupier.topological_sort(@graph).select { |v| tasks.has_key? v }
       end
-      return @graph, @graph_sorted
+
+      order = [] of String
+      ready = pending.select { |_, count| count == 0 }.keys.sort!
+      until ready.empty?
+        order.concat(ready)
+        next_ready = [] of String
+        ready.each do |key|
+          consumers.fetch(key, nil).try &.each do |consumer|
+            pending[consumer] -= 1
+            next_ready << consumer if pending[consumer] == 0
+          end
+        end
+        ready = next_ready.sort!
+      end
+      return order if order.size == pending.size
+
+      raise CycleError.new("Cycle detected in the task graph: #{cycle_members(pending, consumers).join(", ")}")
+    end
+
+    # The keys Kahn's algorithm left unplaced, minus those that are
+    # only downstream of a cycle: repeatedly drop keys with no
+    # unplaced consumer, so what remains is on a cycle (or between
+    # two). Sorted for a stable message.
+    private def cycle_members(pending : Hash(String, Int32), consumers : Hash(String, Array(String))) : Array(String)
+      left = pending.select { |_, count| count > 0 }.keys.to_set
+      loop do
+        sinks = left.select { |key| consumers.fetch(key, [] of String).none? { |consumer| left.includes?(consumer) } }
+        break if sinks.empty?
+        left.subtract(sinks)
+      end
+      left.to_a.sort
     end
 
     # All inputs of all tasks, cached; nil means the cache is invalid.
@@ -168,8 +190,11 @@ module Croupier
           raise UnknownTaskError.new("Unknown output #{output}")
         end
       end
+      # Sort first: it raises CycleError on a cycle, where the
+      # recursive closure walk below would never terminate
+      order = sorted_task_keys
       result = _dependencies outputs
-      sorted_task_graph[1].select(->(v : String) { result.includes? v })
+      order.select { |key| result.includes?(key) }
     end
 
     # Single-output convenience overload.
@@ -209,6 +234,9 @@ module Croupier
     end
 
     def depends_on(inputs : Array(String))
+      # Raises CycleError on a cycle, where the recursive walk would
+      # never terminate
+      sorted_task_keys
       depends_on_impl(inputs, {} of String => Set(String), consumers_index)
     end
 

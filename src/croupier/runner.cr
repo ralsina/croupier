@@ -18,7 +18,7 @@ module Croupier
       keep_going : Bool = false,
       early_cutoff : Bool? = nil,
     )
-      task_names = targets ? dependencies(targets) : sorted_task_graph[1]
+      task_names = targets ? dependencies(targets) : sorted_task_keys
 
       # Outside auto mode, a missing input fails up front as "Unknown
       # inputs" rather than mid-run as "Waiting for". Auto mode skips
