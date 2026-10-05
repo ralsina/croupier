@@ -171,27 +171,15 @@
         @root_exists[root] = root_exists
       end
 
-      # Root plus, if it is a directory, every entry under it
-      # (dotfiles included), or the nearest existing parent if the
-      # root doesn't exist. The tree is walked explicitly rather than
-      # globbed, so metacharacters in a name are taken literally. A
-      # symlinked root is followed; symlinked directories inside the
-      # tree are not descended into (same rules as
-      # collect_directory_entries in hash_state.cr).
+      # Root plus, if it is a directory, every entry under it (see
+      # Croupier.collect_tree), or the nearest existing parent if the
+      # root doesn't exist.
       private def watch_paths(root : String, root_exists : Bool) : Array(String)
         return [existing_parent(root)] unless root_exists
 
         paths = [root]
-        collect_watch_paths(root, paths) if File.directory?(root)
+        Croupier.collect_tree(root, paths) if File.directory?(root)
         paths
-      end
-
-      private def collect_watch_paths(dir : String, paths : Array(String)) : Nil
-        Dir.each_child(dir) do |child|
-          entry = File.join(dir, child)
-          paths << entry
-          collect_watch_paths(entry, paths) if File.directory?(entry) && !File.symlink?(entry)
-        end
       end
 
       private def existing_parent(path : String) : String

@@ -85,7 +85,7 @@ module Croupier
             stop_autorun
             break
           else
-            retry_delay, targets = autorun_cycle(targets, retry_delay)
+            retry_delay = autorun_cycle(targets, retry_delay)
           end
         end
       end
@@ -110,8 +110,8 @@ module Croupier
     # would keep re-staling dependents). this_run holds the scanned
     # input hashes, next_run the recorded output hashes.
     #
-    # Returns the next retry delay and the (unchanged) targets.
-    private def autorun_cycle(targets : Array(String), retry_delay : Float64) : {Float64, Array(String)}
+    # Returns the delay before the next cycle.
+    private def autorun_cycle(targets : Array(String), retry_delay : Float64) : Float64
       # Sleep first: sleeping at the end would make it likely that a
       # stop order arrives before the run, so tests couldn't observe
       # its side effects
@@ -119,7 +119,7 @@ module Croupier
       changes = queued_changes_snapshot
       # set() may mark kv keys modified from other fibers
       modified_pending = @modified_lock.synchronize { !@modified.empty? }
-      return {retry_delay, targets} if changes.empty? && !modified_pending
+      return retry_delay if changes.empty? && !modified_pending
       begin
         Log.info { "Detected changes in #{changes}" }
         # No need to mark targets stale: propagate_staleness resets
@@ -159,7 +159,7 @@ module Croupier
         # Tasks run serially on this fiber, so it is the only writer
         # of the run hashes and the merge needs no lock
         last_run.merge!(this_run).merge!(next_run)
-        {AUTORUN_RETRY_MIN_DELAY, targets}
+        AUTORUN_RETRY_MIN_DELAY
       rescue ex
         # Every failure retries with backoff: stopping on the first
         # error would leave a long-lived watcher blind. Only the log
@@ -177,7 +177,7 @@ module Croupier
           # croupier (task failures arrive wrapped in RunFailure)
           Log.error { "Automatic run crashed (bug, will retry): #{ex.inspect_with_backtrace}" }
         end
-        {delay, targets}
+        delay
       end
     end
 

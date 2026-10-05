@@ -149,13 +149,10 @@ module Croupier
       result
     end
 
-    # The set of all inputs for the given tasks
+    # Every input of the given targets and their dependencies. Raises
+    # UnknownTaskError for an unknown target.
     def inputs(targets : Array(String))
       result = Set(String).new
-      targets.each do |target|
-        raise UnknownTaskError.new("Unknown target #{target}") unless tasks.has_key? target
-      end
-
       dependencies(targets).each do |task|
         result.concat tasks[task].@inputs
       end
@@ -409,14 +406,8 @@ module Croupier
     # the run (dependents wait for stale dependencies), so the root
     # scan is skipped.
     def propagate_staleness(run_all : Bool = false)
-      tasks.values.each(&.stale=(true))
-
-      # One pass per task: `tasks` holds a multi-output task once per
-      # output
       @reverse_deps.clear
-      seen_tasks = Set(Task).new
-      tasks.each_value do |task|
-        next unless seen_tasks.add?(task)
+      each_unique_task do |task|
         task.inputs.each do |input|
           if tasks.has_key?(input)
             @reverse_deps[input].concat(task.keys)
@@ -426,12 +417,15 @@ module Croupier
 
       if run_all
         Log.debug { "run_all: skipping staleness root scan, all tasks stale" }
+        each_unique_task(&.stale=(true))
         return
       end
 
-      reverse_deps = @reverse_deps
-
-      stale_tasks = find_stale_roots
+      # Start from the keys of tasks stale on their own account
+      stale_tasks = Set(String).new
+      each_unique_task do |task|
+        stale_tasks.concat(task.keys) if task.stale_on_own?
+      end
 
       # Worklist walk; a cursor instead of shift, which is O(n)
       worklist = stale_tasks.to_a
@@ -440,7 +434,7 @@ module Croupier
         stale_output = worklist[cursor]
         cursor += 1
 
-        reverse_deps[stale_output].each do |dependent|
+        @reverse_deps[stale_output].each do |dependent|
           unless stale_tasks.includes?(dependent)
             stale_tasks << dependent
             worklist << dependent
@@ -449,46 +443,20 @@ module Croupier
       end
 
       # A multi-output task's keys are stale or fresh together
-      seen_tasks.clear
-      tasks.each_value do |task|
-        next unless seen_tasks.add?(task)
+      each_unique_task do |task|
         task.stale = task.keys.any? { |key| stale_tasks.includes?(key) }
       end
 
       Log.debug { "Propagated staleness: #{stale_tasks.size} stale, #{tasks.size - stale_tasks.size} fresh" }
     end
 
-    # Keys of the tasks stale on their own: always_run, no inputs,
-    # a missing output, or a modified input.
-    private def find_stale_roots : Set(String)
-      stale_tasks = Set(String).new
-
-      seen_tasks = Set(Task).new
+    # Yield each registered task once: `tasks` holds a multi-output
+    # task under each of its outputs.
+    private def each_unique_task(&)
+      seen = Set(Task).new
       tasks.each_value do |task|
-        next unless seen_tasks.add?(task)
-
-        if task.always_run? || task.inputs.empty?
-          stale_tasks.concat(task.keys)
-          next
-        end
-
-        file_outputs = task.outputs.reject(&.lchop?("kv://"))
-        kv_outputs = task.outputs.select(&.lchop?("kv://")).map(&.lchop("kv://"))
-
-        missing_outputs = file_outputs.any? { |o| !File.exists?(o) } ||
-                          kv_outputs.any? { |o| !TaskManager.get(o) }
-        if missing_outputs
-          stale_tasks.concat(task.keys)
-          next
-        end
-
-        modified_inputs = task.inputs.any? { |i| modified?(i) }
-        if modified_inputs
-          stale_tasks.concat(task.keys)
-        end
+        yield task if seen.add?(task)
       end
-
-      stale_tasks
     end
 
     # Raise UnknownInputsError unless every input is a kv:// key, a

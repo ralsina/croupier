@@ -63,7 +63,8 @@ module Croupier
     # Create a task with zero or more outputs.
     #
     # `outputs` is an array of files or k/v store keys that the task
-    #   generates (the `output:` overloads take a single one)
+    #   generates. A single output can be passed as a string, or by
+    #   name as `output:`.
     # `inputs` is an array of filesystem paths, task ids or k/v store
     #   keys that the task depends on
     # The block (or `proc:`) is executed when the task is run
@@ -91,30 +92,53 @@ module Croupier
     # keeping references to Task objects you create is probably
     # pointless.
     def initialize(
-      outputs : Array(String) = [] of String,
+      outputs : Array(String) | String | Nil = nil,
       inputs : Array(String) = [] of String,
       no_save : Bool = false,
       id : String? = nil,
       always_run : Bool = false,
       mergeable : Bool = true,
       mutex : String? = nil,
+      output : String? = nil,
       &block : TaskProc
     )
-      # Set before delegating: the inner initialize may merge this
-      # task with others, and the merge checks mutex compatibility
-      @mutex = mutex
-      initialize(outputs, inputs, block, no_save, id, always_run, mergeable)
-      TaskManager.add_mutex(mutex) if mutex
+      setup(output_list(outputs, output), inputs, block, no_save, id, always_run, mergeable, mutex)
     end
 
     def initialize(
-      outputs : Array(String) = [] of String,
+      outputs : Array(String) | String | Nil = nil,
       inputs : Array(String) = [] of String,
       proc : TaskProc? = nil,
       no_save : Bool = false,
       id : String? = nil,
       always_run : Bool = false,
       mergeable : Bool = true,
+      mutex : String? = nil,
+      output : String? = nil,
+    )
+      setup(output_list(outputs, output), inputs, proc, no_save, id, always_run, mergeable, mutex)
+    end
+
+    # `outputs` (an array, a single string or nil) and the `output:`
+    # alias, as one array
+    private def output_list(outputs : Array(String) | String | Nil, output : String?) : Array(String)
+      raise TaskDefinitionError.new("Pass either output or outputs, not both") if outputs && output
+      case outputs
+      when Array(String) then outputs
+      when String        then [outputs]
+      else                    output ? [output] : [] of String
+      end
+    end
+
+    private def setup(
+      outputs : Array(String),
+      inputs : Array(String),
+      proc : TaskProc?,
+      no_save : Bool,
+      id : String?,
+      always_run : Bool,
+      mergeable : Bool,
+      mutex : String?,
     )
       # An empty kv:// key can never be satisfied (get("") on a store
       # that never holds it): better to fail at declaration
@@ -135,9 +159,13 @@ module Croupier
       @inputs = Set.new inputs
       @no_save = no_save
       @mergeable = mergeable
+      # Set before registering: registration may merge this task with
+      # others, and the merge checks mutex compatibility
+      @mutex = mutex
 
       # Raises if a run is in progress (see TaskManager.register_task)
       TaskManager.register_task(self, id)
+      TaskManager.add_mutex(mutex) if mutex
     end
 
     # Register this task in the TaskManager: merge every task it has
@@ -187,15 +215,23 @@ module Croupier
     # Check flag compatibility across the WHOLE set before the first
     # merge: merge mutates the first task in place, so a reduce that
     # failed partway (3+ colliding tasks) would leave earlier merges
-    # applied. Same checks and messages as Task#merge.
+    # applied.
     private def check_merge_flag_compatibility(to_merge : Array(Task))
-      return unless to_merge.size > 1
       first = to_merge.first
       to_merge.each do |task|
-        raise TaskDefinitionError.new("Cannot merge tasks with different no_save settings") unless task.no_save? == first.no_save?
-        raise TaskDefinitionError.new("Cannot merge tasks with different always_run settings") unless task.always_run? == first.always_run?
-        raise TaskDefinitionError.new("Cannot merge tasks with different mutexes") unless task.mutex == first.mutex
+        if conflict = first.merge_conflict(task)
+          raise TaskDefinitionError.new(conflict)
+        end
       end
+    end
+
+    # Why `self` and `other` can't be merged, or nil if they can. A
+    # merged task runs all procs under one mutex, so keeping only one
+    # side's would break the other's mutual exclusion.
+    protected def merge_conflict(other : Task) : String?
+      return "Cannot merge tasks with different no_save settings" unless no_save? == other.no_save?
+      return "Cannot merge tasks with different always_run settings" unless always_run? == other.always_run?
+      "Cannot merge tasks with different mutexes" unless mutex == other.mutex
     end
 
     private def register_merged(to_merge : Array(Task))
@@ -206,44 +242,6 @@ module Croupier
       # id would falsely conflict
       to_merge.each { |t| TaskManager.tasks_by_id.delete(t.id) unless t == reduced }
       TaskManager.tasks_by_id[reduced.id] = reduced
-    end
-
-    def initialize(
-      output : String? = nil,
-      inputs : Array(String) = [] of String,
-      no_save : Bool = false,
-      id : String? = nil,
-      always_run : Bool = false,
-      mergeable : Bool = true,
-      mutex : String? = nil,
-      &block : TaskProc
-    )
-      initialize(
-        output ? [output] : [] of String,
-        inputs, no_save, id, always_run, mergeable, mutex,
-        &block
-      )
-    end
-
-    # Create a task with zero or one outputs. Overload for convenience.
-    def initialize(
-      output : String? = nil,
-      inputs : Array(String) = [] of String,
-      proc : TaskProc? = nil,
-      no_save : Bool = false,
-      id : String? = nil,
-      always_run : Bool = false,
-      mergeable : Bool = true,
-    )
-      initialize(
-        outputs: output ? [output] : [] of String,
-        inputs: inputs,
-        proc: proc,
-        no_save: no_save,
-        id: id,
-        always_run: always_run,
-        mergeable: mergeable
-      )
     end
 
     # Executes the proc for the task
@@ -328,7 +326,7 @@ module Croupier
     # value changed, and the value's hash is recorded like a file's
     private def save_kv_output(key : String, output : String, call_result : String)
       @outputs_changed = true if TaskManager.set(key, call_result)
-      TaskManager.record_output_hash(output, Digest::SHA1.hexdigest(call_result))
+      TaskManager.swap_output_hash(output, Digest::SHA1.hexdigest(call_result))
     end
 
     private def save_file_output(output : String, call_result : String)
@@ -363,9 +361,6 @@ module Croupier
       when Staleness::Stale then true
       when Staleness::Fresh then false
       else
-        # Unknown: compute on demand
-        return true if @always_run || @inputs.empty?
-
         computed = compute_staleness
         @staleness.set(computed ? Staleness::Stale : Staleness::Fresh)
         computed
@@ -389,19 +384,19 @@ module Croupier
       )
     end
 
-    # Early cutoff: `input` turned out unchanged, so recompute
-    # staleness from all inputs (another may still be stale).
-    def mark_dependency_fresh(input : String)
-      self.stale = compute_staleness(inputless_is_stale: true)
+    # Early cutoff: one of the task's inputs turned out unchanged, so
+    # recompute staleness from all of them (another may still be
+    # stale).
+    def recompute_staleness : Nil
+      self.stale = compute_staleness
     end
 
-    # Stale unless every output exists (as a file or as a k/v key) and
-    # no input is modified or produced by a stale task. Shared by
-    # stale? and mark_dependency_fresh; `inputless_is_stale` makes
-    # always_run and input-less tasks stale (stale? checks that
-    # itself first).
-    private def compute_staleness(inputless_is_stale : Bool = false) : Bool
-      return true if inputless_is_stale && (@always_run || @inputs.empty?)
+    # Whether the task is stale on its own account, regardless of the
+    # tasks producing its inputs: it is always_run or has no inputs,
+    # an output is missing (as a file or a k/v key), or an input was
+    # modified. TaskManager.propagate_staleness starts from these.
+    def stale_on_own? : Bool
+      return true if @always_run || @inputs.empty?
 
       return true if @outputs.any? do |output|
                        if key = output.lchop? "kv://"
@@ -411,9 +406,13 @@ module Croupier
                        end
                      end
 
-      return true if @inputs.any? { |input| TaskManager.modified?(input) }
+      @inputs.any? { |input| TaskManager.modified?(input) }
+    end
 
-      @inputs.any? do |input|
+    # Stale on its own account, or because an input is produced by a
+    # stale task.
+    private def compute_staleness : Bool
+      stale_on_own? || @inputs.any? do |input|
         task = TaskManager.tasks[input]?
         task && task.stale?
       end
@@ -441,11 +440,11 @@ module Croupier
       @inputs.any? { |input| !input_satisfied?(input) }
     end
 
-    # A task is ready if it needs to run (stale, always_run or
-    # run_all) and is not waiting for any input
+    # A task is ready if it needs to run (stale, or run_all) and is
+    # not waiting for any input. always_run tasks are stale until they
+    # run.
     def ready?(run_all = false)
-      (stale? || always_run? || run_all) &&
-        !waiting?
+      (stale? || run_all) && !waiting?
     end
 
     def to_s(io)
@@ -455,11 +454,9 @@ module Croupier
     # Merge two tasks: inputs and outputs are joined, and the second
     # task's procs are appended to the first's.
     def merge(other : Task)
-      raise TaskDefinitionError.new("Cannot merge tasks with different no_save settings") unless no_save? == other.no_save?
-      raise TaskDefinitionError.new("Cannot merge tasks with different always_run settings") unless always_run? == other.always_run?
-      # A merged task runs all procs under one mutex, so keeping only
-      # one side's would break the other's mutual exclusion
-      raise TaskDefinitionError.new("Cannot merge tasks with different mutexes") unless mutex == other.mutex
+      if conflict = merge_conflict(other)
+        raise TaskDefinitionError.new(conflict)
+      end
 
       # @outputs may hold duplicates: several procs can write the
       # same output

@@ -202,6 +202,14 @@ describe "TaskManager" do
         end
       end
 
+      it "should run nothing for an empty target list" do
+        with_scenario("empty") do
+          Task.new(output: "out1") { "x" }
+          TaskManager.run_tasks(targets: [] of String, parallel: parallel)
+          File.exists?("out1").should be_false
+        end
+      end
+
       it "should fail if the next task to run is not ready" do
         with_scenario("empty") do
           Task.new(output: "t1", inputs: ["kv://foo"], proc: TaskProc.new { "" })
