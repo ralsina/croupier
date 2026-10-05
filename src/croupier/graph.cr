@@ -230,13 +230,18 @@ module Croupier
     end
 
     # Memoized transitive closure over `nodes`: each node contributes
-    # itself when `include_node` says so, then its `edges` recurse.
-    # The memo holds each node's own closure, never its siblings'.
+    # `seed(node)` (upstream: the node itself when it is a task;
+    # downstream: the task's outputs), then `edges(node)` recurse. The
+    # memo holds each node's own closure, never its siblings'. Raises
+    # CycleError if the edges lead back to a node still being walked:
+    # both callers sort first (which raises with the cycle's members),
+    # so this is a backstop for future callers.
     private def memoized_closure(
       nodes : Array(String),
       memo : Hash(String, Set(String)),
       seed : String -> Array(String),
       edges : String -> Array(String),
+      visiting : Set(String) = Set(String).new,
     ) : Set(String)
       result = Set(String).new
       nodes.each do |node|
@@ -244,10 +249,12 @@ module Croupier
           result.concat cached
           next
         end
+        raise CycleError.new("Cycle detected in the task graph: #{visiting.to_a.sort.join(", ")}") unless visiting.add?(node)
 
         node_result = Set(String).new
         node_result.concat(seed.call(node))
-        node_result.concat(memoized_closure(edges.call(node), memo, seed, edges))
+        node_result.concat(memoized_closure(edges.call(node), memo, seed, edges, visiting))
+        visiting.delete(node)
         memo[node] = node_result
         result.concat(node_result)
       end
@@ -269,7 +276,7 @@ module Croupier
       # tasks consuming any of those outputs
       outputs_of = ->(task_id : String) { tasks_by_id[task_id].outputs }
       downstream = ->(task_id : String) { downstream_task_ids(task_id, consumers) }
-      starts = inputs.flat_map { |input| consumers.fetch(input, nil) || [] of Task }.map(&.id).uniq!
+      starts = inputs.flat_map { |input| consumers.fetch(input, NO_CONSUMERS) }.map(&.id).uniq!
       memoized_closure(starts, {} of String => Set(String), outputs_of, downstream)
     end
 
@@ -277,9 +284,12 @@ module Croupier
     # as `task_id`
     private def downstream_task_ids(task_id : String, consumers : Hash(String, Array(Task))) : Array(String)
       tasks_by_id[task_id].outputs
-        .flat_map { |output| consumers.fetch(output, nil) || [] of Task }
+        .flat_map { |output| consumers.fetch(output, NO_CONSUMERS) }
         .map(&.id).uniq!
     end
+
+    # Shared empty for consumers.fetch misses
+    NO_CONSUMERS = [] of Task
 
     # Input => tasks that consume it.
     private def consumers_index
