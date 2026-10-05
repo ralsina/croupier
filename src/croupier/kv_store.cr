@@ -7,7 +7,7 @@ module Croupier
 
     # Read-through cache for the k/v store: with a persistent
     # (FileStore) store, every staleness check is a SHA1 of the key
-    # plus a stat and a file read, all under @data_mutex — and
+    # plus a stat and a file read, all under @store_lock — and
     # propagate_staleness / waiting_for check every kv output of every
     # task. Values (and misses, which are the hot case in a
     # from-scratch run: every unbuilt producer's key) are remembered
@@ -50,7 +50,7 @@ module Croupier
       @store_lock.synchronize { store_read(key) }
     end
 
-    # Unsynchronized read-through lookup (callers hold @data_mutex).
+    # Unsynchronized read-through lookup (callers hold @store_lock).
     private def store_read(key) : String?
       if value = @store_cache[key]?
         return value

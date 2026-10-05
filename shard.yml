@@ -11,9 +11,12 @@ license: MIT
 dependencies:
   inotify:
     github: petoem/inotify.cr
+    version: 1.2.0
+  # kiwi has no tagged releases; pin the exact commit so builds are
+  # reproducible and a push to that repo cannot change croupier
   kiwi:
     github: ralsina/kiwi
-    branch: master
+    commit: 65059b87771238593a28b2b8b9fdf77d8e2b9e89
 
 # Not the same crystalline as above :-)
 crystalline:

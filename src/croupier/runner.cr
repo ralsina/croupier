@@ -89,11 +89,9 @@ module Croupier
 
       # Single pass: no intermediate name→task arrays, and staleness is
       # decided at visit time so tasks marked fresh by early cutoff are
-      # skipped. Like the parallel runner, run_all re-runs fresh tasks.
-      # (Supersedes the 4793a67 re-check patch: the visit-time check
-      # t.stale? || run_all honors run_all the same way, and always_run
-      # needs no explicit check because propagate_staleness marks those
-      # tasks stale and early cutoff cannot freshen them.)
+      # skipped. run_all re-runs fresh tasks like the parallel runner;
+      # always_run needs no explicit check because propagate_staleness
+      # marks those tasks stale and early cutoff cannot freshen them.
       task_names.each do |name|
         next unless task = tasks.fetch(name, nil)
         next if finished.includes?(task)
@@ -257,7 +255,7 @@ module Croupier
     # writer of the bookkeeping state, so none of it needs a lock).
     # Worker fibers touch no shared bookkeeping: task staleness is a
     # single atomic field, and the TaskManager data they write goes
-    # through @data_mutex-guarded accessors.
+    # through mutex-guarded accessors (@store_lock, @modified_lock).
     private def run_wave(
       batch : Array(Task),
       dry_run : Bool,
@@ -281,13 +279,14 @@ module Croupier
 
       Log.debug { "Starting work-stealing execution of #{batch.size} tasks with #{num_workers} workers" }
 
+      barrier_failures = [] of Exception
       @data_mutex.synchronize { @parallel_wave_active = true }
       begin
         num_workers.times do |worker_index|
           # Named so specs can count croupier's own fibers: the raw
           # Fiber registry also holds thread infrastructure (GC
           # markers, scheduler loops) that is indistinguishable from
-          # unnamed workers (issue #64)
+          # unnamed workers
           spawn(name: "croupier-worker-#{worker_index}") do
             loop do
               task = task_queue.receive?
@@ -341,14 +340,22 @@ module Croupier
         # is held (Sync::Mutex is not reentrant).
         @data_mutex.synchronize do
           @parallel_wave_active = false
-          applied = !@pending_inputs.empty? || !@pending_subtask_ops.empty?
-          replay_pending_inputs_locked
-          replay_pending_subtask_ops_locked
+          applied = !@pending_wave_ops.empty?
+          # Replay in the workers' call order. A failed deferred
+          # registration is returned, not raised: raising here would
+          # drop the remaining queued operations and skip the run's
+          # epilogue (state save, failure reporting)
+          barrier_failures = replay_pending_wave_ops_locked
           # Nothing changed in a wave with no queued operations:
           # invalidating would force a pointless graph rebuild
           invalidate_graph_cache if applied
         end
       end
+      # Deferred operations that failed at the barrier fail the run
+      # through its normal error reporting (RunFailure#errors). If
+      # the wave body itself raised, that exception keeps precedence
+      # and the barrier failures were logged by the replay.
+      errors.concat(barrier_failures)
       errors
     end
 

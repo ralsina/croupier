@@ -34,7 +34,7 @@ module Croupier
     @existing_files = Set(String).new
 
     # File-existence check with a per-run positive cache. The cache
-    # check and the insert take @data_mutex, but the stat itself does
+    # check and the insert take @files_lock, but the stat itself does
     # NOT: holding the mutex across a syscall serialized every worker's
     # readiness checks on the filesystem. Positive-only caching is
     # preserved (misses are re-checked, so files appearing mid-run are
