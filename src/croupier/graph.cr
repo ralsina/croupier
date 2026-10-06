@@ -330,7 +330,6 @@ module Croupier
     # state file. `targets` limits the scan to those tasks' inputs;
     # other inputs keep their recorded hashes.
     def mark_stale_inputs(run_all : Bool = false, targets : Array(String)? = nil)
-      @existing_files.clear
       # Saved in the state file: the next fast-mode run compares
       # mtimes against it. The state file's own mtime is written at
       # the end of the run and would hide inputs modified mid-run.

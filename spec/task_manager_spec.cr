@@ -192,6 +192,40 @@ describe "TaskManager" do
         end
       end
 
+      it "should wait for an input another task creates as a side effect" do
+        with_scenario("empty") do
+          order = [] of String
+          # "consumer" sorts first, but its input only appears when
+          # "producer" runs: it waits instead of failing
+          Task.new(output: "consumer", inputs: ["kv://side"]) {
+            order << "consumer"
+            "c"
+          }
+          Task.new(output: "producer") {
+            TaskManager.set("side", "made")
+            order << "producer"
+            "p"
+          }
+          TaskManager.run_tasks(parallel: parallel)
+          order.should eq ["producer", "consumer"]
+        end
+      end
+
+      it "should report inputs that never appear" do
+        with_scenario("empty") do
+          ran = false
+          Task.new(output: "consumer", inputs: ["kv://never"]) { "c" }
+          Task.new(output: "other") { ran = true; "o" }
+          expect_raises(Croupier::UnknownInputsError, /Waiting for \["kv:\/\/never"\]/) do
+            TaskManager.run_tasks(parallel: parallel)
+          end
+          # Everything runnable ran first
+          ran.should be_true
+          # With keep_going it is a warning, not an error
+          TaskManager.run_tasks(parallel: parallel, keep_going: true)
+        end
+      end
+
       it "should run nothing for an empty target list" do
         with_scenario("empty") do
           Task.new(output: "out1") { "x" }
@@ -733,6 +767,28 @@ describe "TaskManager" do
           x2.should eq 1
         end
       end
+    end
+  end
+
+  it "should not hold back a ready task behind a slow unrelated one" do
+    with_scenario("empty") do
+      # Needs two workers to say anything
+      next if System.cpu_count < 2
+      order = [] of String
+      lock = Sync::Mutex.new
+      Task.new(output: "slow") {
+        sleep 300.milliseconds
+        lock.synchronize { order << "slow" }
+        "s"
+      }
+      Task.new(output: "fast") { "f" }
+      # Ready as soon as "fast" finishes: it must not wait for "slow"
+      Task.new(output: "after_fast", inputs: ["fast"]) {
+        lock.synchronize { order << "after_fast" }
+        "a"
+      }
+      TaskManager.run_tasks(parallel: true)
+      order.should eq ["after_fast", "slow"]
     end
   end
 

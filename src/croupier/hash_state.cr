@@ -18,26 +18,6 @@ module Croupier
       @modified_lock.synchronize { modified.includes?(key) }
     end
 
-    # Files known to exist during the current run, so readiness sweeps
-    # don't re-stat every input on every wave. Only positive answers
-    # are cached: a missing file may still appear (a side effect of
-    # another task), and caching the miss would leave tasks waiting
-    # forever. Cleared when a run starts and on cleanup.
-    @existing_files = Set(String).new
-
-    # File-existence check with the per-run positive cache. The stat
-    # runs outside @files_lock so workers don't serialize on the
-    # filesystem; racing inserts of the same path are harmless.
-    def file_exists?(path : String) : Bool
-      return true if @files_lock.synchronize { @existing_files.includes?(path) }
-      if File.exists?(path)
-        @files_lock.synchronize { @existing_files << path }
-        true
-      else
-        false
-      end
-    end
-
     # Scan the given inputs (all of them by default) and return a hash
     # with their sha1. Files, including those inside directory inputs,
     # are hashed in parallel by a worker pool bounded by CPU count.
@@ -116,9 +96,8 @@ module Croupier
     end
 
     # Hash a list of files concurrently, returning a {path => sha1} map.
-    # A pool of worker fibers (bounded by CPU count) takes work in
-    # chunks of SCAN_CHUNK_SIZE files, which keeps channel overhead
-    # low. Lists of up to one chunk are hashed inline.
+    # A WorkerPool (bounded by CPU count) takes work in chunks of
+    # SCAN_CHUNK_SIZE files, which keeps channel overhead low. Lists of up to one chunk are hashed inline.
     private def hash_files_parallel(file_inputs : Array(String)) : Hash(String, String)
       hash = {} of String => String
       return hash if file_inputs.empty?
@@ -129,58 +108,27 @@ module Croupier
       end
 
       chunks = file_inputs.each_slice(SCAN_CHUNK_SIZE).to_a
-      num_workers = Math.min(System.cpu_count, chunks.size)
-      enable_parallelism(num_workers)
-      task_queue = Channel(Array(String)).new(chunks.size)
-      result_queue = Channel({Hash(String, String), Exception?}).new(chunks.size)
-
-      chunks.each { |chunk| task_queue.send(chunk) }
-      # Closing lets workers exit (receive? returns nil) once the
-      # queue is drained
-      task_queue.close
-
-      num_workers.times do |worker_index|
-        spawn(name: "croupier-scan-worker-#{worker_index}") do
-          loop do
-            chunk = task_queue.receive?
-            break unless chunk
-            results = {} of String => String
-            error = nil
-            # Report failures (an unreadable or just-deleted file)
-            # through the queue: a worker dying here would leave the
-            # collector below waiting forever
-            begin
-              chunk.each { |path| results[path] = Croupier.hash_file(path) }
-            rescue ex
-              error = ex
-            end
-            result_queue.send({results, error})
-          end
-        end
+      pool = WorkerPool(Array(String), Hash(String, String)).new(
+        "croupier-scan-worker", Math.min(System.cpu_count, chunks.size), chunks.size
+      ) do |chunk|
+        chunk.to_h { |path| {path, Croupier.hash_file(path)} }
       end
+      chunks.each { |chunk| pool.submit(chunk) }
+      pool.close
 
+      # Collect every chunk before raising, so no worker is left
+      # running after we return. A failed chunk (an unreadable or
+      # just-deleted file) reports its exception.
       first_error = nil
       chunks.size.times do
-        results, error = result_queue.receive
-        results.each { |path, sha1| hash[path] = sha1 }
-        first_error ||= error
+        _, result = pool.receive
+        case result
+        in Exception then first_error ||= result
+        in Hash      then hash.merge!(result)
+        end
       end
       raise first_error if first_error
       hash
-    end
-
-    # Resize the default fiber execution context so worker fibers spread
-    # across OS threads. Cheap and idempotent.
-    #
-    # The API exists only on Crystal >= 1.21 without -Dpreview_mt (that
-    # flag selects the old runtime, which has no execution contexts).
-    # Elsewhere this is a no-op and workers run concurrently on one
-    # thread.
-    private def enable_parallelism(workers : Int) : Nil
-      workers = 1 if workers < 1
-      {% if !flag?(:preview_mt) && compare_versions(Crystal::VERSION, "1.21.0") >= 0 %}
-        Fiber::ExecutionContext.default.resize(workers.to_i32)
-      {% end %}
     end
 
     # How many files each scan worker hashes at a time: small enough

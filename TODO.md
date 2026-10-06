@@ -183,7 +183,8 @@ squash-merged PRs (#15–#20); the rest are recorded here for later.
   fractions of a millisecond per run — not worth optimizing. The
   WaitGroup is now gone anyway: workers report over a results channel
   and the coordinator's receive count is the wave barrier. Workers
-  still respawn per wave, deliberately)*
+  still respawn per wave, deliberately. Waves are gone since #82:
+  one ready-queue scheduler keeps a WorkerPool for the whole run)*
 * ~~`#11` `_run_tasks` (serial) builds intermediate arrays via
   `compact_map` + `reject` before a single iteration — easy to fuse.~~
   *(fixed: fused into one pass; staleness is now decided at visit time.
