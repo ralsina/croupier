@@ -42,12 +42,16 @@
 
     it "re-watches a file after editor replacement" do
       with_scenario("empty") do
-        # The callback records the file's CONTENT at event time: the
-        # only way a callback can observe content "3" is a write to
-        # the REPLACEMENT inode after the rename, i.e. proof the
-        # watcher re-armed. (The old inode's IN_IGNORED produces no
-        # callback, and the parent directory is not watched for an
-        # existing input, so the rename itself fires nothing.)
+        # The callback records the file's CONTENT at event time.
+        # Sequence: (1) a write on the watched inode fires two
+        # callbacks (IN_MODIFY + IN_CLOSE_WRITE); (2) the replacement
+        # makes the old watch deliver IN_ATTRIB + the terminal
+        # IN_IGNORED, and both fall through to the exact-match branch
+        # on purpose (that queueing processes a single-save editor's
+        # content) -> 4 callbacks; (3) a write to the replacement
+        # inode fires only if the watcher re-armed on the new inode
+        # -> 6 callbacks. IN_IGNORED is terminal for the old watch,
+        # so step 3 times out if the re-watch is broken.
         contents = [] of String
         contents_lock = Sync::Mutex.new
         watcher = LinuxWatcher.new(->(input : String) {
@@ -55,38 +59,20 @@
         })
         File.write("f.txt", "1") # setup: before watch, no event
         watcher.watch("f.txt")
-        File.write("f.txt", "1") # fires IN_MODIFY on the watched inode
-        wait_until(message: "first write never fired") do
-          contents_lock.synchronize { contents.includes?("1") }
-        end
-
-        # Editor replacement: a new inode replaces the watched one
-        File.write("f.txt.tmp", "2")
-        File.rename("f.txt.tmp", "f.txt")
-
-        # The replacement fires exactly one more callback: the
-        # IN_IGNORED falls through to the exact-match branch (that
-        # queueing is intentional — it processes a single-save
-        # editor's content). Wait for it, then let the queue settle.
-        File.write("f.txt.tmp", "2")
-        File.rename("f.txt.tmp", "f.txt")
-        pre_rename = contents_lock.synchronize { contents.size }
-        wait_until(message: "replacement callback never fired") {
-          contents_lock.synchronize { contents.size > pre_rename }
-        }
-        baseline = 0
-        wait_until(message: "callbacks never settled") {
-          baseline = contents_lock.synchronize { contents.size }
-          3.times { Fiber.yield; sleep 5.milliseconds }
-          baseline == contents_lock.synchronize { contents.size }
+        File.write("f.txt", "1") # fires IN_MODIFY + IN_CLOSE_WRITE
+        wait_until(message: "first write never fired") {
+          contents_lock.synchronize { contents.size >= 2 }
         }
 
-        # A write to the replacement inode fires only if the watcher
-        # re-armed on the new inode: without the re-watch, nothing
-        # watches it and this wait times out
+        File.write("f.txt.tmp", "2")
+        File.rename("f.txt.tmp", "f.txt")
+        wait_until(message: "replacement callbacks never fired") {
+          contents_lock.synchronize { contents.size >= 4 }
+        }
+
         File.write("f.txt", "3")
         wait_until(message: "post-replacement write never fired") {
-          contents_lock.synchronize { contents.size > baseline }
+          contents_lock.synchronize { contents.size >= 6 }
         }
         watcher.close
       end

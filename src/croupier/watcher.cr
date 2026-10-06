@@ -201,7 +201,7 @@ module Croupier
       # Watch the inputs of `targets` (all tasks by default) and queue
       # changed paths in @queued_changes. Changes made before this call
       # are not detected.
-      def watch(targets : Array(String) = [] of String)
+      def watch(targets : Array(String) = [] of String) : Nil
         targets = tasks.keys if targets.empty?
         watcher, target_inputs = @@watcher_lock.synchronize do
           # Events in the close/re-watch window are lost; the next

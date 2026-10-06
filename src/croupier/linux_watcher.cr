@@ -48,19 +48,32 @@
         end
       end
 
-      # Watch the input itself, or its nearest parent when it doesn't
-      # exist yet, so its creation is seen.
+      # Watch the input itself, or the nearest existing ancestor when
+      # it doesn't exist yet (walking up, since the immediate parent
+      # may also be missing), so its creation is seen.
       private def register_input(input : String) : Nil
         if File.exists? input
           @inotify.watch input, watch_flags
           Log.info { "Watching: #{input}" }
         else
-          path = (Path[input].parent).to_s
-          if !@inotify.watching.includes?(path)
-            @inotify.watch path, watch_flags
-            Log.info { "Watching parent: #{path}" }
+          parent = nearest_existing_ancestor(input)
+          if !@inotify.watching.includes?(parent)
+            @inotify.watch parent, watch_flags
+            Log.info { "Watching parent: #{parent}" }
           end
         end
+      end
+
+      # The closest ancestor of `path` that exists (KqueueWatcher's
+      # equivalent, so nested missing inputs don't fail registration)
+      private def nearest_existing_ancestor(path : String) : String
+        parent = Path[path].parent
+        until File.exists?(parent)
+          next_parent = parent.parent
+          break if next_parent == parent
+          parent = next_parent
+        end
+        parent.to_s
       end
 
       # inotify flags shared by every watched path. IN_DELETE_SELF and
