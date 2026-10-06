@@ -29,7 +29,7 @@ module Croupier
           # Runs iterate input sets without a lock
           return @pending_inputs.add?({task_key, input})
         else
-          task.inputs << input
+          task.@inputs << input
           invalidate_graph_cache
         end
         true
@@ -49,7 +49,7 @@ module Croupier
       @pending_inputs.each do |task_key, input|
         # Set#<< ignores an input queued under two of a task's keys
         if task = tasks[task_key]?
-          task.inputs << input
+          task.@inputs << input
         end
       end
       @pending_inputs.clear
@@ -69,10 +69,8 @@ module Croupier
       end
     end
 
-    # Remove the task registered as `task_key`: every key it is
-    # registered under (one per output) and its id-index entry.
-    # Use this instead of `tasks.delete`, which leaves tasks_by_id
-    # stale so re-creating a task with the same id fails.
+    # Remove the task registered as `task_key`, under every key it is
+    # registered under (one per output) and its id.
     #
     # Raises UnknownTaskError for an unknown key, and UsageError
     # during a run.
@@ -81,10 +79,7 @@ module Croupier
         reject_registry_mutation_during_run
         task = tasks[task_key]?
         raise UnknownTaskError.new("Unknown task #{task_key}") unless task
-        task.keys.each do |key|
-          tasks.delete(key) if tasks[key]?.same?(task)
-        end
-        tasks_by_id.delete(task.id) if tasks_by_id[task.id]?.same?(task)
+        tasks.remove(task)
         invalidate_graph_cache
       end
     end

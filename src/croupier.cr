@@ -1,6 +1,7 @@
 # Croupier describes a task graph and lets you operate on them
 require "./croupier/errors"
 require "./task"
+require "./croupier/task_registry"
 require "./croupier/kv_store"
 require "./croupier/hash_state"
 require "./croupier/graph"
@@ -61,13 +62,10 @@ module Croupier
   # hash_state.cr, graph.cr, runner.cr and watcher.cr.
   class TaskManagerType
     # Registry of all tasks, keyed by each output (or by id for tasks
-    # without outputs).
-    #
-    # Read without locks while a run executes, so the task set must not
-    # change mid-run: `Task.new` and `remove_task` raise `UsageError`
-    # during a run. Change it through those two methods (and grow
-    # inputs through `add_input`), never by writing to the hash.
-    getter tasks : Hash(String, Croupier::Task) = {} of String => Croupier::Task
+    # without outputs). Read-only: change it with `Task.new` and
+    # `remove_task`, which raise `UsageError` during a run (runs read
+    # the registry without locks).
+    getter tasks = TaskRegistry.new
     # Inputs (files and kv:// keys) modified since the last run; they
     # make the tasks that consume them stale.
     #
@@ -111,9 +109,6 @@ module Croupier
     property before_run_hook : Proc(Set(String), Nil) = ->(_changes : Set(String)) { }
     # A hash of mutexes required by tasks
     property mutexes = {} of String => Sync::Mutex
-    # Task id -> task, so the duplicate-id check on task creation is
-    # O(1) instead of a scan over every registered task.
-    getter tasks_by_id : Hash(String, Task) = {} of String => Task
     @graph_invalidated : Bool = false
 
     # Register the mutex `name`, keeping the existing lock if there is
@@ -165,7 +160,6 @@ module Croupier
       # queue and decrements the run counter)
       @data_mutex.synchronize do
         tasks.clear
-        tasks_by_id.clear
         @pending_inputs.clear
         @run_active = 0
       end

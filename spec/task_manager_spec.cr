@@ -114,6 +114,55 @@ describe "TaskManager" do
     end
   end
 
+  describe "read-only views" do
+    it "should not offer hash writes on the registry" do
+      TaskManager.tasks.responds_to?(:[]=).should be_false
+      TaskManager.tasks.responds_to?(:delete).should be_false
+      TaskManager.tasks.responds_to?(:merge!).should be_false
+    end
+
+    it "should route inputs << through add_input" do
+      with_scenario("empty", to_create: {"seed" => "seed", "extra" => "x"}) do
+        runs = 0
+        Task.new(output: "out", inputs: ["seed"]) { runs += 1; "data" }
+        TaskManager.run_tasks
+        runs.should eq 1
+
+        TaskManager.tasks["out"].inputs << "extra"
+        TaskManager.tasks["out"].inputs.should contain "extra"
+        TaskManager.tasks["out"].inputs.add("extra").should be_false
+        expect_raises(Exception, /Cycle detected/) { TaskManager.tasks["out"].inputs << "out" }
+
+        # The new input is part of the graph: changing it reruns "out"
+        TaskManager.run_tasks
+        runs.should eq 2
+        File.write("extra", "y")
+        TaskManager.run_tasks
+        runs.should eq 3
+      end
+    end
+
+    [false, true].each do |parallel|
+      it "should defer inputs << from a running proc until the run ends (parallel: #{parallel})" do
+        with_scenario("empty", to_create: {"seed" => "seed"}) do
+          seen_inside = nil
+          Task.new(output: "one", inputs: ["seed"]) {
+            TaskManager.tasks["two"].inputs << "kv://late"
+            "data"
+          }
+          Task.new(output: "two", inputs: ["one"]) {
+            seen_inside = TaskManager.tasks["two"].inputs.includes?("kv://late")
+            "data"
+          }
+          TaskManager.run_tasks(parallel: parallel)
+
+          seen_inside.should be_false
+          TaskManager.tasks["two"].inputs.should contain "kv://late"
+        end
+      end
+    end
+  end
+
   describe "dependency order" do
     it "should put every task after the tasks it depends on" do
       with_scenario("basic") do
@@ -1025,18 +1074,18 @@ describe "TaskManager" do
     it "should remove a task from every registry view with remove_task" do
       with_scenario("empty", to_create: {"seed" => "x"}) do
         Task.new(id: "gone", output: "out_g", inputs: ["seed"]) { "g" }
-        TaskManager.tasks_by_id.has_key?("gone").should be_true
+        TaskManager.tasks.by_id?("gone").should_not be_nil
 
         TaskManager.remove_task("out_g")
 
         TaskManager.tasks.has_key?("out_g").should be_false
-        TaskManager.tasks_by_id.has_key?("gone").should be_false
+        TaskManager.tasks.by_id?("gone").should be_nil
         expect_raises(Croupier::UnknownTaskError) { TaskManager.remove_task("out_g") }
 
-        # Re-creating under the same id works: raw tasks.delete used
-        # to leave the id index stale and reject the replacement
+        # Re-creating under the same id works: the id index was
+        # cleared too
         Task.new(id: "gone", output: "out_g", inputs: ["seed"]) { "g2" }
-        TaskManager.tasks_by_id["gone"].@procs.size.should eq 1
+        TaskManager.tasks.by_id?("gone").try { |task| task.@procs.size }.should eq 1
         TaskManager.run_tasks
         File.read("out_g").should eq "g2"
       end
@@ -1054,8 +1103,8 @@ describe "TaskManager" do
     it "should not confuse tasks whose generated ids collide" do
       with_scenario("empty", to_create: {"source" => "s", "source2" => "s2"}) do
         # Generated ids hash the comma-joined outputs: ["a,b"] and
-        # ["a", "b"] produce the same id, so tasks_by_id cannot be the
-        # downstream identity
+        # ["a", "b"] produce the same id, so the id index cannot be
+        # the downstream identity
         Task.new(outputs: ["a,b"], inputs: ["source"]) { "x" }
         Task.new(outputs: ["a", "b"], inputs: ["source2"]) { "y" }
 

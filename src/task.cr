@@ -27,12 +27,60 @@ module Croupier
     end
 
     property id : String = ""
+    @inputs : Set(String) = Set(String).new
+
     # The task's inputs: files, task ids or kv:// keys it depends on.
-    #
-    # Don't mutate the returned set: runs read it without locks. Add
-    # inputs with `TaskManager.add_input`, which locks, defers the
-    # change until the run ends and invalidates the graph cache.
-    getter inputs : Set(String) = Set(String).new
+    # Adding to it calls `TaskManager.add_input`.
+    def inputs : Inputs
+      Inputs.new(self)
+    end
+
+    # A read-only view of a task's inputs. Runs read input sets without
+    # locks, so additions go through `TaskManager.add_input`, which
+    # locks and defers them until the run ends; there's no removal.
+    struct Inputs
+      include Enumerable(String)
+
+      def initialize(@task : Task)
+      end
+
+      def each(& : String ->) : Nil
+        @task.@inputs.each { |input| yield input }
+      end
+
+      def includes?(input : String) : Bool
+        @task.@inputs.includes?(input)
+      end
+
+      def size : Int32
+        @task.@inputs.size
+      end
+
+      def empty? : Bool
+        @task.@inputs.empty?
+      end
+
+      # Same as `TaskManager.add_input` on this task
+      def <<(input : String) : self
+        add(input)
+        self
+      end
+
+      # Same as `TaskManager.add_input` on this task: false if the
+      # task already had the input
+      def add(input : String) : Bool
+        TaskManager.add_input(@task.keys.first, input)
+      end
+
+      def inspect(io : IO) : Nil
+        @task.@inputs.inspect(io)
+      end
+
+      def to_s(io : IO) : Nil
+        @task.@inputs.to_s(io)
+      end
+    end
+
     property outputs : Array(String) = [] of String
     # Tri-state staleness in one atomic field, safe to read from
     # parallel workers. stale, stale= and stale? are views over it.
@@ -207,7 +255,7 @@ module Croupier
     # collision with a merge target is fine: one task, one id.)
     private def check_explicit_id_conflict(id : String?, to_merge : Array(Task))
       return if id.nil? || @outputs.empty?
-      conflict = TaskManager.tasks_by_id[id]?
+      conflict = TaskManager.tasks.by_id?(id)
       return if conflict.nil? || to_merge.includes?(conflict)
       raise TaskDefinitionError.new("Task id #{id} is already used by #{conflict}")
     end
@@ -236,12 +284,10 @@ module Croupier
 
     private def register_merged(to_merge : Array(Task))
       reduced = to_merge.reduce { |t1, t2| t1.merge t2 }
-      reduced.keys.each { |k| TaskManager.tasks[k] = reduced }
-      # Keep the id index in step: absorbed tasks leave the registry,
-      # so their index entries go too, or a later task reusing such an
-      # id would falsely conflict
-      to_merge.each { |t| TaskManager.tasks_by_id.delete(t.id) unless t == reduced }
-      TaskManager.tasks_by_id[reduced.id] = reduced
+      # Absorbed tasks leave the registry, ids included, or a later
+      # task reusing such an id would falsely conflict
+      to_merge.each { |t| TaskManager.tasks.remove(t) unless t == reduced }
+      TaskManager.tasks.put(reduced)
     end
 
     # Executes the proc for the task
