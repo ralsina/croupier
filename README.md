@@ -118,7 +118,11 @@ change:
 Tasks can still discover dependencies at runtime: `add_input` grows
 an existing task's inputs from inside a proc, and is safe during
 parallel runs. The addition is deferred until the run ends, so it
-takes effect on the next run.
+takes effect on the next run. `task.inputs << input` does the same.
+
+`TaskManager.tasks` and `Task#inputs` are read-only views. Change
+them only through `Task.new`, `TaskManager.remove_task` and
+`add_input`.
 
 ## Installation
 

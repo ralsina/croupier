@@ -18,14 +18,14 @@ describe "TaskManager" do
           rejected = true
           # The registry is untouched: no half-created task
           TaskManager.tasks.has_key?("out_m").should be_false
-          TaskManager.tasks_by_id.has_key?("mid_run").should be_false
+          TaskManager.tasks.by_id?("mid_run").should be_nil
           nil
         end
 
         # The rejection is a task failure (the proc raised), reported
         # through the run's normal error path
         expect_raises(Croupier::RunFailure) { TaskManager.run_tasks(parallel: true) }
-        TaskManager.tasks_by_id.has_key?("mid_run").should be_false
+        TaskManager.tasks.by_id?("mid_run").should be_nil
       end
     end
 
@@ -65,7 +65,7 @@ describe "TaskManager" do
         end
 
         expect_raises(Croupier::RunFailure) { TaskManager.run_tasks }
-        TaskManager.tasks_by_id.has_key?("mid_run").should be_false
+        TaskManager.tasks.by_id?("mid_run").should be_nil
       end
     end
   end

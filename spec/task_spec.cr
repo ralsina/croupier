@@ -280,7 +280,7 @@ describe "Task" do
         TaskManager.tasks["o3"].should eq t1
 
         # t1 has all 3 inputs, not repeated
-        t1.inputs.should eq Set.new(["i1", "i2", "i3"])
+        t1.inputs.to_set.should eq Set.new(["i1", "i2", "i3"])
 
         # t1 has all 3 outputs, repeated as needed
         t1.outputs.should eq ["o1", "o2", "o1", "o3", "o2", "o3"]

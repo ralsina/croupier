@@ -28,7 +28,7 @@ module Croupier
 
     # `task_names` is a dependency order; `registry` resolves names
     # (TaskManager.tasks). A multi-output task appears once.
-    def initialize(task_names : Array(String), registry : Hash(String, Task), @run_all : Bool, @dry_run : Bool)
+    def initialize(task_names : Array(String), registry : TaskRegistry, @run_all : Bool, @dry_run : Bool)
       task_names.each do |name|
         next unless task = registry[name]?
         next if @position.has_key?(task)
