@@ -53,8 +53,8 @@
       # may also be missing), so its creation is seen.
       private def register_input(input : String) : Nil
         if File.exists? input
+          # The caller logs "Watching: #{input}" for every input
           @inotify.watch input, watch_flags
-          Log.info { "Watching: #{input}" }
         else
           parent = nearest_existing_ancestor(input)
           if !@inotify.watching.includes?(parent)
@@ -92,61 +92,76 @@
       # prefix.
       private def event_handler : Proc(Inotify::Event, Nil)
         ->(event : Inotify::Event) do
-          # Path of the changed file. Without a name, fall back to the
-          # bare path ("" if absent), which matches no input.
-          path = if event.path && event.name
-                   Path["#{event.path}/#{event.name}"].normalize.to_s
-                 else
-                   event.path || ""
-                 end
-
-          Log.debug do
-            "inotify event: path=#{event.path.inspect}, name=#{event.name.inspect}, " \
-            "mask=#{event.mask.inspect}, constructed=#{path.inspect}"
+          # The shard dispatches events from its own fiber: a raise
+          # here (anywhere — including a user callback) would kill it,
+          # and every future input change would be silently lost.
+          begin
+            handle_event(event)
+          rescue ex
+            Log.error { "inotify event handler crashed: #{ex.inspect_with_backtrace}" }
           end
+        end
+      end
 
-          # The watch was removed (an editor deleted or replaced the
-          # file): watch it again, or its parent if it's gone. The
-          # whole re-registration happens under the lock, so it either
-          # completes before close or is skipped
-          if event.type_is?(LibInotify::IN_IGNORED)
-            if ep = event.path
-              @lock.synchronize do
-                next if @closed
-                next unless @target_inputs.includes?(ep)
+      private def handle_event(event : Inotify::Event) : Nil
+        # Path of the changed file. Without a name, fall back to the
+        # bare path ("" if absent), which matches no input.
+        path = if event.path && event.name
+                 Path["#{event.path}/#{event.name}"].normalize.to_s
+               else
+                 event.path || ""
+               end
+
+        Log.debug do
+          "inotify event: path=#{event.path.inspect}, name=#{event.name.inspect}, " \
+          "mask=#{event.mask.inspect}, constructed=#{path.inspect}"
+        end
+
+        # The watch was removed (an editor deleted or replaced the
+        # file): watch it again, or the nearest existing ancestor if
+        # it and its parent are gone. The whole re-registration
+        # happens under the lock, so it either completes before
+        # close or is skipped; the rescue keeps a lost race (the
+        # ancestor vanishing between the check and add_watch) from
+        # killing the shard's event fiber
+        if event.type_is?(LibInotify::IN_IGNORED)
+          if ep = event.path
+            @lock.synchronize do
+              next if @closed
+              next unless @target_inputs.includes?(ep)
+              begin
                 if File.exists?(ep)
                   @inotify.watch ep, watch_flags
                   Log.debug { "Re-watched file after editor replacement: #{ep}" }
                 else
-                  parent = Path[ep].parent.to_s
+                  parent = nearest_existing_ancestor(ep)
                   unless @inotify.watching.includes?(parent)
                     @inotify.watch parent, watch_flags
                   end
                 end
+              rescue ex : Inotify::Error
+                Log.warn { "Could not re-watch #{ep}: #{ex.message}" }
               end
             end
           end
-
-          matched = false
-          if @lock.synchronize { @target_inputs.includes? path }
-            @on_event.call(path)
-            Log.debug { "Detected change in #{path} (exact match)" }
-            matched = true
-          else
-            prefix_inputs = @lock.synchronize { @prefix_inputs.dup }
-            prefix_inputs.each do |normalized, input|
-              # A change inside a watched directory queues the directory
-              if path.starts_with?(normalized)
-                @on_event.call(input)
-                Log.debug { "Detected change in #{input} (prefix match: #{path} starts with #{normalized})" }
-                matched = true
-                break
-              end
-            end
-          end
-
-          Log.debug { "Event NOT matched for path=#{path}" } unless matched
         end
+
+        matched = false
+        if @lock.synchronize { @target_inputs.includes? path }
+          @on_event.call(path)
+          Log.debug { "Detected change in #{path} (exact match)" }
+          matched = true
+        else
+          # A change inside a watched directory queues the directory
+          if match = @lock.synchronize { @prefix_inputs.find { |prefix, _| path.starts_with?(prefix) } }
+            normalized, input = match
+            @on_event.call(input)
+            Log.debug { "Detected change in #{input} (prefix match: #{path} starts with #{normalized})" }
+            matched = true
+          end
+        end
+
+        Log.debug { "Event NOT matched for path=#{path}" } unless matched
       end
     end
   end

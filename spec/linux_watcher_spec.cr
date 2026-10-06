@@ -74,6 +74,36 @@
         wait_until(message: "post-replacement write never fired") {
           contents_lock.synchronize { contents.size >= 6 }
         }
+        # The re-armed watch saw the NEW content, not just any extra
+        # event
+        contents_lock.synchronize { contents.last.should eq "3" }
+        watcher.close
+      end
+    end
+
+    it "survives the watched file's directory being removed entirely" do
+      # rm -rf d while d/f.txt is watched: the IN_IGNORED re-watch
+      # used to hit the also-deleted parent and raise inside the
+      # shard's event fiber, silently stopping ALL further events
+      with_scenario("empty") do
+        events = [] of String
+        event_lock = Sync::Mutex.new
+        watcher = LinuxWatcher.new(->(input : String) {
+          event_lock.synchronize { events << input }
+        })
+        Dir.mkdir("d")
+        File.write("d/f.txt", "x")
+        File.write("other.txt", "x")
+        watcher.watch("d/f.txt")
+        watcher.watch("other.txt")
+
+        FileUtils.rm_rf("d")
+        # The old watch's IN_IGNORED fallthrough may or may not have
+        # fired for d/f.txt; what matters is that events keep flowing
+        File.write("other.txt", "y")
+        wait_until(message: "other.txt change never arrived after the watched directory was removed") {
+          event_lock.synchronize { events.includes?("other.txt") }
+        }
         watcher.close
       end
     end
