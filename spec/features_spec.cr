@@ -468,7 +468,6 @@ describe "TaskManager" do
         TaskManager.auto_mode?.should be_false
         TaskManager.mutexes.empty?.should be_true
         TaskManager.modified.empty?.should be_true
-        TaskManager.@existing_files.empty?.should be_true
         TaskManager.@store_cache.empty?.should be_true
         # Through the accessor: the cache is nil-when-invalid now,
         # and cleanup must leave it invalidated
@@ -529,7 +528,7 @@ describe "TaskManager" do
         # A second round of the same width: worker fibers that drained
         # their (closed) queue exit, fibers parked on a never-closed
         # channel would accumulate forever. (All seeds change so the
-        # wave width matches the first round.)
+        # pool width matches the first round.)
         seeds.each_key { |k| File.write(k, "changed") }
         TaskManager.run_tasks(parallel: true)
         5.times { TaskManager.scan_inputs }

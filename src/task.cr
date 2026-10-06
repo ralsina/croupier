@@ -31,7 +31,7 @@ module Croupier
     #
     # Don't mutate the returned set: runs read it without locks. Add
     # inputs with `TaskManager.add_input`, which locks, defers the
-    # change during parallel waves and invalidates the graph cache.
+    # change until the run ends and invalidates the graph cache.
     getter inputs : Set(String) = Set(String).new
     property outputs : Array(String) = [] of String
     # Tri-state staleness in one atomic field, safe to read from
@@ -426,7 +426,7 @@ module Croupier
       elsif key = input.lchop? "kv://"
         !TaskManager.get(key).nil?
       else
-        TaskManager.file_exists?(input)
+        File.exists?(input)
       end
     end
 

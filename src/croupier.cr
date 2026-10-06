@@ -4,6 +4,8 @@ require "./task"
 require "./croupier/kv_store"
 require "./croupier/hash_state"
 require "./croupier/graph"
+require "./croupier/worker_pool"
+require "./croupier/run_plan"
 require "./croupier/runner"
 require "./croupier/watcher"
 require "digest/sha1"
@@ -143,16 +145,14 @@ module Croupier
 
     # Locks for state shared with parallel task workers, split by
     # concern so hot paths don't contend on one lock: the k/v store
-    # (@store_lock), the run hashes (@hashes_lock), the modified set
-    # (@modified_lock) and the file-existence cache (@files_lock).
+    # (@store_lock), the run hashes (@hashes_lock) and the modified set
+    # (@modified_lock).
     # @data_mutex covers the rest: registry writes, the run counter,
-    # the wave flag, the pending add_input queue and the mutex
-    # registry fallback.
+    # the pending add_input queue and the mutex registry fallback.
     @data_mutex = Sync::Mutex.new
     @store_lock = Sync::Mutex.new
     @hashes_lock = Sync::Mutex.new
     @modified_lock = Sync::Mutex.new
-    @files_lock = Sync::Mutex.new
 
     # Remove all tasks and everything else (good for tests)
     def cleanup
@@ -178,7 +178,6 @@ module Croupier
       # Locked: the filesystem watcher may still deliver events while
       # cleanup runs
       clear_queued_changes
-      @existing_files.clear
       @_store_path = nil
       @_store = Kiwi::MemoryStore.new
       @store_cache.clear
