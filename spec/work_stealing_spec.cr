@@ -58,8 +58,7 @@ describe "Work-Stealing Algorithm" do
         # 20 tasks (more than typical CPU count) that each take a
         # little while: running them in parallel must be faster than
         # the same work done serially. The comparison is relative, so
-        # a slow or loaded machine can't flake it the way an absolute
-        # wall-clock budget could.
+        # it doesn't depend on the machine's speed.
         20.times do |i|
           Task.new(output: "serial_#{i}", inputs: [] of String) do
             sleep 30.milliseconds
@@ -74,7 +73,10 @@ describe "Work-Stealing Algorithm" do
             "content_#{i}"
           end
         end
-        parallel = Time.measure { TaskManager.run_tasks(parallel: true, run_all: true) }
+        # Target only the new tasks: run_all would rerun the serial
+        # ones too, timing twice the work against the serial baseline
+        parallel_names = (0...20).map { |i| "parallel_#{i}" }
+        parallel = Time.measure { TaskManager.run_tasks(parallel_names, parallel: true, run_all: true) }
 
         20.times { |i| File.exists?("parallel_#{i}").should be_true }
         # With at least two workers, ~20x30ms of work takes at most
