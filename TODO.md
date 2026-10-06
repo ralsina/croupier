@@ -2,14 +2,20 @@
 
 ## Things it may make sense to add
 
-* Instrument the concurrent runner using
+* Instrument the scheduler (`RunPlan` / `WorkerPool`) using
   [Fiber Metrics](https://github.com/didactic-drunk/fiber_metrics.cr)
 * Add wildcard dependencies (depend on all files / tasks matching a pattern)
-* Mark tasks as stale if the OUTPUT is modified since last run
-* Investigate using Earl and proper agents/pools/etc
+* Mark tasks as stale if the OUTPUT is modified since last run. Today
+  only a missing output makes a task stale, though output hashes are
+  already recorded (`next_run`).
+* Hash each file once per scan: a file under two directory inputs (or
+  also declared directly) is hashed once per occurrence.
+* Opt-in mtime+size hash reuse for content mode (see `#6` below for
+  why it must not be the default)
+* Bring back mutation testing: crytic ran in CI until 6a2d26f removed it
 
 * ~~Allow a "shallow" mode for directory dependencies, which hashes just a list
-  of contents and not the contents of the files themselves.~~
+  of contents and not the contents of the files themselves.~~ (`fast_dirs`)
 * ~~Add directory dependencies (depend on all files in the tree)~~
 * ~~Fix parallel `run_all` flag~~
 * ~~Add a faster stale input check using file dates instead of hashes
@@ -19,24 +25,25 @@
   [kiwi](https://github.com/crystal-community/kiwi)~~
 * ~~Decide what to do in auto_run when no task has inputs~~
 * ~~Implement -k make option (keep going)~~
-* ~~Implement a "watchdog" mode~~
+* ~~Implement a "watchdog" mode~~ (`auto_run`)
 * ~~Rationalize id/name/output thing~~
 * ~~Make it fast again :-)~~ [Sort of]
 * ~~Implement the missing parts of the parallel runner~~
-* ~~Make TaskManager a struct~~
 * ~~Use getters/setters/properties properly~~
 * ~~Restructure tests~~
 * ~~Implement dry runs~~
 * ~~Tasks that *always* run~~
 * ~~Provide a way to ask to run tasks without outputs (needed for hacé)~~
-* ~~Refactor the Task registry into its own class separate from Task itself~~
+* ~~Refactor the Task registry into its own class separate from Task
+  itself~~ (`TaskRegistry`, a read-only view; `Task#inputs` is one too)
 * ~~Make `Task.run` able to return `Array(String) | String | Nil`~~
   ~~depending on number of outputs and handle it~~
 * ~~Tasks with more than one output~~
 * ~~Tasks without file output~~
 * ~~More than one task with the same output~~
 * ~~Run only tasks needed to produce specific outputs~~
-* ~~Automate running crytic every now and then~~
+* ~~Investigate using Earl and proper agents/pools/etc~~ (a small
+  `WorkerPool` covers it)
 
 ## Things that look like a bad idea, and why
 
@@ -44,20 +51,8 @@
 
   In fact this is probably a good idea BUT the current implementation
   is fairly simple and seems to be mostly correct, so there is not much
-  to be gained from the switch.
-
-* Use a pool of Fibers to run parallel tasks
-
-  The current implementation just launches as many fibers
-  as it can. Experimental tests in commit
-  f3b3042c0cc3038360deac11269e07ffec0145a3 showed that limiting
-  the number of fibers is **much** slower (~8x slower).
-
-  Since fibers are cheap, and the OS scheduler is good, it seems
-  like just launching as much as possible is optimal.
-
-  On the other hand, the parallel task runner DOES use
-  something akin to a pool of fibers.
+  to be gained from the switch. Staleness is a single atomic
+  tri-state (`Unknown`/`Stale`/`Fresh`).
 
 * Maybe migrate to crotest or microtest (Nicer)
 
@@ -69,7 +64,8 @@
 
 * Tasks where output is also input (self-cyclical)
 
-  This feel very hard to get right and maybe unnecessary.
+  This feel very hard to get right and maybe unnecessary. `Task.new`
+  raises `CycleError` when an input is also one of the task's outputs.
 
   If the file is always preexisting, then the task should run
   every time, which can be handled by "always run" tasks
@@ -80,31 +76,36 @@
 
 * Implement failed state for tasks
 
-  Not really needed.
+  Not really needed: a failed task stays stale, and its dependents
+  don't run in that run.
 
-* ~~Switch `topological_sort` to Kahn's algorithm (in-degree + queue)~~
+* ~~Use a pool of Fibers to run parallel tasks~~
 
-  *(done in #85)* The DFS turned out to miss cycles reachable from an
-  input (#83), and Kahn detects every cycle in the same pass that
-  orders the tasks. That outweighs the speed difference below, which
-  the cache makes noise anyway.
+  *(now done)* This used to be listed as a bad idea: an experiment in
+  commit f3b3042c0cc3038360deac11269e07ffec0145a3 found limiting the
+  number of fibers ~8x slower. Since #89, parallel runs keep one
+  `WorkerPool` of up to `System.cpu_count` workers for the whole run (input
+  hashing uses one too), and benchmarks, nicolino's included, show no
+  slowdown.
 
-  Measured 2026-08-14 on synthetic DAGs shaped like the real
-  vertice_dict: the current DFS is already O(V+E) and Kahn is
-  ~1.7–2.4x slower at every size (5k vertices/15k edges: 1.3ms vs
-  2.3ms per sort; 100k/300k: 79ms vs 191ms). Kahn builds a
-  `Hash(String, Int32)` of in-degrees and makes three passes, so it
-  hashes more, and on string-keyed graphs hashing is the cost.
+* ~~Switch the topological sort to Kahn's algorithm (in-degree + queue)~~
 
-  Also, `sorted_task_graph` caches the result: the sort runs once per
-  invalidated graph, not per task, so even 79ms at 100k vertices would
-  be noise in a run executing that many tasks.
+  *(done in #85)* The old DFS missed cycles reachable from an input
+  (#83), and Kahn detects every cycle in the same pass that orders the
+  tasks. That outweighs the speed difference below, which the cache
+  makes noise anyway.
 
-* Using RomainFranceschini/cgl instead of crystalline which seems buggy
+  Measured 2026-08-14 on synthetic DAGs: the DFS was already O(V+E)
+  and Kahn ~1.7–2.4x slower at every size (5k vertices/15k edges:
+  1.3ms vs 2.3ms per sort; 100k/300k: 79ms vs 191ms), since it hashes
+  more, and on string-keyed graphs hashing is the cost. But
+  `sorted_task_keys` caches the result: the sort runs once per
+  invalidated graph, not per task.
 
-  What can I say, it works, and the gains look marginal since cgl doesn't
-  implement algorithms, which is the part I would like to avoid doing
-  myself. Without that, crystalline is basically a glorified hash thing.
+* ~~Use RomainFranceschini/cgl instead of crystalline~~
+
+  *(moot)* There's no graph library anymore: the graph is a plain
+  hash, and the algorithms were always ours.
 
 ## Codebase review findings (2026-08)
 
@@ -124,29 +125,23 @@ squash-merged PRs (#15–#20); the rest are recorded here for later.
   never too few) because `dependencies()` re-selects against the graph,
   but the memoization is incorrect as a per-node cache. *(fixed in #16)*
 * ~~`#3` `sorted_task_graph` reaches into `@graph.@vertice_dict`
-  (crystalline private ivar). Works but couples us to crystalline
-  internals; an upstream rename would break the build opaquely.~~
-  *(fixed: crystalline is gone — the graph is a plain
-  `Hash(String, Set(String))` with a default block; we only ever used
-  the library as an adjacency-hash container, the topological sort
-  was already ours)*
+  (crystalline private ivar).~~ *(fixed: crystalline is gone)*
 * `#4` `scan_inputs` reads every file in a watched directory with no size
   guard or error handling — one unreadable file or symlink loop crashes
-  the run. Also `Dir.glob` is called twice per directory. *(double-glob
-  fixed in #19; the throw-on-unreadable behavior is intentional: an
-  unreadable declared input is a real error, not something to skip)*
+  the run. *(the throw-on-unreadable behavior is intentional: an
+  unreadable declared input is a real error, not something to skip.
+  Directories are walked once, without following symlinks, so there's
+  no symlink loop)*
 * `#8` `@all_inputs` cache is only rebuilt when empty; it's cleared during
   graph rebuild today but a task added between build and scan could see a
   stale set. Make registration clear it explicitly. *(fixed)*
 * ~~Concurrency: early-cutoff path mutates `other_task` state from worker
-  fibers without synchronization~~ *(fixed twice over: first by
-  serializing with mutexes, then redesigned — parallel workers now
-  only execute tasks and report `{task, error}` over a results
-  channel; the coordinating fiber owns all bookkeeping (finished /
-  failed / errors, stale transitions, early-cutoff notifications), so
-  the bookkeeping mutex is gone. `@data_mutex` still guards the k/v
-  store, `modified`, `next_run`, `last_run`; see
-  `spec/parallel_stress_spec.cr`)*
+  fibers without synchronization~~ *(fixed: workers only execute tasks
+  and report results; the coordinating fiber owns all bookkeeping
+  (failures, stale transitions, early cutoff, `RunPlan`), so it needs
+  no lock. State workers do share has its own lock: `@store_lock`
+  (k/v store), `@hashes_lock` (run hashes), `@modified_lock`
+  (`modified`); see `spec/parallel_stress_spec.cr`)*
 * ~~`stale?` short-circuited to `true` forever for input-less and
   `always_run` tasks, so `waiting_for` never released their dependents
   and graphs rooted at such tasks were unrunnable ("Waiting for ...")~~
@@ -164,38 +159,28 @@ squash-merged PRs (#15–#20); the rest are recorded here for later.
 ### Performance left on the table
 
 * `#6` `scan_inputs` re-hashes every input file on every run (non-fast
-  mode). Reuse hashes when `mtime+size` is unchanged, dedupe the double
-  `Dir.glob`, and hash files in parallel (fiber-per-file batch like the
-  task runner). *(addressed in #19; the scan now stats each path once.
-  mtime+size hash reuse was implemented and then REMOVED: it made
-  non-fast mode trust metadata instead of file contents, which is
-  fast mode's corner to cut — content mode's guarantee is that
-  staleness always rests on hashed bytes. Any future attempt must be
-  opt-in. The glob dedup and per-file reuse inside directory inputs
-  remain open.)*
-* `#7` Early-cutoff notification in `_run_tasks` / `_run_tasks_parallel`
-  and `find_and_mark_dependents_fresh` is O(V) per output → O(V²·outs)
-  per run. Reuse the `reverse_deps` map already built in
-  `propagate_staleness`. *(fixed in #18)*
-* ~~`#10` `_run_tasks_parallel` reallocates a `Channel` + `WaitGroup` per
-  wave; reusing the channel across waves would reduce churn.~~
-  *(measured 2026-08-14: a wave's throwaways cost ~10µs total, i.e.
-  fractions of a millisecond per run — not worth optimizing. The
-  WaitGroup is now gone anyway: workers report over a results channel
-  and the coordinator's receive count is the wave barrier. Workers
-  still respawn per wave, deliberately. Waves are gone since #82:
-  one ready-queue scheduler keeps a WorkerPool for the whole run)*
-* ~~`#11` `_run_tasks` (serial) builds intermediate arrays via
-  `compact_map` + `reject` before a single iteration — easy to fuse.~~
-  *(fixed: fused into one pass; staleness is now decided at visit time.
-  This also settled a discrepancy the two filter layers hid: serial
-  `run_all` used to skip fresh tasks while parallel re-ran them —
-  serial now matches the parallel semantics)*
+  mode). *(addressed in #19: each path is stat'ed once, directories are
+  walked once, files are hashed in parallel. mtime+size hash reuse was
+  implemented and then REMOVED: it made non-fast mode trust metadata
+  instead of file contents, which is fast mode's corner to cut —
+  content mode's guarantee is that staleness always rests on hashed
+  bytes. Any future attempt must be opt-in; it's listed above.)*
+* `#7` Early-cutoff notification was O(V) per output → O(V²·outs) per
+  run. *(fixed in #18: it reuses the `reverse_deps` map built in
+  `propagate_staleness`)*
+* ~~`#10` the parallel runner reallocated a `Channel` + `WaitGroup` per
+  wave~~ *(moot: waves are gone since #89; one ready-queue scheduler
+  keeps a `WorkerPool` for the whole run)*
+* ~~`#11` the serial runner built intermediate arrays before a single
+  iteration~~ *(moot: since #89 serial and parallel runs share one
+  scheduler, and `run_all` runs every planned task in both)*
 
 ### Housekeeping
 
 * `#5` `spec/testcases/empty/` leaves `file1`–`file5` + `.croupier`
   artifacts; `.gitignore` only covers `input*`/`output*`. Broaden the
   ignore. *(fixed in #17)*
-* `~2000` lines in `croupier_spec.cr` — consider splitting by topic.
+* ~~`~2000` lines in `croupier_spec.cr` — consider splitting by
+  topic.~~ *(done: split into `task_spec`, `task_manager_spec`,
+  `features_spec` and others)*
 * Typo in comment `croupier.cr:33`: "SAH1" → "SHA1". *(fixed)*
