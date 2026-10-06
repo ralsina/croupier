@@ -2,6 +2,99 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.17.0] - 2026-10-06
+
+### ⚠️ Breaking Changes
+
+- The master/subtask experiment is gone: `master_task:`, `subtask_ids`,
+  `register_subtask`, `remove_subtask(s)` and `link_subtask` (including
+  0.16.0's `remove_subtask`) are removed. To track a changing set of
+  files, rebuild the task graph instead (see the next item)
+- The task set is fixed while a run executes: `Task.new` and the new
+  `TaskManager.remove_task` raise `UsageError` during a run, including
+  from task procs. Build the graph before running; in auto mode, stop
+  with `auto_stop`, rebuild and call `auto_run` again. Dependencies can
+  still be discovered at runtime with `add_input`
+- `add_input` called during a run is queued and applied when the last
+  overlapping run ends (previously: immediately in serial runs, at the
+  wave barrier in parallel ones), so the new dependency takes effect on
+  the next run. It still returns false for an input the task already
+  has, and raises `UnknownTaskError`/`CycleError` as before
+- `TaskManager.tasks` is a read-only `TaskRegistry`: it keeps every
+  read (`[]`, `[]?`, `fetch`, `has_key?`, `keys`, `values`, `size`,
+  `empty?`, `each*`, `Enumerable`) but no Hash writes, so `tasks[k] =`,
+  `tasks.delete` and friends no longer compile. `tasks=` is gone too.
+  Use `Task.new` and `TaskManager.remove_task`
+- `TaskManager.tasks_by_id` is removed; use `TaskManager.tasks.by_id?(id)`
+- `Task#inputs` returns a read-only view (`Enumerable(String)`,
+  `includes?`, `size`, `empty?`); `inputs <<`/`inputs.add` call
+  `add_input`, so existing `inputs << x` code keeps compiling and is now
+  safe during runs. `inputs=` is gone
+- Every dependency cycle raises `CycleError`, naming only the tasks on
+  the cycle. A cycle reachable from an input used to be sorted into an
+  order that broke it (failing as "Waiting for ..." or, for targeted
+  runs and `depends_on`, overflowing the stack). The deprecated
+  top-level `topological_sort` is removed
+- Serial and parallel runs share one scheduler, and parallel runs no
+  longer proceed in waves; `TaskManager.file_exists?` is removed
+- `Task.new` has two overloads (block and `proc:`) instead of four.
+  Every existing call form still works (an array, a single string or
+  nil as the first argument, or `output:` by name), but passing both
+  `output:` and `outputs:` now raises `TaskDefinitionError`
+
+### 🚀 Features
+
+- `TaskManager.remove_task(key)` removes a task under every key and its
+  id, so re-creating a task with the same id works
+- `TaskManager.tasks.by_id?(id)`
+- The `proc:` form of `Task.new` accepts `mutex:` (it was block-only)
+
+### 🐛 Bug Fixes
+
+- Auto mode on Linux: removing a watched input's whole directory no
+  longer kills the inotify handler (which silently stopped all later
+  change detection); nothing that runs in the handler, user callbacks
+  included, can kill it anymore
+- The Linux watcher's `watch` and editor-replacement re-watch can no
+  longer race `close` into watching a closed descriptor
+- Auto mode watches inputs added by `add_input` during a cycle
+- Re-registering a mutex name keeps the existing lock instead of
+  replacing one a running task may hold
+- `depends_on` no longer confuses tasks whose ids collide (an
+  output-less task reusing another task's id, or generated ids of
+  `["a,b"]` and `["a", "b"]`)
+- Overlapping runs in one process (an auto cycle and a manual
+  `run_tasks`) are counted, so the last one to finish reopens task
+  creation, and the run check and registration happen under one lock
+
+### ⚡ Performance
+
+- One dependency-counting ready-queue scheduler replaces the serial
+  runner and the parallel wave runner: a task starts as soon as its
+  producers finish, so a slow task no longer holds back unrelated
+  ready ones (about 8–13% faster on mixed-duration parallel graphs).
+  Inputs another task creates as a side effect are waited for instead
+  of failing the run
+- Staleness is evaluated once per task instead of once per output
+
+### 🚜 Refactor
+
+- The inotify and kqueue watchers share one interface
+  (`new(on_change)`, `watch`, `close`)
+- One worker-pool helper serves the scheduler and parallel input hashing
+- One memoized closure helper backs `dependencies` and `depends_on`
+- Duplicated code in `Task`, the runners and the graph is gone
+
+### 🧪 Testing
+
+- The work-stealing timing spec compares equal amounts of work (its
+  parallel half used to rerun the serial tasks too), fixing a flake
+  on small CI runners
+
+### 📚 Documentation
+
+- Source comments rewritten for accuracy; TODO.md matches the code
+
 ## [0.16.0] - 2026-10-05
 
 ### ⚠️ Breaking Changes
