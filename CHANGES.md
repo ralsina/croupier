@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.17.2] - 2026-10-08
+
+### ⚡ Performance
+
+- *(worker-pool)* Spread workers on a dedicated execution context (#94)
+- *(worker-pool)* One shared context, no default-context resize (#96)
+- *(task)* Write file outputs without IO buffer allocations
+
 ## [0.17.1] - 2026-10-08
 
 ### 🐛 Bug Fixes
