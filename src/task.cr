@@ -102,6 +102,12 @@ module Croupier
 
     @[YAML::Field(ignore: true)]
     property? outputs_changed : Bool = false # Whether the last run changed any output
+    # A task producing one of this task's inputs changed its outputs
+    # in the current run. compute_staleness can't see that: the
+    # producer is fresh once it ran, and the input scan predates the
+    # change. Set and cleared by the runner.
+    @[YAML::Field(ignore: true)]
+    property? input_changed : Bool = false
 
     # Under what keys should this task be registered with TaskManager
     def keys
@@ -432,9 +438,9 @@ module Croupier
 
     # Early cutoff: one of the task's inputs turned out unchanged, so
     # recompute staleness from all of them (another may still be
-    # stale).
+    # stale, or may already have changed in this run).
     def recompute_staleness : Nil
-      self.stale = compute_staleness
+      self.stale = @input_changed || compute_staleness
     end
 
     # Whether the task is stale on its own account, regardless of the
