@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.17.1] - 2026-10-08
+
+### 🐛 Bug Fixes
+
+- Early cutoff no longer skips a task whose input changed earlier in
+  the same run. When one producer finished with changed outputs and
+  another producer of the same task finished later with unchanged
+  outputs, the recompute forgot the first change and the task was
+  marked fresh. In nicolino this left `search.json` and `sitemap.xml`
+  stale after editing a post. (#93)
+
 ## [0.17.0] - 2026-10-06
 
 ### ⚠️ Breaking Changes
