@@ -467,6 +467,7 @@ module Croupier
     def propagate_staleness(run_all : Bool = false)
       @reverse_deps.clear
       each_unique_task do |task|
+        task.input_changed = false
         task.inputs.each do |input|
           if tasks.has_key?(input)
             @reverse_deps[input].concat(task.keys)

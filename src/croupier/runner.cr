@@ -130,7 +130,12 @@ module Croupier
       else
         succeeded << task unless dry_run
         task.stale = false
-        notify_dependents_unchanged(task) if early_cutoff && !dry_run && !task.outputs_changed?
+        task.input_changed = false
+        if task.outputs_changed?
+          mark_dependents_changed(task)
+        elsif early_cutoff && !dry_run
+          notify_dependents_unchanged(task)
+        end
       end
     end
 
@@ -167,6 +172,16 @@ module Croupier
       drop_unfinished_inputs(task_names, succeeded)
       save_run
       raise RunFailure.new(failures) if keep_going && !failures.empty?
+    end
+
+    # A task's outputs changed: its dependents must run even if early
+    # cutoff from another of their producers recomputes them later
+    private def mark_dependents_changed(task : Task)
+      task.outputs.each do |output|
+        @reverse_deps.fetch(output, nil).try &.each do |dependent_key|
+          tasks[dependent_key]?.try &.input_changed = true
+        end
+      end
     end
 
     # Early cutoff: a task's outputs didn't change, so let its stale

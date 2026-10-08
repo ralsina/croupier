@@ -228,6 +228,39 @@ describe "TaskManager" do
       end
     end
 
+    it "still rebuilds a consumer when an unchanged producer finishes after a changed one" do
+      with_scenario("empty") do
+        File.write("in_a", "hello")
+        File.write("in_b", "world")
+
+        # Runs first: its output will change
+        Task.new(inputs: ["in_a"], outputs: ["out_a"]) do
+          File.read("in_a").upcase
+        end
+        # Runs second: its input changes but its output doesn't
+        Task.new(inputs: ["in_b"], outputs: ["out_b"]) do
+          File.read("in_b").strip.upcase
+        end
+        consumer_runs = 0
+        Task.new(inputs: ["out_a", "out_b"], outputs: ["out_c"]) do
+          consumer_runs += 1
+          File.read("out_a") + "_" + File.read("out_b")
+        end
+
+        TaskManager.run_tasks
+        consumer_runs.should eq 1
+
+        File.write("in_a", "earth")   # out_a changes
+        File.write("in_b", "world  ") # out_b doesn't
+
+        # Early cutoff from the out_b task must not forget that out_a
+        # already changed in this run
+        TaskManager.run_tasks
+        consumer_runs.should eq 2
+        File.read("out_c").should eq "EARTH_WORLD"
+      end
+    end
+
     it "should rebuild dependent tasks that have multiple stale dependencies" do
       with_scenario("empty") do
         # t3 depends on both t1 (file2) and t2 (file4)
