@@ -591,18 +591,28 @@ describe "TaskManager" do
           end
           count
         }
-        run_pool = ->(pool_name : String, size : Int32) {
+        run_int_pool = ->(pool_name : String, size : Int32) {
           pool = WorkerPool(Int32, Nil).new(pool_name, size, size) { |_item| nil }
           size.times { |item| pool.submit(item) }
           pool.close
           size.times { pool.receive }
         }
+        run_string_pool = ->(pool_name : String, size : Int32) {
+          pool = WorkerPool(String, Nil).new(pool_name, size, size) { |_item| nil }
+          size.times { |item| pool.submit(item.to_s) }
+          pool.close
+          size.times { pool.receive }
+        }
 
         before = loop_count.call
-        run_pool.call("spec-context-pool", 2)
-        run_pool.call("spec-other-pool", 4)
+        run_int_pool.call("spec-context-pool", 2)
+        # A different generic specialization — the production split is
+        # WorkerPool(Task, Nil) next to WorkerPool(Array(String),
+        # Hash(String, String)) — and a different name, yet the same
+        # shared context
+        run_string_pool.call("spec-other-pool", 4)
         # A narrower pool reuses the grown context as-is
-        run_pool.call("spec-context-pool", 2)
+        run_int_pool.call("spec-context-pool", 2)
         after = loop_count.call
 
         # Two names, three widths: one context grown to the widest
