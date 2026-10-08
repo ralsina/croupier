@@ -18,14 +18,15 @@ module Croupier
     @spawned = 0
 
     {% if !flag?(:preview_mt) && compare_versions(Crystal::VERSION, "1.21.0") >= 0 %}
-      # One context per pool name, shared by every pool of that name
-      # however sized, so auto mode's repeated runs (whose widths vary
-      # with the plan) reuse threads instead of accumulating one
-      # context per observed width. Locked because scan pools are
-      # built from inside parallel task workers (see
+      # Every pool — task workers and scan workers alike — shares one
+      # context, so croupier never owns more scheduler threads than
+      # the machine has cores, whatever pool names or widths come and
+      # go (#95). The context grows to the widest core-count-capped
+      # width ever requested and never shrinks. Locked because scan
+      # pools are built from inside parallel task workers (see
       # HashState#hash_directory), which run on different threads.
-      @@contexts = {} of String => Fiber::ExecutionContext::Parallel
-      @@contexts_lock = Sync::Mutex.new
+      @@context : Fiber::ExecutionContext::Parallel?
+      @@context_lock = Sync::Mutex.new
 
       # A same-context fiber spawn lands on the spawning thread's local
       # run queue, and parked schedulers are only woken by cross-context
@@ -35,16 +36,17 @@ module Croupier
       # context boundary, going through the global queue and waking an
       # idle scheduler, so workers spread across their threads.
       private def worker_context : Fiber::ExecutionContext::Parallel
-        @@contexts_lock.synchronize do
-          context = @@contexts[@name]?
+        width = Math.min(@size, System.cpu_count)
+        @@context_lock.synchronize do
+          context = @@context
           if context.nil?
-            context = Fiber::ExecutionContext::Parallel.new(@name, @size)
-            @@contexts[@name] = context
-          elsif @size > context.capacity
+            context = Fiber::ExecutionContext::Parallel.new("croupier-worker", width)
+            @@context = context
+          elsif width > context.capacity
             # Grow only: resize would also shrink, cooperatively
-            # stopping schedulers that may still be running another
-            # pool's workers.
-            context.resize(@size)
+            # stopping schedulers that may still be running a pool's
+            # workers.
+            context.resize(width)
           end
           context
         end
@@ -54,7 +56,6 @@ module Croupier
     def initialize(@name : String, @size : Int32, capacity : Int32, &@work : I -> O)
       @jobs = Channel(I).new(capacity)
       @results = Channel({I, O | Exception}).new(capacity)
-      WorkerPool.enable_parallelism(@size)
     end
 
     def submit(item : I) : Nil
@@ -91,20 +92,6 @@ module Croupier
         end
         @results.send({item, result})
       end
-    end
-
-    # Resize the default fiber execution context so worker fibers
-    # spread across OS threads. Cheap and idempotent.
-    #
-    # The API exists only on Crystal >= 1.21 without -Dpreview_mt
-    # (that flag selects the old runtime, which has no execution
-    # contexts). Elsewhere this is a no-op and workers run
-    # concurrently on one thread.
-    def self.enable_parallelism(workers : Int) : Nil
-      workers = 1 if workers < 1
-      {% if !flag?(:preview_mt) && compare_versions(Crystal::VERSION, "1.21.0") >= 0 %}
-        Fiber::ExecutionContext.default.resize(workers.to_i32)
-      {% end %}
     end
   end
 end
