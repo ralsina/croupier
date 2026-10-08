@@ -545,10 +545,17 @@ describe "TaskManager" do
         # registry also holds stdlib thread infrastructure that comes
         # and goes with load (GC marker roots, the thread pool's lazy
         # main-thread loop — see #64), so a whole-registry baseline
-        # compares croupier against noise it does not control
+        # compares croupier against noise it does not control. The
+        # workers' dedicated execution context also names its scheduler
+        # loop fibers "croupier-worker-N:loop"; those live as long as
+        # the (shared) context does, so exclude them too.
         worker_count = -> {
           count = 0
-          Fiber.each { |fiber| count += 1 if fiber.name.try(&.starts_with?("croupier-worker")) }
+          Fiber.each do |fiber|
+            name = fiber.name
+            next if name.nil?
+            count += 1 if name.starts_with?("croupier-worker") && !name.includes?(":loop")
+          end
           count
         }
 
@@ -568,5 +575,37 @@ describe "TaskManager" do
         wait_until(message: "worker fibers never exited") { worker_count.call == 0 }
       end
     end
+
+    {% if !flag?(:preview_mt) && compare_versions(Crystal::VERSION, "1.21.0") >= 0 %}
+      it "shares one execution context per pool name, growing it for wider pools" do
+        # Each scheduler of a shared context runs a loop fiber named
+        # "name-N:loop" that lives as long as the context does, so
+        # counting them shows how many schedulers the name owns: pools
+        # of the same name must reuse (and grow) one context instead
+        # of accumulating one per requested width.
+        loop_count = ->(pool_name : String) {
+          count = 0
+          Fiber.each do |fiber|
+            fiber_name = fiber.name
+            next if fiber_name.nil?
+            count += 1 if fiber_name.starts_with?("#{pool_name}-") && fiber_name.ends_with?(":loop")
+          end
+          count
+        }
+        run_pool = ->(size : Int32) {
+          pool = WorkerPool(Int32, Nil).new("spec-context-pool", size, size) { |_item| nil }
+          size.times { |item| pool.submit(item) }
+          pool.close
+          size.times { pool.receive }
+        }
+
+        run_pool.call(2)
+        run_pool.call(4)
+        # A narrower pool reuses the grown context as-is
+        run_pool.call(2)
+
+        loop_count.call("spec-context-pool").should eq 4
+      end
+    {% end %}
   end
 end
