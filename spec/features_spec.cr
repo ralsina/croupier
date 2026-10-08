@@ -545,10 +545,17 @@ describe "TaskManager" do
         # registry also holds stdlib thread infrastructure that comes
         # and goes with load (GC marker roots, the thread pool's lazy
         # main-thread loop — see #64), so a whole-registry baseline
-        # compares croupier against noise it does not control
+        # compares croupier against noise it does not control. The
+        # workers' dedicated execution context also names its scheduler
+        # loop fibers "croupier-worker-N:loop"; those live as long as
+        # the (shared) context does, so exclude them too.
         worker_count = -> {
           count = 0
-          Fiber.each { |fiber| count += 1 if fiber.name.try(&.starts_with?("croupier-worker")) }
+          Fiber.each do |fiber|
+            name = fiber.name
+            next if name.nil?
+            count += 1 if name.starts_with?("croupier-worker") && !name.includes?(":loop")
+          end
           count
         }
 
