@@ -18,10 +18,14 @@ module Croupier
     @spawned = 0
 
     {% if !flag?(:preview_mt) && compare_versions(Crystal::VERSION, "1.21.0") >= 0 %}
-      # Worker contexts are shared across pools of the same name and
-      # size, so auto mode's repeated runs reuse threads instead of
-      # accumulating them.
-      @@contexts = {} of Tuple(String, Int32) => Fiber::ExecutionContext::Parallel
+      # One context per pool name, shared by every pool of that name
+      # however sized, so auto mode's repeated runs (whose widths vary
+      # with the plan) reuse threads instead of accumulating one
+      # context per observed width. Locked because scan pools are
+      # built from inside parallel task workers (see
+      # HashState#hash_directory), which run on different threads.
+      @@contexts = {} of String => Fiber::ExecutionContext::Parallel
+      @@contexts_lock = Sync::Mutex.new
 
       # A same-context fiber spawn lands on the spawning thread's local
       # run queue, and parked schedulers are only woken by cross-context
@@ -31,7 +35,19 @@ module Croupier
       # context boundary, going through the global queue and waking an
       # idle scheduler, so workers spread across their threads.
       private def worker_context : Fiber::ExecutionContext::Parallel
-        @@contexts[{@name, @size}] ||= Fiber::ExecutionContext::Parallel.new(@name, @size)
+        @@contexts_lock.synchronize do
+          context = @@contexts[@name]?
+          if context.nil?
+            context = Fiber::ExecutionContext::Parallel.new(@name, @size)
+            @@contexts[@name] = context
+          elsif @size > context.capacity
+            # Grow only: resize would also shrink, cooperatively
+            # stopping schedulers that may still be running another
+            # pool's workers.
+            context.resize(@size)
+          end
+          context
+        end
       end
     {% end %}
 

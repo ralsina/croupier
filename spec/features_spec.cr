@@ -575,5 +575,37 @@ describe "TaskManager" do
         wait_until(message: "worker fibers never exited") { worker_count.call == 0 }
       end
     end
+
+    {% if !flag?(:preview_mt) && compare_versions(Crystal::VERSION, "1.21.0") >= 0 %}
+      it "shares one execution context per pool name, growing it for wider pools" do
+        # Each scheduler of a shared context runs a loop fiber named
+        # "name-N:loop" that lives as long as the context does, so
+        # counting them shows how many schedulers the name owns: pools
+        # of the same name must reuse (and grow) one context instead
+        # of accumulating one per requested width.
+        loop_count = ->(pool_name : String) {
+          count = 0
+          Fiber.each do |fiber|
+            fiber_name = fiber.name
+            next if fiber_name.nil?
+            count += 1 if fiber_name.starts_with?("#{pool_name}-") && fiber_name.ends_with?(":loop")
+          end
+          count
+        }
+        run_pool = ->(size : Int32) {
+          pool = WorkerPool(Int32, Nil).new("spec-context-pool", size, size) { |_item| nil }
+          size.times { |item| pool.submit(item) }
+          pool.close
+          size.times { pool.receive }
+        }
+
+        run_pool.call(2)
+        run_pool.call(4)
+        # A narrower pool reuses the grown context as-is
+        run_pool.call(2)
+
+        loop_count.call("spec-context-pool").should eq 4
+      end
+    {% end %}
   end
 end
