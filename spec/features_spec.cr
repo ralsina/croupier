@@ -559,8 +559,7 @@ describe "TaskManager" do
           count
         }
 
-        # First round also absorbs the one-time execution-context
-        # resize; its workers must all retire
+        # First round: its workers must all retire
         TaskManager.run_tasks(parallel: true)
         5.times { TaskManager.scan_inputs }
         wait_until(message: "round 1 worker fibers never exited") { worker_count.call == 0 }
@@ -577,34 +576,65 @@ describe "TaskManager" do
     end
 
     {% if !flag?(:preview_mt) && compare_versions(Crystal::VERSION, "1.21.0") >= 0 %}
-      it "shares one execution context per pool name, growing it for wider pools" do
-        # Each scheduler of a shared context runs a loop fiber named
-        # "name-N:loop" that lives as long as the context does, so
-        # counting them shows how many schedulers the name owns: pools
-        # of the same name must reuse (and grow) one context instead
-        # of accumulating one per requested width.
-        loop_count = ->(pool_name : String) {
+      it "shares one execution context across pools, capped at the core count" do
+        # Each scheduler of the shared context runs a loop fiber named
+        # "croupier-worker-N:loop" that lives as long as the context
+        # does, so counting them shows how many schedulers croupier
+        # owns: pools of any name and width must reuse (and grow) one
+        # context, never exceeding the core count (#95).
+        loop_count = -> {
           count = 0
           Fiber.each do |fiber|
             fiber_name = fiber.name
             next if fiber_name.nil?
-            count += 1 if fiber_name.starts_with?("#{pool_name}-") && fiber_name.ends_with?(":loop")
+            count += 1 if fiber_name.starts_with?("croupier-worker-") && fiber_name.ends_with?(":loop")
           end
           count
         }
-        run_pool = ->(size : Int32) {
-          pool = WorkerPool(Int32, Nil).new("spec-context-pool", size, size) { |_item| nil }
+        run_int_pool = ->(pool_name : String, size : Int32) {
+          pool = WorkerPool(Int32, Nil).new(pool_name, size, size) { |_item| nil }
           size.times { |item| pool.submit(item) }
           pool.close
           size.times { pool.receive }
         }
+        run_string_pool = ->(pool_name : String, size : Int32) {
+          pool = WorkerPool(String, Nil).new(pool_name, size, size) { |_item| nil }
+          size.times { |item| pool.submit(item.to_s) }
+          pool.close
+          size.times { pool.receive }
+        }
 
-        run_pool.call(2)
-        run_pool.call(4)
+        before = loop_count.call
+        run_int_pool.call("spec-context-pool", 2)
+        # A different generic specialization — the production split is
+        # WorkerPool(Task, Nil) next to WorkerPool(Array(String),
+        # Hash(String, String)) — and a different name, yet the same
+        # shared context
+        run_string_pool.call("spec-other-pool", 4)
         # A narrower pool reuses the grown context as-is
-        run_pool.call(2)
+        run_int_pool.call("spec-context-pool", 2)
+        after = loop_count.call
 
-        loop_count.call("spec-context-pool").should eq 4
+        # Two names, three widths: one context grown to the widest
+        # core-count-capped width seen — earlier specs may already
+        # have grown it wider, never narrower
+        after.should eq([before, Math.min(4, System.cpu_count)].max)
+        after.should be <= System.cpu_count
+      end
+
+      it "does not resize the default execution context" do
+        # Worker fibers live on croupier's own context; resizing the
+        # host's default context both wasted scheduler threads and
+        # could shrink a width the host had configured (#95).
+        default = Fiber::ExecutionContext.default
+        before = default.capacity
+
+        pool = WorkerPool(Int32, Nil).new("spec-default-context", 4, 4) { |_item| nil }
+        4.times { |item| pool.submit(item) }
+        pool.close
+        4.times { pool.receive }
+
+        default.capacity.should eq before
       end
     {% end %}
   end
